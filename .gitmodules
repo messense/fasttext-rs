@@ -1,0 +1,3 @@
+[submodule "cfasttext-sys/cfasttext"]
+	path = cfasttext-sys/cfasttext
+	url = git@github.com:messense/cfasttext.git
