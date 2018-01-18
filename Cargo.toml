@@ -1,0 +1,7 @@
+[package]
+name = "fasttext"
+version = "0.1.0"
+authors = ["Messense Lv <messense@icloud.com>"]
+
+[dependencies]
+cfasttext-sys = { path = "cfasttext-sys", version = "0.1" }
