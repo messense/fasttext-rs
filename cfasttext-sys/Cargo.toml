@@ -1,0 +1,12 @@
+[package]
+name = "cfasttext-sys"
+version = "0.1.0"
+authors = ["Messense Lv <messense@icloud.com>"]
+build = "build.rs"
+links = "cfasttext_static"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.0.3"
+cmake = "0.1.29"
