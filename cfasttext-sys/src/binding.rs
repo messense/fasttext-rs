@@ -18,77 +18,42 @@ pub struct fasttext_predictions_t {
     pub predictions: *mut fasttext_prediction_t,
     pub length: usize,
 }
+
 extern "C" {
     pub fn cft_args_parse(
         argc: ::std::os::raw::c_int,
         argv: *mut *mut ::std::os::raw::c_char,
     ) -> fasttext_args_t;
-}
-extern "C" {
     pub fn cft_args_free(handle: fasttext_args_t);
-}
-extern "C" {
     pub fn cft_fasttext_new() -> fasttext_t;
-}
-extern "C" {
     pub fn cft_fasttext_free(handle: fasttext_t);
-}
-extern "C" {
     pub fn cft_fasttext_load_model(handle: fasttext_t, filename: *const ::std::os::raw::c_char);
-}
-extern "C" {
     pub fn cft_fasttext_save_model(handle: fasttext_t);
-}
-extern "C" {
     pub fn cft_fasttext_save_output(handle: fasttext_t);
-}
-extern "C" {
     pub fn cft_fasttext_save_vectors(handle: fasttext_t);
-}
-extern "C" {
     pub fn cft_fasttext_get_dimension(handle: fasttext_t) -> ::std::os::raw::c_int;
-}
-extern "C" {
     pub fn cft_fasttext_get_word_id(handle: fasttext_t, word: *const ::std::os::raw::c_char)
         -> i32;
-}
-extern "C" {
     pub fn cft_fasttext_get_subword_id(
         handle: fasttext_t,
         word: *const ::std::os::raw::c_char,
     ) -> i32;
-}
-extern "C" {
     pub fn cft_fasttext_is_quant(handle: fasttext_t) -> bool;
-}
-extern "C" {
     pub fn cft_fasttext_analogies(handle: fasttext_t, k: i32);
-}
-extern "C" {
     pub fn cft_fasttext_train_thread(handle: fasttext_t, n: i32);
-}
-extern "C" {
     pub fn cft_fasttext_load_vectors(handle: fasttext_t, filename: *const ::std::os::raw::c_char);
-}
-extern "C" {
     pub fn cft_fasttext_train(
         handle: fasttext_t,
         argc: ::std::os::raw::c_int,
         argv: *mut *mut ::std::os::raw::c_char,
     );
-}
-extern "C" {
     pub fn cft_fasttext_predict(
         handle: fasttext_t,
         text: *const ::std::os::raw::c_char,
         k: i32,
         threshold: f32,
     ) -> *mut fasttext_predictions_t;
-}
-extern "C" {
     pub fn cft_fasttext_predictions_free(predictions: *mut fasttext_predictions_t);
-}
-extern "C" {
     pub fn cft_fasttext_quantize(
         handle: fasttext_t,
         input: *const ::std::os::raw::c_char,
