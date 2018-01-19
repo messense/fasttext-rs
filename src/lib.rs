@@ -1,11 +1,20 @@
 extern crate cfasttext_sys;
 
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
+use std::os::raw::{c_char, c_int};
+use std::slice;
+
 use cfasttext_sys::*;
 
 #[derive(Debug, Clone)]
 pub struct FastText {
     inner: fasttext_t
+}
+
+#[derive(Debug, Clone)]
+pub struct Prediction {
+    pub prob: f32,
+    pub label: String,
 }
 
 impl Default for FastText {
@@ -90,6 +99,32 @@ impl FastText {
         let c_path = CString::new(filename).unwrap();
         unsafe {
             cft_fasttext_load_vectors(self.inner, c_path.as_ptr());
+        }
+    }
+
+    pub fn train<T: AsRef<str>>(&mut self, args: &[T]) {
+        let argv: Vec<CString> = args.iter().map(|s| CString::new(s.as_ref()).unwrap()).collect();
+        // FIXME: cft_fasttext_train should take *const *const c_char?
+        let mut c_argv: Vec<*const c_char> = argv.iter().map(|s| s.as_ptr()).collect();
+        unsafe {
+            cft_fasttext_train(self.inner, c_argv.len() as c_int, c_argv.as_mut_ptr() as *mut *mut _);
+        }
+    }
+
+    pub fn predict(&self, text: &str, k: i32, threshold: f32) -> Vec<Prediction> {
+        let c_text = CString::new(text).unwrap();
+        unsafe {
+            let ret = cft_fasttext_predict(self.inner, c_text.as_ptr(), k, threshold);
+            let c_preds = slice::from_raw_parts((*ret).predictions, (*ret).length);
+            let preds: Vec<Prediction> = c_preds.iter().map(|p| {
+                let label = CStr::from_ptr((*p).label).to_string_lossy().to_string();
+                Prediction {
+                    prob: (*p).prob,
+                    label: label
+                }
+            }).collect();
+            cft_fasttext_predictions_free(ret);
+            preds
         }
     }
 }
