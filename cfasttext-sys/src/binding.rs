@@ -46,8 +46,7 @@ extern "C" {
     pub fn cft_fasttext_load_vectors(handle: fasttext_t, filename: *const ::std::os::raw::c_char);
     pub fn cft_fasttext_train(
         handle: fasttext_t,
-        argc: ::std::os::raw::c_int,
-        argv: *mut *mut ::std::os::raw::c_char,
+        args: fasttext_args_t,
     );
     pub fn cft_fasttext_predict(
         handle: fasttext_t,

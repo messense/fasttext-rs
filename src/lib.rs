@@ -141,12 +141,9 @@ impl FastText {
         }
     }
 
-    pub fn train<T: AsRef<str>>(&mut self, args: &[T]) {
-        let argv: Vec<CString> = args.iter().map(|s| CString::new(s.as_ref()).unwrap()).collect();
-        // FIXME: cft_fasttext_train should take *const *const c_char?
-        let mut c_argv: Vec<*const c_char> = argv.iter().map(|s| s.as_ptr()).collect();
+    pub fn train(&mut self, args: &Args) {
         unsafe {
-            cft_fasttext_train(self.inner, c_argv.len() as c_int, c_argv.as_mut_ptr() as *mut *mut _);
+            cft_fasttext_train(self.inner, args.inner);
         }
     }
 
