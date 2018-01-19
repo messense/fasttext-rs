@@ -61,15 +61,6 @@ extern "C" {
     pub fn cft_fasttext_predictions_free(predictions: *mut fasttext_predictions_t);
     pub fn cft_fasttext_quantize(
         handle: fasttext_t,
-        input: *const ::std::os::raw::c_char,
-        qout: bool,
-        cutoff: i32,
-        retrain: bool,
-        epoch: ::std::os::raw::c_int,
-        lr: f64,
-        thread: ::std::os::raw::c_int,
-        verbose: ::std::os::raw::c_int,
-        dsub: i32,
-        qnorm: bool,
+        args: fasttext_args_t,
     );
 }
