@@ -27,6 +27,10 @@ extern "C" {
         argv: *mut *mut ::std::os::raw::c_char,
     );
     pub fn cft_args_free(handle: fasttext_args_t);
+    pub fn cft_args_get_input(handle: fasttext_args_t) -> *mut ::std::os::raw::c_char;
+    pub fn cft_args_set_input(handle: fasttext_args_t, input: *const ::std::os::raw::c_char);
+    pub fn cft_args_get_output(handle: fasttext_args_t) -> *mut ::std::os::raw::c_char;
+    pub fn cft_args_set_output(handle: fasttext_args_t, output: *const ::std::os::raw::c_char);
     pub fn cft_fasttext_new() -> fasttext_t;
     pub fn cft_fasttext_free(handle: fasttext_t);
     pub fn cft_fasttext_load_model(handle: fasttext_t, filename: *const ::std::os::raw::c_char);

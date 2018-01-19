@@ -3,6 +3,7 @@ extern crate cfasttext_sys;
 use std::ffi::{CString, CStr};
 use std::os::raw::{c_char, c_int};
 use std::slice;
+use std::borrow::Cow;
 
 use cfasttext_sys::*;
 
@@ -36,6 +37,34 @@ impl Args {
         let mut c_argv: Vec<*const c_char> = argv.iter().map(|s| s.as_ptr()).collect();
         unsafe {
             cft_args_parse(self.inner, c_argv.len() as c_int, c_argv.as_mut_ptr() as *mut *mut _ as *mut *mut _);
+        }
+    }
+
+    pub fn input(&self) -> Cow<str> {
+        unsafe {
+            let ret = cft_args_get_input(self.inner);
+            CStr::from_ptr(ret).to_string_lossy()
+        }
+    }
+
+    pub fn set_input(&mut self, input: &str) {
+        let c_input = CString::new(input).unwrap();
+        unsafe {
+            cft_args_set_input(self.inner, c_input.as_ptr());
+        }
+    }
+
+    pub fn output(&self) -> Cow<str> {
+        unsafe {
+            let ret = cft_args_get_output(self.inner);
+            CStr::from_ptr(ret).to_string_lossy()
+        }
+    }
+
+    pub fn set_output(&mut self, input: &str) {
+        let c_input = CString::new(input).unwrap();
+        unsafe {
+            cft_args_set_output(self.inner, c_input.as_ptr());
         }
     }
 }
