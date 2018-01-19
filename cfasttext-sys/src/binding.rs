@@ -20,10 +20,12 @@ pub struct fasttext_predictions_t {
 }
 
 extern "C" {
+    pub fn cft_args_new() -> fasttext_args_t;
     pub fn cft_args_parse(
+        handle: fasttext_args_t,
         argc: ::std::os::raw::c_int,
         argv: *mut *mut ::std::os::raw::c_char,
-    ) -> fasttext_args_t;
+    );
     pub fn cft_args_free(handle: fasttext_args_t);
     pub fn cft_fasttext_new() -> fasttext_t;
     pub fn cft_fasttext_free(handle: fasttext_t);

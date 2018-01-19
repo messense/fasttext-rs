@@ -23,15 +23,19 @@ pub struct Prediction {
 }
 
 impl Args {
-    pub fn parse<T: AsRef<str>>(args: &[T]) -> Self {
+    pub fn new() -> Self {
+        unsafe {
+            Self {
+                inner: cft_args_new()
+            }
+        }
+    }
+    pub fn parse<T: AsRef<str>>(self, args: &[T]) {
         let argv: Vec<CString> = args.iter().map(|s| CString::new(s.as_ref()).unwrap()).collect();
         // FIXME: cft_fasttext_train should take *const *const c_char?
         let mut c_argv: Vec<*const c_char> = argv.iter().map(|s| s.as_ptr()).collect();
         unsafe {
-            let args = cft_args_parse(c_argv.len() as c_int, c_argv.as_mut_ptr() as *mut *mut _ as *mut *mut _);
-            Self {
-                inner: args
-            }
+            cft_args_parse(self.inner, c_argv.len() as c_int, c_argv.as_mut_ptr() as *mut *mut _ as *mut *mut _);
         }
     }
 }
@@ -43,6 +47,12 @@ impl Drop for Args {
                 cft_args_free(self.inner);
             }
         }
+    }
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Args::new()
     }
 }
 
