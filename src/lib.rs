@@ -192,6 +192,12 @@ impl FastText {
             preds
         }
     }
+
+    pub fn quantize(&mut self, args: &Args) {
+        unsafe {
+            cft_fasttext_quantize(self.inner, args.inner);
+        }
+    }
 }
 
 impl Drop for FastText {
