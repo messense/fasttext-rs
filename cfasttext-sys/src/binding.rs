@@ -3,9 +3,16 @@
 pub const FASTTEXT_TRUE: ::std::os::raw::c_uint = 1;
 pub const CFASTTEXT_FALSE: ::std::os::raw::c_uint = 0;
 
-pub type fasttext_t = *mut ::std::os::raw::c_void;
-pub type fasttext_args_t = *mut ::std::os::raw::c_void;
-
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fasttext_t {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fasttext_args_t {
+    _unused: [u8; 0],
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct fasttext_prediction_t {
@@ -20,47 +27,56 @@ pub struct fasttext_predictions_t {
 }
 
 extern "C" {
-    pub fn cft_args_new() -> fasttext_args_t;
+    pub fn cft_str_free(s: *mut ::std::os::raw::c_char);
+}
+extern "C" {
+    pub fn cft_args_new() -> *mut fasttext_args_t;
+}
+extern "C" {
     pub fn cft_args_parse(
-        handle: fasttext_args_t,
+        handle: *mut fasttext_args_t,
         argc: ::std::os::raw::c_int,
         argv: *mut *mut ::std::os::raw::c_char,
     );
-    pub fn cft_args_free(handle: fasttext_args_t);
-    pub fn cft_args_get_input(handle: fasttext_args_t) -> *mut ::std::os::raw::c_char;
-    pub fn cft_args_set_input(handle: fasttext_args_t, input: *const ::std::os::raw::c_char);
-    pub fn cft_args_get_output(handle: fasttext_args_t) -> *mut ::std::os::raw::c_char;
-    pub fn cft_args_set_output(handle: fasttext_args_t, output: *const ::std::os::raw::c_char);
-    pub fn cft_fasttext_new() -> fasttext_t;
-    pub fn cft_fasttext_free(handle: fasttext_t);
-    pub fn cft_fasttext_load_model(handle: fasttext_t, filename: *const ::std::os::raw::c_char);
-    pub fn cft_fasttext_save_model(handle: fasttext_t);
-    pub fn cft_fasttext_save_output(handle: fasttext_t);
-    pub fn cft_fasttext_save_vectors(handle: fasttext_t);
-    pub fn cft_fasttext_get_dimension(handle: fasttext_t) -> ::std::os::raw::c_int;
-    pub fn cft_fasttext_get_word_id(handle: fasttext_t, word: *const ::std::os::raw::c_char)
-        -> i32;
-    pub fn cft_fasttext_get_subword_id(
-        handle: fasttext_t,
+}
+extern "C" {
+    pub fn cft_args_free(handle: *mut fasttext_args_t);
+    pub fn cft_args_get_input(handle: *mut fasttext_args_t) -> *mut ::std::os::raw::c_char;
+    pub fn cft_args_set_input(handle: *mut fasttext_args_t, input: *const ::std::os::raw::c_char);
+    pub fn cft_args_get_output(handle: *mut fasttext_args_t) -> *mut ::std::os::raw::c_char;
+    pub fn cft_args_set_output(handle: *mut fasttext_args_t, output: *const ::std::os::raw::c_char);
+    pub fn cft_fasttext_new() -> *mut fasttext_t;
+    pub fn cft_fasttext_free(handle: *mut fasttext_t);
+    pub fn cft_fasttext_load_model(
+        handle: *mut fasttext_t,
+        filename: *const ::std::os::raw::c_char,
+    );
+    pub fn cft_fasttext_save_model(handle: *mut fasttext_t);
+    pub fn cft_fasttext_save_output(handle: *mut fasttext_t);
+    pub fn cft_fasttext_save_vectors(handle: *mut fasttext_t);
+    pub fn cft_fasttext_get_dimension(handle: *mut fasttext_t) -> ::std::os::raw::c_int;
+    pub fn cft_fasttext_get_word_id(
+        handle: *mut fasttext_t,
         word: *const ::std::os::raw::c_char,
     ) -> i32;
-    pub fn cft_fasttext_is_quant(handle: fasttext_t) -> bool;
-    pub fn cft_fasttext_analogies(handle: fasttext_t, k: i32);
-    pub fn cft_fasttext_train_thread(handle: fasttext_t, n: i32);
-    pub fn cft_fasttext_load_vectors(handle: fasttext_t, filename: *const ::std::os::raw::c_char);
-    pub fn cft_fasttext_train(
-        handle: fasttext_t,
-        args: fasttext_args_t,
+    pub fn cft_fasttext_get_subword_id(
+        handle: *mut fasttext_t,
+        word: *const ::std::os::raw::c_char,
+    ) -> i32;
+    pub fn cft_fasttext_is_quant(handle: *mut fasttext_t) -> bool;
+    pub fn cft_fasttext_analogies(handle: *mut fasttext_t, k: i32);
+    pub fn cft_fasttext_train_thread(handle: *mut fasttext_t, n: i32);
+    pub fn cft_fasttext_load_vectors(
+        handle: *mut fasttext_t,
+        filename: *const ::std::os::raw::c_char,
     );
+    pub fn cft_fasttext_train(handle: *mut fasttext_t, args: *mut fasttext_args_t);
     pub fn cft_fasttext_predict(
-        handle: fasttext_t,
+        handle: *mut fasttext_t,
         text: *const ::std::os::raw::c_char,
         k: i32,
         threshold: f32,
     ) -> *mut fasttext_predictions_t;
     pub fn cft_fasttext_predictions_free(predictions: *mut fasttext_predictions_t);
-    pub fn cft_fasttext_quantize(
-        handle: fasttext_t,
-        args: fasttext_args_t,
-    );
+    pub fn cft_fasttext_quantize(handle: *mut fasttext_t, args: *mut fasttext_args_t);
 }

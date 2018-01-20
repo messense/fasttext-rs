@@ -9,12 +9,12 @@ use cfasttext_sys::*;
 
 #[derive(Debug, Clone)]
 pub struct Args {
-    inner: fasttext_args_t
+    inner: *mut fasttext_args_t
 }
 
 #[derive(Debug, Clone)]
 pub struct FastText {
-    inner: fasttext_t
+    inner: *mut fasttext_t
 }
 
 #[derive(Debug, Clone)]
