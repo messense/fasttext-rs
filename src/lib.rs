@@ -213,10 +213,15 @@ impl Drop for FastText {
 
 #[cfg(test)]
 mod tests {
-    use super::FastText;
+    use super::{Args, FastText};
 
     #[test]
-    fn test_fasttest_new() {
-        let _fasttext = FastText::new();
+    fn test_args_new_default() {
+        let _args = Args::default();
+    }
+
+    #[test]
+    fn test_fasttest_new_default() {
+        let _fasttext = FastText::default();
     }
 }
