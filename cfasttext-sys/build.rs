@@ -1,7 +1,7 @@
 extern crate cc;
 extern crate cmake;
 
-use std::fs;
+use std::{fs, str};
 
 fn fail_on_empty_directory(name: &str) {
     if fs::read_dir(name).unwrap().count() == 0 {
@@ -22,8 +22,19 @@ fn build_cfasttext() {
     println!("cargo:rustc-link-lib=static=cfasttext_static");
 }
 
+fn link_cpp() {
+    // XXX: static link libc++?
+    if cfg!(any(target_os = "macos", target_os = "freebsd")) {
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo:rustc-link-lib=dylib=gcc");
+    }
+}
+
 fn main() {
     fail_on_empty_directory("cfasttext");
     fail_on_empty_directory("cfasttext/fasttext");
     build_cfasttext();
+    link_cpp();
 }

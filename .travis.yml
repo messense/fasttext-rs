@@ -7,4 +7,4 @@ rust:
 cache: cargo
 
 script:
-  - cargo build
+  - cargo test

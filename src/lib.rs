@@ -209,3 +209,14 @@ impl Drop for FastText {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::FastText;
+
+    #[test]
+    fn test_fasttest_new() {
+        let _fasttext = FastText::new();
+    }
+}
