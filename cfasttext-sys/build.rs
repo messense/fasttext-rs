@@ -20,6 +20,8 @@ fn build_cfasttext() {
         .build();
     println!("cargo:rustc-link-search=native={}/build", dst.display());
     println!("cargo:rustc-link-lib=static=cfasttext_static");
+    println!("cargo:rustc-link-search=native={}/build/fasttext", dst.display());
+    println!("cargo:rustc-link-lib=static=fasttext");
 }
 
 fn link_cpp() {
