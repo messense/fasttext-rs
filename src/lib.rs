@@ -221,6 +221,20 @@ mod tests {
     }
 
     #[test]
+    fn test_args_input() {
+        let mut args = Args::new();
+        args.set_input("input");
+        assert_eq!("input", args.input());
+    }
+
+    #[test]
+    fn test_args_output() {
+        let mut args = Args::new();
+        args.set_output("output.model");
+        assert_eq!("output.model", args.output());
+    }
+
+    #[test]
     fn test_fasttest_new_default() {
         let _fasttext = FastText::default();
     }

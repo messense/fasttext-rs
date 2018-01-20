@@ -41,9 +41,9 @@ extern "C" {
 }
 extern "C" {
     pub fn cft_args_free(handle: *mut fasttext_args_t);
-    pub fn cft_args_get_input(handle: *mut fasttext_args_t) -> *mut ::std::os::raw::c_char;
+    pub fn cft_args_get_input(handle: *mut fasttext_args_t) -> *const ::std::os::raw::c_char;
     pub fn cft_args_set_input(handle: *mut fasttext_args_t, input: *const ::std::os::raw::c_char);
-    pub fn cft_args_get_output(handle: *mut fasttext_args_t) -> *mut ::std::os::raw::c_char;
+    pub fn cft_args_get_output(handle: *mut fasttext_args_t) -> *const ::std::os::raw::c_char;
     pub fn cft_args_set_output(handle: *mut fasttext_args_t, output: *const ::std::os::raw::c_char);
     pub fn cft_fasttext_new() -> *mut fasttext_t;
     pub fn cft_fasttext_free(handle: *mut fasttext_t);
