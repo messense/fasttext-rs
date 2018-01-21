@@ -13,6 +13,6 @@ after_success:
   - |
     if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "nightly" ]]; then
       bash <(curl https://raw.githubusercontent.com/xd009642/tarpaulin/master/travis-install.sh)
-      cargo tarpaulin --no-count --out Xml
+      cargo tarpaulin --out Xml
       bash <(curl -s https://codecov.io/bash)
     fi
