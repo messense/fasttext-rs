@@ -210,6 +210,8 @@ impl Drop for FastText {
     }
 }
 
+unsafe impl Send for FastText {}
+unsafe impl Sync for FastText {}
 
 #[cfg(test)]
 mod tests {
