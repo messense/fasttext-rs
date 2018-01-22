@@ -27,19 +27,12 @@ pub struct fasttext_predictions_t {
 }
 
 extern "C" {
-    pub fn cft_str_free(s: *mut ::std::os::raw::c_char);
-}
-extern "C" {
     pub fn cft_args_new() -> *mut fasttext_args_t;
-}
-extern "C" {
     pub fn cft_args_parse(
         handle: *mut fasttext_args_t,
         argc: ::std::os::raw::c_int,
         argv: *mut *mut ::std::os::raw::c_char,
     );
-}
-extern "C" {
     pub fn cft_args_free(handle: *mut fasttext_args_t);
     pub fn cft_args_get_input(handle: *mut fasttext_args_t) -> *const ::std::os::raw::c_char;
     pub fn cft_args_set_input(handle: *mut fasttext_args_t, input: *const ::std::os::raw::c_char);
