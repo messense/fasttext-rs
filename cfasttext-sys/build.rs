@@ -1,4 +1,3 @@
-extern crate cc;
 extern crate cmake;
 
 use std::{fs, str};

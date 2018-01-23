@@ -13,8 +13,7 @@ repository = "https://github.com/messense/fasttext-rs"
 [dependencies]
 
 [build-dependencies]
-cc = "1.0.3"
-cmake = "0.1.29"
+cmake = "0.1"
 
 [badges]
 travis-ci = { repository = "messense/fasttext-rs" }
