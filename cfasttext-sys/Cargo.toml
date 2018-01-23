@@ -2,11 +2,19 @@
 name = "cfasttext-sys"
 version = "0.1.0"
 authors = ["Messense Lv <messense@icloud.com>"]
+categories = ["api-bindings", "external-ffi-bindings"]
+description = "fastText ffi binding"
+license = "MIT"
+keywords = ["fastText", "text", "classify"]
 build = "build.rs"
 links = "cfasttext_static"
+repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
 
 [build-dependencies]
 cc = "1.0.3"
 cmake = "0.1.29"
+
+[badges]
+travis-ci = { repository = "messense/fasttext-rs" }

@@ -2,6 +2,15 @@
 name = "fasttext"
 version = "0.1.0"
 authors = ["Messense Lv <messense@icloud.com>"]
+categories = ["api-bindings", "external-ffi-bindings"]
+description = "fastText Rust binding"
+license = "MIT"
+keywords = ["fastText", "text", "classify"]
+readme = "README.md"
+repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
 cfasttext-sys = { path = "cfasttext-sys", version = "0.1" }
+
+[badges]
+travis-ci = { repository = "messense/fasttext-rs" }
