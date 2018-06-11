@@ -1,6 +1,6 @@
 [package]
 name = "fasttext"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Messense Lv <messense@icloud.com>"]
 categories = ["api-bindings", "external-ffi-bindings"]
 description = "fastText Rust binding"
