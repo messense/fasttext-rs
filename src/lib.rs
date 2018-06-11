@@ -2,7 +2,6 @@ extern crate cfasttext_sys;
 
 use std::ffi::{CString, CStr};
 use std::os::raw::{c_char, c_int};
-use std::mem;
 use std::slice;
 use std::borrow::Cow;
 
@@ -202,14 +201,13 @@ impl FastText {
 
     pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
         let c_text = CString::new(word).unwrap();
-        let mut v = Vec::with_capacity(self.get_dimension() as usize);
-        let p = v.as_mut_ptr();
-        let cap = v.capacity();
+        let dim = self.get_dimension() as usize;
+        let mut v = Vec::with_capacity(dim);
         unsafe {
-            mem::forget(v);
-            cft_get_word_vector(self.inner, c_text.as_ptr(), p);
-            Vec::from_raw_parts(p, cap, cap)
+            cft_get_word_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
+            v.set_len(dim);
         }
+        v
     }
 }
 
