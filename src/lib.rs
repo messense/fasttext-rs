@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fasttest_get_word_vector() {
+    fn test_fasttext_get_word_vector() {
         let mut _fasttext = FastText::default();
         _fasttext.load_model("tests/fixtures/cooking.model.bin");
         
