@@ -204,7 +204,7 @@ impl FastText {
         let dim = self.get_dimension() as usize;
         let mut v = Vec::with_capacity(dim);
         unsafe {
-            cft_get_word_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
+            cft_fasttext_get_word_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
             v.set_len(dim);
         }
         v
@@ -262,6 +262,6 @@ mod tests {
         assert!(fasttext.get_dimension() == v.len() as isize);
         assert!(v[0] != 0f32);
         // And it doesn't contain "hello".
-        assert!(fasttext.get_word_vector("hello")[0]==0f32);
+        assert!(fasttext.get_word_vector("hello")[0] == 0f32);
     }    
 }
