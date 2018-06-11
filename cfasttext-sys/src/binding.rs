@@ -72,4 +72,5 @@ extern "C" {
     ) -> *mut fasttext_predictions_t;
     pub fn cft_fasttext_predictions_free(predictions: *mut fasttext_predictions_t);
     pub fn cft_fasttext_quantize(handle: *mut fasttext_t, args: *mut fasttext_args_t);
+    pub fn cft_get_word_vector(handle: *mut fasttext_t, word: *const ::std::os::raw::c_char, buf: *const ::std::os::raw::c_float);
 }

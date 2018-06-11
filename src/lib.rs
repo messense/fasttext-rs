@@ -2,6 +2,7 @@ extern crate cfasttext_sys;
 
 use std::ffi::{CString, CStr};
 use std::os::raw::{c_char, c_int};
+use std::mem;
 use std::slice;
 use std::borrow::Cow;
 
@@ -198,6 +199,18 @@ impl FastText {
             cft_fasttext_quantize(self.inner, args.inner);
         }
     }
+
+    pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
+        let c_text = CString::new(word).unwrap();
+        let mut v = Vec::with_capacity(self.get_dimension() as usize);
+        let p = v.as_mut_ptr();
+        let cap = v.capacity();
+        unsafe {
+            mem::forget(v);
+            cft_get_word_vector(self.inner, c_text.as_ptr(), p);
+            Vec::from_raw_parts(p, cap, cap)
+        }
+    }
 }
 
 impl Drop for FastText {
@@ -237,7 +250,20 @@ mod tests {
     }
 
     #[test]
-    fn test_fasttest_new_default() {
+    fn test_fasttext_new_default() {
         let _fasttext = FastText::default();
     }
+
+    #[test]
+    fn test_fasttest_get_word_vector() {
+        let mut _fasttext = FastText::default();
+        _fasttext.load_model("tests/fixtures/cooking.model.bin");
+        
+        // The model contains the word "banana", right?
+        let v=_fasttext.get_word_vector("banana");
+        assert!(_fasttext.get_dimension() == v.len() as isize);
+        assert!(v[0] != 0f32);
+        // And it doesn't contain "hello".
+        assert!(_fasttext.get_word_vector("hello")[0]==0f32);
+    }    
 }
