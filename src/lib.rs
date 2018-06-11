@@ -256,14 +256,14 @@ mod tests {
 
     #[test]
     fn test_fasttext_get_word_vector() {
-        let mut _fasttext = FastText::default();
-        _fasttext.load_model("tests/fixtures/cooking.model.bin");
+        let mut fasttext = FastText::default();
+        fasttext.load_model("tests/fixtures/cooking.model.bin");
         
         // The model contains the word "banana", right?
-        let v=_fasttext.get_word_vector("banana");
-        assert!(_fasttext.get_dimension() == v.len() as isize);
+        let v=fasttext.get_word_vector("banana");
+        assert!(fasttext.get_dimension() == v.len() as isize);
         assert!(v[0] != 0f32);
         // And it doesn't contain "hello".
-        assert!(_fasttext.get_word_vector("hello")[0]==0f32);
+        assert!(fasttext.get_word_vector("hello")[0]==0f32);
     }    
 }
