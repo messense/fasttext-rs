@@ -198,6 +198,17 @@ impl FastText {
             cft_fasttext_quantize(self.inner, args.inner);
         }
     }
+
+    pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
+        let c_text = CString::new(word).unwrap();
+        let dim = self.get_dimension() as usize;
+        let mut v = Vec::with_capacity(dim);
+        unsafe {
+            cft_get_word_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
+            v.set_len(dim);
+        }
+        v
+    }
 }
 
 impl Drop for FastText {
@@ -237,7 +248,20 @@ mod tests {
     }
 
     #[test]
-    fn test_fasttest_new_default() {
+    fn test_fasttext_new_default() {
         let _fasttext = FastText::default();
     }
+
+    #[test]
+    fn test_fasttext_get_word_vector() {
+        let mut fasttext = FastText::default();
+        fasttext.load_model("tests/fixtures/cooking.model.bin");
+        
+        // The model contains the word "banana", right?
+        let v=fasttext.get_word_vector("banana");
+        assert!(fasttext.get_dimension() == v.len() as isize);
+        assert!(v[0] != 0f32);
+        // And it doesn't contain "hello".
+        assert!(fasttext.get_word_vector("hello")[0]==0f32);
+    }    
 }
