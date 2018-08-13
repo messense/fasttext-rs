@@ -1,6 +1,6 @@
 [package]
 name = "cfasttext-sys"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Messense Lv <messense@icloud.com>"]
 categories = ["api-bindings", "external-ffi-bindings"]
 description = "fastText ffi binding"
