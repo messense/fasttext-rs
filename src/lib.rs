@@ -1,3 +1,4 @@
+#[macro_use]
 extern crate cfasttext_sys;
 
 use std::ffi::{CString, CStr};
@@ -100,29 +101,33 @@ impl FastText {
         }
     }
 
-    pub fn load_model(&mut self, filename: &str) {
+    pub fn load_model(&mut self, filename: &str) -> Result<(), String> {
         let c_path = CString::new(filename).unwrap();
         unsafe {
-            cft_fasttext_load_model(self.inner, c_path.as_ptr());
+            ffi_try!(cft_fasttext_load_model(self.inner, c_path.as_ptr()));
         }
+        Ok(())
     }
 
-    pub fn save_model(&mut self) {
+    pub fn save_model(&mut self) -> Result<(), String> {
         unsafe {
-            cft_fasttext_save_model(self.inner);
+            ffi_try!(cft_fasttext_save_model(self.inner));
         }
+        Ok(())
     }
 
-    pub fn save_output(&mut self) {
+    pub fn save_output(&mut self) -> Result<(), String> {
         unsafe {
-            cft_fasttext_save_output(self.inner);
+            ffi_try!(cft_fasttext_save_output(self.inner));
         }
+        Ok(())
     }
 
-    pub fn save_vectors(&mut self) {
+    pub fn save_vectors(&mut self) -> Result<(), String> {
         unsafe {
-            cft_fasttext_save_vectors(self.inner);
+            ffi_try!(cft_fasttext_save_vectors(self.inner));
         }
+        Ok(())
     }
 
     pub fn get_dimension(&self) -> isize {
@@ -163,17 +168,19 @@ impl FastText {
         }
     }
 
-    pub fn load_vectors(&mut self, filename: &str) {
+    pub fn load_vectors(&mut self, filename: &str) -> Result<(), String> {
         let c_path = CString::new(filename).unwrap();
         unsafe {
-            cft_fasttext_load_vectors(self.inner, c_path.as_ptr());
+            ffi_try!(cft_fasttext_load_vectors(self.inner, c_path.as_ptr()));
         }
+        Ok(())
     }
 
-    pub fn train(&mut self, args: &Args) {
+    pub fn train(&mut self, args: &Args) -> Result<(), String> {
         unsafe {
-            cft_fasttext_train(self.inner, args.inner);
+            ffi_try!(cft_fasttext_train(self.inner, args.inner));
         }
+        Ok(())
     }
 
     pub fn predict(&self, text: &str, k: i32, threshold: f32) -> Vec<Prediction> {
@@ -193,10 +200,11 @@ impl FastText {
         }
     }
 
-    pub fn quantize(&mut self, args: &Args) {
+    pub fn quantize(&mut self, args: &Args) -> Result<(), String> {
         unsafe {
-            cft_fasttext_quantize(self.inner, args.inner);
+            ffi_try!(cft_fasttext_quantize(self.inner, args.inner));
         }
+        Ok(())
     }
 
     pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
