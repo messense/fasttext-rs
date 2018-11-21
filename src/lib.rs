@@ -184,7 +184,7 @@ impl FastText {
             let preds: Vec<Prediction> = c_preds.iter().map(|p| {
                 let label = CStr::from_ptr((*p).label).to_string_lossy().to_string();
                 Prediction {
-                    prob: ((*p).prob).exp(),
+                    prob: (*p).prob,
                     label: label
                 }
             }).collect();
