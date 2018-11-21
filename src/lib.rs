@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn test_fasttext_get_word_vector() {
         let mut fasttext = FastText::default();
-        fasttext.load_model("tests/fixtures/cooking.model.bin");
+        fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
         
         // The model contains the word "banana", right?
         let v=fasttext.get_word_vector("banana");
