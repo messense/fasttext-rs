@@ -7,6 +7,17 @@
 
 [fastText](https://github.com/facebookresearch/fastText) Rust binding
 
+## Installation
+
+Add it to your ``Cargo.toml``:
+
+```toml
+[dependencies]
+fasttext = "0.2"
+```
+
+Add ``extern crate fasttext`` to your crate root and your're good to go!
+
 ## License
 
 This work is released under the MIT license. A copy of the license is provided in the [LICENSE](./LICENSE) file.
