@@ -109,23 +109,26 @@ impl FastText {
         Ok(())
     }
 
-    pub fn save_model(&mut self) -> Result<(), String> {
+    pub fn save_model(&mut self, filename: &str) -> Result<(), String> {
+        let c_path = CString::new(filename).unwrap();
         unsafe {
-            ffi_try!(cft_fasttext_save_model(self.inner));
+            ffi_try!(cft_fasttext_save_model(self.inner, c_path.as_ptr()));
         }
         Ok(())
     }
 
-    pub fn save_output(&mut self) -> Result<(), String> {
+    pub fn save_output(&mut self, filename: &str) -> Result<(), String> {
+        let c_path = CString::new(filename).unwrap();
         unsafe {
-            ffi_try!(cft_fasttext_save_output(self.inner));
+            ffi_try!(cft_fasttext_save_output(self.inner, c_path.as_ptr()));
         }
         Ok(())
     }
 
-    pub fn save_vectors(&mut self) -> Result<(), String> {
+    pub fn save_vectors(&mut self, filename: &str) -> Result<(), String> {
+        let c_path = CString::new(filename).unwrap();
         unsafe {
-            ffi_try!(cft_fasttext_save_vectors(self.inner));
+            ffi_try!(cft_fasttext_save_vectors(self.inner, c_path.as_ptr()));
         }
         Ok(())
     }
@@ -153,18 +156,6 @@ impl FastText {
     pub fn is_quant(&self) -> bool {
         unsafe {
             cft_fasttext_is_quant(self.inner)
-        }
-    }
-
-    pub fn analogies(&mut self, k: i32) {
-        unsafe {
-            cft_fasttext_analogies(self.inner, k);
-        }
-    }
-
-    pub fn train_thread(&mut self, n: u32) {
-        unsafe {
-            cft_fasttext_train_thread(self.inner, n as i32);
         }
     }
 
@@ -216,6 +207,19 @@ impl FastText {
             v.set_len(dim);
         }
         v
+    }
+
+    pub fn tokenize(&self, text: &str) -> Vec<String> {
+        let c_text = CString::new(text).unwrap();
+        unsafe {
+            let ret = cft_fasttext_tokenize(self.inner, c_text.as_ptr());
+            let c_tokens = slice::from_raw_parts((*ret).tokens, (*ret).length);
+            let tokens: Vec<String> = c_tokens.iter().map(|p| {
+                CStr::from_ptr(*p).to_string_lossy().to_string()
+            }).collect();
+            cft_fasttext_tokens_free(ret);
+            tokens
+        }
     }
 }
 
@@ -272,4 +276,14 @@ mod tests {
         // And it doesn't contain "hello".
         assert!(fasttext.get_word_vector("hello")[0] == 0f32);
     }    
+
+    #[test]
+    fn test_fasttext_tokenize() {
+        let fasttext = FastText::default();
+        let tokens = fasttext.tokenize("I love banana");
+        assert_eq!(tokens, ["I", "love", "banana"]);
+
+        let tokens = fasttext.tokenize("不支持中文");
+        assert_eq!(tokens, ["不支持中文"]);
+    }
 }
