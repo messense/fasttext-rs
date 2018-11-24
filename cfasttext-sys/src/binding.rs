@@ -85,6 +85,7 @@ extern "C" {
         errptr: *mut *mut ::std::os::raw::c_char
     );
     pub fn cft_fasttext_get_word_vector(handle: *mut fasttext_t, word: *const ::std::os::raw::c_char, buf: *mut ::std::os::raw::c_float);
+    pub fn cft_fasttext_get_sentence_vector(handle: *mut fasttext_t, sentence: *const ::std::os::raw::c_char, buf: *mut ::std::os::raw::c_float);
     pub fn cft_fasttext_tokenize(handle: *mut fasttext_t, text: *const ::std::os::raw::c_char) -> *mut fasttext_tokens_t;
     pub fn cft_fasttext_tokens_free(tokens: *mut fasttext_tokens_t);
 }

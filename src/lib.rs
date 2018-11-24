@@ -221,6 +221,17 @@ impl FastText {
             tokens
         }
     }
+
+    pub fn get_sentence_vector(&self, sentence: &str) -> Vec<f32> {
+        let c_text = CString::new(sentence).unwrap();
+        let dim = self.get_dimension() as usize;
+        let mut v = Vec::with_capacity(dim);
+        unsafe {
+            cft_fasttext_get_sentence_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
+            v.set_len(dim);
+        }
+        v
+    }
 }
 
 impl Drop for FastText {
@@ -270,12 +281,25 @@ mod tests {
         fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
         
         // The model contains the word "banana", right?
-        let v=fasttext.get_word_vector("banana");
+        let v = fasttext.get_word_vector("banana");
         assert!(fasttext.get_dimension() == v.len() as isize);
         assert!(v[0] != 0f32);
         // And it doesn't contain "hello".
         assert!(fasttext.get_word_vector("hello")[0] == 0f32);
-    }    
+    }
+
+    #[test]
+    fn test_fasttext_get_sentence_vector() {
+        let mut fasttext = FastText::default();
+        fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
+
+        // The model contains the word "banana", right?
+        let v = fasttext.get_sentence_vector("banana");
+        assert!(fasttext.get_dimension() == v.len() as isize);
+        assert!(v[0] != 0f32);
+        // And it doesn't contain "hello".
+        assert!(fasttext.get_sentence_vector("hello")[0] == 0f32);
+    }
 
     #[test]
     fn test_fasttext_tokenize() {
