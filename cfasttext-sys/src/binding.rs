@@ -42,6 +42,18 @@ extern "C" {
     pub fn cft_args_set_input(handle: *mut fasttext_args_t, input: *const ::std::os::raw::c_char);
     pub fn cft_args_get_output(handle: *mut fasttext_args_t) -> *const ::std::os::raw::c_char;
     pub fn cft_args_set_output(handle: *mut fasttext_args_t, output: *const ::std::os::raw::c_char);
+    pub fn cft_args_get_lr(handle: *mut fasttext_args_t) -> ::std::os::raw::c_double;
+    pub fn cft_args_set_lr(handle: *mut fasttext_args_t, lr: ::std::os::raw::c_double);
+    pub fn cft_args_get_lr_update_rate(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_lr_update_rate(handle: *mut fasttext_args_t, lr: ::std::os::raw::c_int);
+    pub fn cft_args_get_dim(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_dim(handle: *mut fasttext_args_t, dim: ::std::os::raw::c_int);
+    pub fn cft_args_get_ws(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_ws(handle: *mut fasttext_args_t, ws: ::std::os::raw::c_int);
+    pub fn cft_args_get_epoch(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_epoch(handle: *mut fasttext_args_t, epoch: ::std::os::raw::c_int);
+    pub fn cft_args_get_thread(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_thread(handle: *mut fasttext_args_t, thread: ::std::os::raw::c_int);
     pub fn cft_fasttext_new() -> *mut fasttext_t;
     pub fn cft_fasttext_free(handle: *mut fasttext_t);
     pub fn cft_fasttext_load_model(

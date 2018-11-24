@@ -68,6 +68,54 @@ impl Args {
             cft_args_set_output(self.inner, c_input.as_ptr());
         }
     }
+
+    pub fn lr(&self) -> f64 {
+        unsafe { cft_args_get_lr(self.inner) }
+    }
+
+    pub fn set_lr(&mut self, lr: f64) {
+        unsafe { cft_args_set_lr(self.inner, lr) }
+    }
+
+    pub fn lr_update_rate(&self) -> i32 {
+        unsafe { cft_args_get_lr_update_rate(self.inner) }
+    }
+
+    pub fn set_lr_update_rate(&mut self, rate: i32) {
+        unsafe { cft_args_set_lr_update_rate(self.inner, rate) }
+    }
+
+    pub fn dim(&self) -> i32 {
+        unsafe { cft_args_get_dim(self.inner) }
+    }
+
+    pub fn set_dim(&mut self, dim: i32) {
+        unsafe { cft_args_set_dim(self.inner, dim) }
+    }
+
+    pub fn ws(&self) -> i32 {
+        unsafe { cft_args_get_ws(self.inner) }
+    }
+
+    pub fn set_ws(&mut self, ws: i32) {
+        unsafe { cft_args_set_ws(self.inner, ws) }
+    }
+
+    pub fn epoch(&self) -> i32 {
+        unsafe { cft_args_get_epoch(self.inner) }
+    }
+
+    pub fn set_epoch(&mut self, epoch: i32) {
+        unsafe { cft_args_set_epoch(self.inner, epoch) }
+    }
+
+    pub fn thread(&self) -> i32 {
+        unsafe { cft_args_get_thread(self.inner) }
+    }
+
+    pub fn set_thread(&mut self, thread: i32) {
+        unsafe { cft_args_set_thread(self.inner, thread) }
+    }
 }
 
 impl Drop for Args {
