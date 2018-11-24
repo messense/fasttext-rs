@@ -28,6 +28,20 @@ pub struct fasttext_tokens_t {
     pub tokens: *mut *mut ::std::os::raw::c_char,
     pub length: usize,
 }
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum model_name_t {
+    MODEL_CBOW = 1,
+    MODEL_SG = 2,
+    MODEL_SUP = 3,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum loss_name_t {
+    LOSS_HS = 1,
+    LOSS_NS = 2,
+    LOSS_SOFTMAX = 3,
+}
 
 extern "C" {
     pub fn cft_str_free(s: *mut ::std::os::raw::c_char);
@@ -54,6 +68,10 @@ extern "C" {
     pub fn cft_args_set_epoch(handle: *mut fasttext_args_t, epoch: ::std::os::raw::c_int);
     pub fn cft_args_get_thread(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
     pub fn cft_args_set_thread(handle: *mut fasttext_args_t, thread: ::std::os::raw::c_int);
+    pub fn cft_args_get_model(handle: *mut fasttext_args_t) -> model_name_t;
+    pub fn cft_args_set_model(handle: *mut fasttext_args_t, model: model_name_t);
+    pub fn cft_args_get_loss(handle: *mut fasttext_args_t) -> loss_name_t;
+    pub fn cft_args_set_loss(handle: *mut fasttext_args_t, loss: loss_name_t);
     pub fn cft_fasttext_new() -> *mut fasttext_t;
     pub fn cft_fasttext_free(handle: *mut fasttext_t);
     pub fn cft_fasttext_load_model(

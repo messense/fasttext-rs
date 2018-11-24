@@ -24,6 +24,60 @@ pub struct Prediction {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelType {
+    CBOW,
+    SG,
+    SUP,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LossType {
+    HS,
+    NS,
+    SOFTMAX,
+}
+
+impl From<ModelType> for model_name_t {
+    fn from(mt: ModelType) -> model_name_t {
+        match mt {
+            ModelType::CBOW => model_name_t::MODEL_CBOW,
+            ModelType::SG => model_name_t::MODEL_SG,
+            ModelType::SUP => model_name_t::MODEL_SUP,
+        }
+    }
+}
+
+impl From<model_name_t> for ModelType {
+    fn from(mn: model_name_t) -> ModelType {
+        match mn {
+            model_name_t::MODEL_CBOW => ModelType::CBOW,
+            model_name_t::MODEL_SG => ModelType::SG,
+            model_name_t::MODEL_SUP => ModelType::SUP,
+        }
+    }
+}
+
+impl From<LossType> for loss_name_t {
+    fn from(lt: LossType) -> loss_name_t {
+        match lt {
+            LossType::HS => loss_name_t::LOSS_HS,
+            LossType::NS => loss_name_t::LOSS_NS,
+            LossType::SOFTMAX => loss_name_t::LOSS_SOFTMAX,
+        }
+    }
+}
+
+impl From<loss_name_t> for LossType {
+    fn from(ln: loss_name_t) -> LossType {
+        match ln {
+            loss_name_t::LOSS_HS => LossType::HS,
+            loss_name_t::LOSS_NS => LossType::NS,
+            loss_name_t::LOSS_SOFTMAX => LossType::SOFTMAX,
+        }
+    }
+}
+
 impl Args {
     pub fn new() -> Self {
         unsafe {
@@ -115,6 +169,28 @@ impl Args {
 
     pub fn set_thread(&mut self, thread: i32) {
         unsafe { cft_args_set_thread(self.inner, thread) }
+    }
+
+    pub fn model(&self) -> ModelType {
+        let model_name = unsafe { cft_args_get_model(self.inner) };
+        model_name.into()
+    }
+
+    pub fn set_model(&mut self, model: ModelType) {
+        unsafe {
+            cft_args_set_model(self.inner, model.into());
+        }
+    }
+
+    pub fn loss(&self) -> LossType {
+        let loss_name = unsafe { cft_args_get_loss(self.inner) };
+        loss_name.into()
+    }
+
+    pub fn set_loss(&mut self, loss: LossType) {
+        unsafe {
+            cft_args_set_loss(self.inner, loss.into());
+        }
     }
 }
 
@@ -297,7 +373,7 @@ unsafe impl Sync for FastText {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, FastText};
+    use super::{Args, FastText, ModelType, LossType};
 
     #[test]
     fn test_args_new_default() {
@@ -316,6 +392,24 @@ mod tests {
         let mut args = Args::new();
         args.set_output("output.model");
         assert_eq!("output.model", args.output());
+    }
+
+    #[test]
+    fn test_args_model() {
+        let mut args = Args::new();
+        assert_eq!(ModelType::SG, args.model());
+
+        args.set_model(ModelType::CBOW);
+        assert_eq!(ModelType::CBOW, args.model());
+    }
+
+    #[test]
+    fn test_args_loss() {
+        let mut args = Args::new();
+        assert_eq!(LossType::NS, args.loss());
+
+        args.set_loss(LossType::SOFTMAX);
+        assert_eq!(LossType::SOFTMAX, args.loss());
     }
 
     #[test]
