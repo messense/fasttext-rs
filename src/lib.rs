@@ -25,55 +25,58 @@ pub struct Prediction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelType {
+pub enum ModelName {
+    /// CBOW
     CBOW,
+    /// SkipGram
     SG,
+    /// Supervised
     SUP,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LossType {
+pub enum LossName {
     HS,
     NS,
     SOFTMAX,
 }
 
-impl From<ModelType> for model_name_t {
-    fn from(mt: ModelType) -> model_name_t {
+impl From<ModelName> for model_name_t {
+    fn from(mt: ModelName) -> model_name_t {
         match mt {
-            ModelType::CBOW => model_name_t::MODEL_CBOW,
-            ModelType::SG => model_name_t::MODEL_SG,
-            ModelType::SUP => model_name_t::MODEL_SUP,
+            ModelName::CBOW => model_name_t::MODEL_CBOW,
+            ModelName::SG => model_name_t::MODEL_SG,
+            ModelName::SUP => model_name_t::MODEL_SUP,
         }
     }
 }
 
-impl From<model_name_t> for ModelType {
-    fn from(mn: model_name_t) -> ModelType {
+impl From<model_name_t> for ModelName {
+    fn from(mn: model_name_t) -> ModelName {
         match mn {
-            model_name_t::MODEL_CBOW => ModelType::CBOW,
-            model_name_t::MODEL_SG => ModelType::SG,
-            model_name_t::MODEL_SUP => ModelType::SUP,
+            model_name_t::MODEL_CBOW => ModelName::CBOW,
+            model_name_t::MODEL_SG => ModelName::SG,
+            model_name_t::MODEL_SUP => ModelName::SUP,
         }
     }
 }
 
-impl From<LossType> for loss_name_t {
-    fn from(lt: LossType) -> loss_name_t {
+impl From<LossName> for loss_name_t {
+    fn from(lt: LossName) -> loss_name_t {
         match lt {
-            LossType::HS => loss_name_t::LOSS_HS,
-            LossType::NS => loss_name_t::LOSS_NS,
-            LossType::SOFTMAX => loss_name_t::LOSS_SOFTMAX,
+            LossName::HS => loss_name_t::LOSS_HS,
+            LossName::NS => loss_name_t::LOSS_NS,
+            LossName::SOFTMAX => loss_name_t::LOSS_SOFTMAX,
         }
     }
 }
 
-impl From<loss_name_t> for LossType {
-    fn from(ln: loss_name_t) -> LossType {
+impl From<loss_name_t> for LossName {
+    fn from(ln: loss_name_t) -> LossName {
         match ln {
-            loss_name_t::LOSS_HS => LossType::HS,
-            loss_name_t::LOSS_NS => LossType::NS,
-            loss_name_t::LOSS_SOFTMAX => LossType::SOFTMAX,
+            loss_name_t::LOSS_HS => LossName::HS,
+            loss_name_t::LOSS_NS => LossName::NS,
+            loss_name_t::LOSS_SOFTMAX => LossName::SOFTMAX,
         }
     }
 }
@@ -171,23 +174,23 @@ impl Args {
         unsafe { cft_args_set_thread(self.inner, thread) }
     }
 
-    pub fn model(&self) -> ModelType {
+    pub fn model(&self) -> ModelName {
         let model_name = unsafe { cft_args_get_model(self.inner) };
         model_name.into()
     }
 
-    pub fn set_model(&mut self, model: ModelType) {
+    pub fn set_model(&mut self, model: ModelName) {
         unsafe {
             cft_args_set_model(self.inner, model.into());
         }
     }
 
-    pub fn loss(&self) -> LossType {
+    pub fn loss(&self) -> LossName {
         let loss_name = unsafe { cft_args_get_loss(self.inner) };
         loss_name.into()
     }
 
-    pub fn set_loss(&mut self, loss: LossType) {
+    pub fn set_loss(&mut self, loss: LossName) {
         unsafe {
             cft_args_set_loss(self.inner, loss.into());
         }
@@ -373,7 +376,7 @@ unsafe impl Sync for FastText {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, FastText, ModelType, LossType};
+    use super::{Args, FastText, ModelName, LossName};
 
     #[test]
     fn test_args_new_default() {
@@ -397,19 +400,19 @@ mod tests {
     #[test]
     fn test_args_model() {
         let mut args = Args::new();
-        assert_eq!(ModelType::SG, args.model());
+        assert_eq!(ModelName::SG, args.model());
 
-        args.set_model(ModelType::CBOW);
-        assert_eq!(ModelType::CBOW, args.model());
+        args.set_model(ModelName::CBOW);
+        assert_eq!(ModelName::CBOW, args.model());
     }
 
     #[test]
     fn test_args_loss() {
         let mut args = Args::new();
-        assert_eq!(LossType::NS, args.loss());
+        assert_eq!(LossName::NS, args.loss());
 
-        args.set_loss(LossType::SOFTMAX);
-        assert_eq!(LossType::SOFTMAX, args.loss());
+        args.set_loss(LossName::SOFTMAX);
+        assert_eq!(LossName::SOFTMAX, args.loss());
     }
 
     #[test]
