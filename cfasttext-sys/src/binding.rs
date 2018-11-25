@@ -72,6 +72,30 @@ extern "C" {
     pub fn cft_args_set_model(handle: *mut fasttext_args_t, model: model_name_t);
     pub fn cft_args_get_loss(handle: *mut fasttext_args_t) -> loss_name_t;
     pub fn cft_args_set_loss(handle: *mut fasttext_args_t, loss: loss_name_t);
+    pub fn cft_args_get_min_count(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_min_count(handle: *mut fasttext_args_t, min_count: ::std::os::raw::c_int);
+    pub fn cft_args_get_min_count_label(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_min_count_label(
+        handle: *mut fasttext_args_t,
+        min_count: ::std::os::raw::c_int,
+    );
+    pub fn cft_args_get_neg(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_neg(handle: *mut fasttext_args_t, neg: ::std::os::raw::c_int);
+    pub fn cft_args_get_word_ngrams(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_word_ngrams(handle: *mut fasttext_args_t, ngrams: ::std::os::raw::c_int);
+    pub fn cft_args_get_bucket(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_bucket(handle: *mut fasttext_args_t, bucket: ::std::os::raw::c_int);
+    pub fn cft_args_get_minn(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_minn(handle: *mut fasttext_args_t, minn: ::std::os::raw::c_int);
+    pub fn cft_args_get_maxn(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_maxn(handle: *mut fasttext_args_t, maxn: ::std::os::raw::c_int);
+    pub fn cft_args_get_t(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_t(handle: *mut fasttext_args_t, t: ::std::os::raw::c_int);
+    pub fn cft_args_get_verbose(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_verbose(handle: *mut fasttext_args_t, verbose: ::std::os::raw::c_int);
+    pub fn cft_args_get_label(handle: *mut fasttext_args_t) -> *const ::std::os::raw::c_char;
+    pub fn cft_args_set_label(handle: *mut fasttext_args_t, label: *const ::std::os::raw::c_char);
+
     pub fn cft_fasttext_new() -> *mut fasttext_t;
     pub fn cft_fasttext_free(handle: *mut fasttext_t);
     pub fn cft_fasttext_load_model(

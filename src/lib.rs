@@ -195,6 +195,92 @@ impl Args {
             cft_args_set_loss(self.inner, loss.into());
         }
     }
+
+    pub fn min_count(&self) -> i32 {
+        unsafe { cft_args_get_min_count(self.inner) }
+    }
+
+    pub fn set_min_count(&mut self, min_count: i32) {
+        unsafe { cft_args_set_min_count(self.inner, min_count) }
+    }
+
+    pub fn min_count_label(&self) -> i32 {
+        unsafe { cft_args_get_min_count_label(self.inner) }
+    }
+
+    pub fn set_min_count_label(&mut self, min_count: i32) {
+        unsafe { cft_args_set_min_count_label(self.inner, min_count) }
+    }
+
+    pub fn neg(&self) -> i32 {
+        unsafe { cft_args_get_neg(self.inner) }
+    }
+
+    pub fn set_neg(&mut self, neg: i32) {
+        unsafe { cft_args_set_neg(self.inner, neg) }
+    }
+
+    pub fn word_ngrams(&self) -> i32 {
+        unsafe { cft_args_get_word_ngrams(self.inner) }
+    }
+
+    pub fn set_word_ngrams(&mut self, ngrams: i32) {
+        unsafe { cft_args_set_word_ngrams(self.inner, ngrams) }
+    }
+
+    pub fn bucket(&self) -> i32 {
+        unsafe { cft_args_get_bucket(self.inner) }
+    }
+
+    pub fn set_bucket(&mut self, bucket: i32) {
+        unsafe { cft_args_set_bucket(self.inner, bucket) }
+    }
+
+    pub fn minn(&self) -> i32 {
+        unsafe { cft_args_get_minn(self.inner) }
+    }
+
+    pub fn set_minn(&mut self, minn: i32) {
+        unsafe { cft_args_set_minn(self.inner, minn) }
+    }
+
+    pub fn maxn(&self) -> i32 {
+        unsafe { cft_args_get_maxn(self.inner) }
+    }
+
+    pub fn set_maxn(&mut self, maxn: i32) {
+        unsafe { cft_args_set_maxn(self.inner, maxn) }
+    }
+
+    pub fn t(&self) -> i32 {
+        unsafe { cft_args_get_t(self.inner) }
+    }
+
+    pub fn set_t(&mut self, t: i32) {
+        unsafe { cft_args_set_t(self.inner, t) }
+    }
+
+    pub fn verbose(&self) -> i32 {
+        unsafe { cft_args_get_verbose(self.inner) }
+    }
+
+    pub fn set_verbose(&mut self, verbose: i32) {
+        unsafe { cft_args_set_verbose(self.inner, verbose) }
+    }
+
+    pub fn label(&self) -> Cow<str> {
+        unsafe {
+            let ret = cft_args_get_label(self.inner);
+            CStr::from_ptr(ret).to_string_lossy()
+        }
+    }
+
+    pub fn set_label(&mut self, label: &str) {
+        let c_label = CString::new(label).unwrap();
+        unsafe {
+            cft_args_set_label(self.inner, c_label.as_ptr());
+        }
+    }
 }
 
 impl Drop for Args {
@@ -413,6 +499,148 @@ mod tests {
 
         args.set_loss(LossName::SOFTMAX);
         assert_eq!(LossName::SOFTMAX, args.loss());
+    }
+
+    #[test]
+    fn test_args_lr() {
+        let mut args = Args::new();
+        assert_eq!(0.05, args.lr());
+
+        args.set_lr(0.1);
+        assert_eq!(0.1, args.lr());
+    }
+
+    #[test]
+    fn test_args_lr_update_rate() {
+        let mut args = Args::new();
+        assert_eq!(100, args.lr_update_rate());
+
+        args.set_lr_update_rate(50);
+        assert_eq!(50, args.lr_update_rate());
+    }
+
+    #[test]
+    fn test_args_dim() {
+        let mut args = Args::new();
+        assert_eq!(100, args.dim());
+
+        args.set_dim(50);
+        assert_eq!(50, args.dim());
+    }
+
+    #[test]
+    fn test_args_ws() {
+        let mut args = Args::new();
+        assert_eq!(5, args.ws());
+
+        args.set_ws(10);
+        assert_eq!(10, args.ws());
+    }
+
+    #[test]
+    fn test_args_epoch() {
+        let mut args = Args::new();
+        assert_eq!(5, args.epoch());
+
+        args.set_epoch(50);
+        assert_eq!(50, args.epoch());
+    }
+
+    #[test]
+    fn test_args_thread() {
+        let mut args = Args::new();
+        args.set_thread(10);
+        assert_eq!(10, args.thread());
+    }
+
+    #[test]
+    fn test_args_min_count() {
+        let mut args = Args::new();
+        assert_eq!(5, args.min_count());
+
+        args.set_min_count(10);
+        assert_eq!(10, args.min_count());
+    }
+
+    #[test]
+    fn test_args_min_count_label() {
+        let mut args = Args::new();
+        assert_eq!(0, args.min_count_label());
+
+        args.set_min_count_label(10);
+        assert_eq!(10, args.min_count_label());
+    }
+
+    #[test]
+    fn test_args_neg() {
+        let mut args = Args::new();
+        assert_eq!(5, args.neg());
+
+        args.set_neg(10);
+        assert_eq!(10, args.neg());
+    }
+
+    #[test]
+    fn test_args_word_ngrams() {
+        let mut args = Args::new();
+        assert_eq!(1, args.word_ngrams());
+
+        args.set_word_ngrams(3);
+        assert_eq!(3, args.word_ngrams());
+    }
+
+    #[test]
+    fn test_args_bucket() {
+        let mut args = Args::new();
+        assert_eq!(2000000, args.bucket());
+
+        args.set_bucket(1000000);
+        assert_eq!(1000000, args.bucket());
+    }
+
+    #[test]
+    fn test_args_minn() {
+        let mut args = Args::new();
+        assert_eq!(3, args.minn());
+
+        args.set_minn(10);
+        assert_eq!(10, args.minn());
+    }
+
+    #[test]
+    fn test_args_maxn() {
+        let mut args = Args::new();
+        assert_eq!(6, args.maxn());
+
+        args.set_maxn(10);
+        assert_eq!(10, args.maxn());
+    }
+
+    #[test]
+    fn test_args_t() {
+        let mut args = Args::new();
+        assert_eq!(0, args.t());
+
+        args.set_t(10);
+        assert_eq!(10, args.t());
+    }
+
+    #[test]
+    fn test_args_verbose() {
+        let mut args = Args::new();
+        assert_eq!(2, args.verbose());
+
+        args.set_verbose(1);
+        assert_eq!(1, args.verbose());
+    }
+
+    #[test]
+    fn test_args_label() {
+        let mut args = Args::new();
+        assert_eq!("__label__", args.label());
+
+        args.set_label("__my_label__");
+        assert_eq!("__my_label__", args.label());
     }
 
     #[test]
