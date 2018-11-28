@@ -13,7 +13,7 @@ Add it to your ``Cargo.toml``:
 
 ```toml
 [dependencies]
-fasttext = "0.2"
+fasttext = "0.3"
 ```
 
 Add ``extern crate fasttext`` to your crate root and your're good to go!
