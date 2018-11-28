@@ -39,6 +39,7 @@ pub enum LossName {
     HS,
     NS,
     SOFTMAX,
+    OVA,
 }
 
 impl From<ModelName> for model_name_t {
@@ -67,6 +68,7 @@ impl From<LossName> for loss_name_t {
             LossName::HS => loss_name_t::LOSS_HS,
             LossName::NS => loss_name_t::LOSS_NS,
             LossName::SOFTMAX => loss_name_t::LOSS_SOFTMAX,
+            LossName::OVA => loss_name_t::LOSS_OVA,
         }
     }
 }
@@ -77,6 +79,7 @@ impl From<loss_name_t> for LossName {
             loss_name_t::LOSS_HS => LossName::HS,
             loss_name_t::LOSS_NS => LossName::NS,
             loss_name_t::LOSS_SOFTMAX => LossName::SOFTMAX,
+            loss_name_t::LOSS_OVA => LossName::OVA,
         }
     }
 }

@@ -41,6 +41,7 @@ pub enum loss_name_t {
     LOSS_HS = 1,
     LOSS_NS = 2,
     LOSS_SOFTMAX = 3,
+    LOSS_OVA = 4,
 }
 
 extern "C" {
