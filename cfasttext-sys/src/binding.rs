@@ -96,6 +96,23 @@ extern "C" {
     pub fn cft_args_set_verbose(handle: *mut fasttext_args_t, verbose: ::std::os::raw::c_int);
     pub fn cft_args_get_label(handle: *mut fasttext_args_t) -> *const ::std::os::raw::c_char;
     pub fn cft_args_set_label(handle: *mut fasttext_args_t, label: *const ::std::os::raw::c_char);
+    pub fn cft_args_get_save_output(handle: *mut fasttext_args_t) -> bool;
+    pub fn cft_args_set_save_output(handle: *mut fasttext_args_t, save_output: bool);
+    pub fn cft_args_get_qout(handle: *mut fasttext_args_t) -> bool;
+    pub fn cft_args_set_qout(handle: *mut fasttext_args_t, qout: bool);
+    pub fn cft_args_get_retrain(handle: *mut fasttext_args_t) -> bool;
+    pub fn cft_args_set_retrain(handle: *mut fasttext_args_t, retrain: bool);
+    pub fn cft_args_get_qnorm(handle: *mut fasttext_args_t) -> bool;
+    pub fn cft_args_set_qnorm(handle: *mut fasttext_args_t, qnorm: bool);
+    pub fn cft_args_get_cutoff(handle: *mut fasttext_args_t) -> usize;
+    pub fn cft_args_set_cutoff(handle: *mut fasttext_args_t, cutoff: usize);
+    pub fn cft_args_get_dsub(handle: *mut fasttext_args_t) -> usize;
+    pub fn cft_args_set_dsub(handle: *mut fasttext_args_t, dsub: usize);
+    pub fn cft_args_print_help(handle: *mut fasttext_args_t);
+    pub fn cft_args_print_basic_help(handle: *mut fasttext_args_t);
+    pub fn cft_args_print_dictionary_help(handle: *mut fasttext_args_t);
+    pub fn cft_args_print_training_help(handle: *mut fasttext_args_t);
+    pub fn cft_args_print_quantization_help(handle: *mut fasttext_args_t);
 
     pub fn cft_fasttext_new() -> *mut fasttext_t;
     pub fn cft_fasttext_free(handle: *mut fasttext_t);

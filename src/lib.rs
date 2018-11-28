@@ -284,6 +284,74 @@ impl Args {
             cft_args_set_label(self.inner, c_label.as_ptr());
         }
     }
+
+    pub fn save_output(&self) -> bool {
+        unsafe { cft_args_get_save_output(self.inner) }
+    }
+
+    pub fn set_save_output(&mut self, save_output: bool) {
+        unsafe { cft_args_set_save_output(self.inner, save_output) }
+    }
+
+    pub fn qout(&self) -> bool {
+        unsafe { cft_args_get_qout(self.inner) }
+    }
+
+    pub fn set_qout(&mut self, qout: bool) {
+        unsafe { cft_args_set_qout(self.inner, qout) }
+    }
+
+    pub fn retrain(&self) -> bool {
+        unsafe { cft_args_get_retrain(self.inner) }
+    }
+
+    pub fn set_retrain(&mut self, retrain: bool) {
+        unsafe { cft_args_set_retrain(self.inner, retrain) }
+    }
+
+    pub fn qnorm(&self) -> bool {
+        unsafe { cft_args_get_qnorm(self.inner) }
+    }
+
+    pub fn set_qnorm(&mut self, qnorm: bool) {
+        unsafe { cft_args_set_qnorm(self.inner, qnorm) }
+    }
+
+    pub fn cutoff(&self) -> usize {
+        unsafe { cft_args_get_cutoff(self.inner) }
+    }
+
+    pub fn set_cutoff(&mut self, cutoff: usize) {
+        unsafe { cft_args_set_cutoff(self.inner, cutoff) }
+    }
+
+    pub fn dsub(&self) -> usize {
+        unsafe { cft_args_get_dsub(self.inner) }
+    }
+
+    pub fn set_dsub(&mut self, dsub: usize) {
+        unsafe { cft_args_set_dsub(self.inner, dsub) }
+    }
+
+    pub fn print_help(&self) {
+        unsafe { cft_args_print_help(self.inner) }
+    }
+
+    pub fn print_basic_help(&self) {
+        unsafe { cft_args_print_basic_help(self.inner) }
+    }
+
+    pub fn print_dictionary_help(&self) {
+        unsafe { cft_args_print_dictionary_help(self.inner) }
+    }
+
+    pub fn print_training_help(&self) {
+        unsafe { cft_args_print_training_help(self.inner) }
+    }
+
+    pub fn print_quantization_help(&self) {
+        unsafe { cft_args_print_quantization_help(self.inner) }
+    }
 }
 
 impl Drop for Args {
@@ -647,6 +715,60 @@ mod tests {
     }
 
     #[test]
+    fn test_args_save_output() {
+        let mut args = Args::new();
+        assert_eq!(false, args.save_output());
+
+        args.set_save_output(true);
+        assert_eq!(true, args.save_output());
+    }
+
+    #[test]
+    fn test_args_qout() {
+        let mut args = Args::new();
+        assert_eq!(false, args.qout());
+
+        args.set_qout(true);
+        assert_eq!(true, args.qout());
+    }
+
+    #[test]
+    fn test_args_retrain() {
+        let mut args = Args::new();
+        assert_eq!(false, args.retrain());
+
+        args.set_retrain(true);
+        assert_eq!(true, args.retrain());
+    }
+
+    #[test]
+    fn test_args_qnorm() {
+        let mut args = Args::new();
+        assert_eq!(false, args.qnorm());
+
+        args.set_qnorm(true);
+        assert_eq!(true, args.qnorm());
+    }
+
+    #[test]
+    fn test_args_cutoff() {
+        let mut args = Args::new();
+        assert_eq!(0, args.cutoff());
+
+        args.set_cutoff(5);
+        assert_eq!(5, args.cutoff());
+    }
+
+    #[test]
+    fn test_args_dsub() {
+        let mut args = Args::new();
+        assert_eq!(2, args.dsub());
+
+        args.set_dsub(5);
+        assert_eq!(5, args.dsub());
+    }
+
+    #[test]
     fn test_fasttext_new_default() {
         let _fasttext = FastText::default();
     }
@@ -655,7 +777,7 @@ mod tests {
     fn test_fasttext_get_word_vector() {
         let mut fasttext = FastText::default();
         fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
-        
+
         // The model contains the word "banana", right?
         let v = fasttext.get_word_vector("banana");
         assert!(fasttext.get_dimension() == v.len() as isize);
