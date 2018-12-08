@@ -28,6 +28,12 @@ pub struct fasttext_tokens_t {
     pub tokens: *mut *mut ::std::os::raw::c_char,
     pub length: usize,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fasttext_words_t {
+    pub words: *mut i32,
+    pub length: usize,
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum model_name_t {
@@ -147,6 +153,12 @@ extern "C" {
     pub fn cft_fasttext_predict(
         handle: *mut fasttext_t,
         text: *const ::std::os::raw::c_char,
+        k: i32,
+        threshold: f32,
+    ) -> *mut fasttext_predictions_t;
+    pub fn cft_fasttext_predict_on_words(
+        handle: *mut fasttext_t,
+        words: *const fasttext_words_t,
         k: i32,
         threshold: f32,
     ) -> *mut fasttext_predictions_t;
