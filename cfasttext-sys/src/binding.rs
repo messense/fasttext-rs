@@ -31,7 +31,7 @@ pub struct fasttext_tokens_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct fasttext_words_t {
-    pub words: *mut i32,
+    pub words: *const i32,
     pub length: usize,
 }
 #[repr(u32)]

@@ -482,10 +482,9 @@ impl FastText {
         }
     }
 
-    pub fn predict_on_words(&self, words: &Vec<i32>, k: i32, threshold: f32) -> Vec<Prediction> {
+    pub fn predict_on_words(&self, words: &[i32], k: i32, threshold: f32) -> Vec<Prediction> {
         unsafe {
-            let mut ws: Vec<i32> = words.clone();
-            let words = fasttext_words_t {words: ws.as_mut_ptr(), length: ws.len()};
+            let words = fasttext_words_t {words: words.as_ptr(), length: words.len()};
             let ret = cft_fasttext_predict_on_words(self.inner, &words, k, threshold);
             let c_preds = slice::from_raw_parts((*ret).predictions, (*ret).length);
             let preds = FastText::convert_predictions(c_preds);
