@@ -31,3 +31,17 @@ fn test_fasttext_predict() {
     assert_eq!("__label__baking", &preds[0].label);
     assert_eq!("__label__bread", &preds[1].label);
 }
+
+#[test]
+fn test_fasttext_predict_on_words() {
+    let mut fasttext = FastText::new();
+    fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
+    let words = vec!["Which", "baking", "dish", "is", "best", "to", "bake", "a", "banana", "bread", "?"];
+    let words_ids: Vec<i32> = words.iter()
+        .map(|&x| { fasttext.get_word_id(x) as i32 })
+        .collect();
+    let preds = fasttext.predict_on_words(&words_ids, 2, 0.0);
+    assert_eq!(2, preds.len());
+    assert_eq!("__label__baking", &preds[0].label);
+    assert_eq!("__label__bread", &preds[1].label);
+}
