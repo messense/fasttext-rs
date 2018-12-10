@@ -26,7 +26,9 @@ fn test_fasttext_is_quant() {
 fn test_fasttext_predict() {
     let mut fasttext = FastText::new();
     fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
-    let preds = fasttext.predict("Which baking dish is best to bake a banana bread ?", 2, 0.0);
+    let preds = fasttext
+        .predict("Which baking dish is best to bake a banana bread ?", 2, 0.0)
+        .unwrap();
     assert_eq!(2, preds.len());
     assert_eq!("__label__baking", &preds[0].label);
     assert_eq!("__label__bread", &preds[1].label);
@@ -40,7 +42,9 @@ fn test_fasttext_predict_on_words() {
     let words_ids: Vec<i32> = words.iter()
         .map(|&x| { fasttext.get_word_id(x) as i32 })
         .collect();
-    let preds = fasttext.predict_on_words(&words_ids, 2, 0.0);
+    let preds = fasttext
+        .predict_on_words(&words_ids, 2, 0.0)
+        .unwrap();
     assert_eq!(2, preds.len());
     assert_eq!("__label__baking", &preds[0].label);
     assert_eq!("__label__bread", &preds[1].label);

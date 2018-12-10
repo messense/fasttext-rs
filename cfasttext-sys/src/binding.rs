@@ -155,12 +155,14 @@ extern "C" {
         text: *const ::std::os::raw::c_char,
         k: i32,
         threshold: f32,
+        errptr: *mut *mut ::std::os::raw::c_char,
     ) -> *mut fasttext_predictions_t;
     pub fn cft_fasttext_predict_on_words(
         handle: *mut fasttext_t,
         words: *const fasttext_words_t,
         k: i32,
         threshold: f32,
+        errptr: *mut *mut ::std::os::raw::c_char,
     ) -> *mut fasttext_predictions_t;
     pub fn cft_fasttext_predictions_free(predictions: *mut fasttext_predictions_t);
     pub fn cft_fasttext_quantize(
