@@ -471,24 +471,9 @@ impl FastText {
         }
     }
 
-    pub fn predict(&self, text: &str, k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
-        let c_text = CString::new(text).unwrap();
+    pub fn predict<T: FastTextPredict>(&self, text: T, k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
+        let ret = text.predict(self.inner, k, threshold)?;
         unsafe {
-            let ret = ffi_try!(cft_fasttext_predict(self.inner, c_text.as_ptr(), k, threshold));
-            let c_preds = slice::from_raw_parts((*ret).predictions, (*ret).length);
-            let preds = Self::convert_predictions(c_preds);
-            cft_fasttext_predictions_free(ret);
-            Ok(preds)
-        }
-    }
-
-    pub fn predict_on_words(&self, words: &[i32], k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
-        unsafe {
-            let words = fasttext_words_t {
-                words: words.as_ptr(),
-                length: words.len()
-            };
-            let ret = ffi_try!(cft_fasttext_predict_on_words(self.inner, &words, k, threshold));
             let c_preds = slice::from_raw_parts((*ret).predictions, (*ret).length);
             let preds = Self::convert_predictions(c_preds);
             cft_fasttext_predictions_free(ret);
@@ -551,6 +536,53 @@ impl Drop for FastText {
 
 unsafe impl Send for FastText {}
 unsafe impl Sync for FastText {}
+
+pub trait FastTextPredict {
+    fn predict(&self, handle: *mut fasttext_t, k: i32, threshold: f32) -> Result<*mut fasttext_predictions_t, String>;
+}
+
+impl FastTextPredict for &str {
+    fn predict(&self, handle: *mut fasttext_t, k: i32, threshold: f32) -> Result<*mut fasttext_predictions_t, String> {
+        let c_text = CString::new(*self).unwrap();
+        unsafe {
+            Ok(ffi_try!(cft_fasttext_predict(handle, c_text.as_ptr(), k, threshold)))
+        }
+    }
+}
+
+impl FastTextPredict for String {
+    fn predict(&self, handle: *mut fasttext_t, k: i32, threshold: f32) -> Result<*mut fasttext_predictions_t, String> {
+        let s: &str = self;
+        s.predict(handle, k, threshold)
+    }
+}
+
+impl FastTextPredict for Vec<i32> {
+    fn predict(&self, handle: *mut fasttext_t, k: i32, threshold: f32) -> Result<*mut fasttext_predictions_t, String> {
+        let v = &self[..];
+        v.predict(handle, k, threshold)
+    }
+}
+
+impl FastTextPredict for &Vec<i32> {
+    fn predict(&self, handle: *mut fasttext_t, k: i32, threshold: f32) -> Result<*mut fasttext_predictions_t, String> {
+        let v = &self[..];
+        v.predict(handle, k, threshold)
+    }
+}
+
+impl FastTextPredict for &[i32] {
+    fn predict(&self, handle: *mut fasttext_t, k: i32, threshold: f32) -> Result<*mut fasttext_predictions_t, String> {
+        unsafe {
+            let words = fasttext_words_t {
+                words: self.as_ptr(),
+                length: self.len()
+            };
+            let ret = ffi_try!(cft_fasttext_predict_on_words(handle, &words, k, threshold));
+            Ok(ret)
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

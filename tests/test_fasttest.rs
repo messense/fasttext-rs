@@ -43,7 +43,7 @@ fn test_fasttext_predict_on_words() {
         .map(|&x| { fasttext.get_word_id(x) as i32 })
         .collect();
     let preds = fasttext
-        .predict_on_words(&words_ids, 2, 0.0)
+        .predict(&words_ids, 2, 0.0)
         .unwrap();
     assert_eq!(2, preds.len());
     assert_eq!("__label__baking", &preds[0].label);
