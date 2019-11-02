@@ -140,11 +140,6 @@ extern "C" {
         word: *const ::std::os::raw::c_char,
     ) -> i32;
     pub fn cft_fasttext_is_quant(handle: *mut fasttext_t) -> bool;
-    pub fn cft_fasttext_load_vectors(
-        handle: *mut fasttext_t,
-        filename: *const ::std::os::raw::c_char,
-        errptr: *mut *mut ::std::os::raw::c_char
-    );
     pub fn cft_fasttext_train(
         handle: *mut fasttext_t,
         args: *mut fasttext_args_t,
@@ -172,6 +167,7 @@ extern "C" {
     );
     pub fn cft_fasttext_get_word_vector(handle: *mut fasttext_t, word: *const ::std::os::raw::c_char, buf: *mut ::std::os::raw::c_float);
     pub fn cft_fasttext_get_sentence_vector(handle: *mut fasttext_t, sentence: *const ::std::os::raw::c_char, buf: *mut ::std::os::raw::c_float);
+    pub fn cft_fasttext_abort(handle: *mut fasttext_t);
     pub fn cft_fasttext_tokenize(handle: *mut fasttext_t, text: *const ::std::os::raw::c_char) -> *mut fasttext_tokens_t;
     pub fn cft_fasttext_tokens_free(tokens: *mut fasttext_tokens_t);
 }

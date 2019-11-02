@@ -443,14 +443,6 @@ impl FastText {
         }
     }
 
-    pub fn load_vectors(&mut self, filename: &str) -> Result<(), String> {
-        let c_path = CString::new(filename).unwrap();
-        unsafe {
-            ffi_try!(cft_fasttext_load_vectors(self.inner, c_path.as_ptr()));
-        }
-        Ok(())
-    }
-
     pub fn train(&mut self, args: &Args) -> Result<(), String> {
         unsafe {
             ffi_try!(cft_fasttext_train(self.inner, args.inner));
@@ -536,6 +528,12 @@ impl FastText {
             v.set_len(dim);
         }
         v
+    }
+
+    pub fn abort(&self) {
+        unsafe {
+            cft_fasttext_abort(self.inner);
+        }
     }
 }
 
