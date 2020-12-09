@@ -4,6 +4,7 @@ version = "0.4.1"
 authors = ["Messense Lv <messense@icloud.com>"]
 categories = ["api-bindings", "external-ffi-bindings"]
 description = "fastText ffi binding"
+edition = "2018"
 license = "MIT"
 keywords = ["fastText", "text", "classify"]
 build = "build.rs"

@@ -1,5 +1,3 @@
-extern crate fasttext;
-
 use fasttext::FastText;
 
 #[test]

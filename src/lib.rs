@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate cfasttext_sys;
-
 use std::borrow::Cow;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};

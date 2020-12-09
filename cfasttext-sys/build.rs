@@ -1,5 +1,3 @@
-extern crate cmake;
-
 use std::{fs, str};
 
 fn fail_on_empty_directory(name: &str) {
