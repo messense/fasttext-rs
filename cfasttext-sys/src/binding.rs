@@ -125,11 +125,23 @@ extern "C" {
     pub fn cft_fasttext_load_model(
         handle: *mut fasttext_t,
         filename: *const ::std::os::raw::c_char,
-        errptr: *mut *mut ::std::os::raw::c_char
+        errptr: *mut *mut ::std::os::raw::c_char,
     );
-    pub fn cft_fasttext_save_model(handle: *mut fasttext_t, filename: *const ::std::os::raw::c_char, errptr: *mut *mut ::std::os::raw::c_char);
-    pub fn cft_fasttext_save_output(handle: *mut fasttext_t, filename: *const ::std::os::raw::c_char, errptr: *mut *mut ::std::os::raw::c_char);
-    pub fn cft_fasttext_save_vectors(handle: *mut fasttext_t, filename: *const ::std::os::raw::c_char, errptr: *mut *mut ::std::os::raw::c_char);
+    pub fn cft_fasttext_save_model(
+        handle: *mut fasttext_t,
+        filename: *const ::std::os::raw::c_char,
+        errptr: *mut *mut ::std::os::raw::c_char,
+    );
+    pub fn cft_fasttext_save_output(
+        handle: *mut fasttext_t,
+        filename: *const ::std::os::raw::c_char,
+        errptr: *mut *mut ::std::os::raw::c_char,
+    );
+    pub fn cft_fasttext_save_vectors(
+        handle: *mut fasttext_t,
+        filename: *const ::std::os::raw::c_char,
+        errptr: *mut *mut ::std::os::raw::c_char,
+    );
     pub fn cft_fasttext_get_dimension(handle: *mut fasttext_t) -> ::std::os::raw::c_int;
     pub fn cft_fasttext_get_word_id(
         handle: *mut fasttext_t,
@@ -143,7 +155,7 @@ extern "C" {
     pub fn cft_fasttext_train(
         handle: *mut fasttext_t,
         args: *mut fasttext_args_t,
-        errptr: *mut *mut ::std::os::raw::c_char
+        errptr: *mut *mut ::std::os::raw::c_char,
     );
     pub fn cft_fasttext_predict(
         handle: *mut fasttext_t,
@@ -163,11 +175,22 @@ extern "C" {
     pub fn cft_fasttext_quantize(
         handle: *mut fasttext_t,
         args: *mut fasttext_args_t,
-        errptr: *mut *mut ::std::os::raw::c_char
+        errptr: *mut *mut ::std::os::raw::c_char,
     );
-    pub fn cft_fasttext_get_word_vector(handle: *mut fasttext_t, word: *const ::std::os::raw::c_char, buf: *mut ::std::os::raw::c_float);
-    pub fn cft_fasttext_get_sentence_vector(handle: *mut fasttext_t, sentence: *const ::std::os::raw::c_char, buf: *mut ::std::os::raw::c_float);
+    pub fn cft_fasttext_get_word_vector(
+        handle: *mut fasttext_t,
+        word: *const ::std::os::raw::c_char,
+        buf: *mut ::std::os::raw::c_float,
+    );
+    pub fn cft_fasttext_get_sentence_vector(
+        handle: *mut fasttext_t,
+        sentence: *const ::std::os::raw::c_char,
+        buf: *mut ::std::os::raw::c_float,
+    );
     pub fn cft_fasttext_abort(handle: *mut fasttext_t);
-    pub fn cft_fasttext_tokenize(handle: *mut fasttext_t, text: *const ::std::os::raw::c_char) -> *mut fasttext_tokens_t;
+    pub fn cft_fasttext_tokenize(
+        handle: *mut fasttext_t,
+        text: *const ::std::os::raw::c_char,
+    ) -> *mut fasttext_tokens_t;
     pub fn cft_fasttext_tokens_free(tokens: *mut fasttext_tokens_t);
 }

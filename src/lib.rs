@@ -1,21 +1,21 @@
 #[macro_use]
 extern crate cfasttext_sys;
 
-use std::ffi::{CString, CStr};
+use std::borrow::Cow;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::slice;
-use std::borrow::Cow;
 
 use cfasttext_sys::*;
 
 #[derive(Debug, Clone)]
 pub struct Args {
-    inner: *mut fasttext_args_t
+    inner: *mut fasttext_args_t,
 }
 
 #[derive(Debug, Clone)]
 pub struct FastText {
-    inner: *mut fasttext_t
+    inner: *mut fasttext_t,
 }
 
 #[derive(Debug, Clone)]
@@ -88,16 +88,23 @@ impl Args {
     pub fn new() -> Self {
         unsafe {
             Self {
-                inner: cft_args_new()
+                inner: cft_args_new(),
             }
         }
     }
     pub fn parse<T: AsRef<str>>(self, args: &[T]) {
-        let argv: Vec<CString> = args.iter().map(|s| CString::new(s.as_ref()).unwrap()).collect();
+        let argv: Vec<CString> = args
+            .iter()
+            .map(|s| CString::new(s.as_ref()).unwrap())
+            .collect();
         // FIXME: cft_fasttext_train should take *const *const c_char?
         let mut c_argv: Vec<*const c_char> = argv.iter().map(|s| s.as_ptr()).collect();
         unsafe {
-            cft_args_parse(self.inner, c_argv.len() as c_int, c_argv.as_mut_ptr() as *mut *mut _ as *mut *mut _);
+            cft_args_parse(
+                self.inner,
+                c_argv.len() as c_int,
+                c_argv.as_mut_ptr() as *mut *mut _ as *mut *mut _,
+            );
         }
     }
 
@@ -380,7 +387,7 @@ impl FastText {
     pub fn new() -> Self {
         unsafe {
             Self {
-                inner: cft_fasttext_new()
+                inner: cft_fasttext_new(),
             }
         }
     }
@@ -418,29 +425,21 @@ impl FastText {
     }
 
     pub fn get_dimension(&self) -> isize {
-        unsafe {
-            cft_fasttext_get_dimension(self.inner) as isize
-        }
+        unsafe { cft_fasttext_get_dimension(self.inner) as isize }
     }
 
     pub fn get_word_id(&self, word: &str) -> isize {
         let c_word = CString::new(word).unwrap();
-        unsafe {
-            cft_fasttext_get_word_id(self.inner, c_word.as_ptr()) as isize
-        }
+        unsafe { cft_fasttext_get_word_id(self.inner, c_word.as_ptr()) as isize }
     }
 
     pub fn get_subword_id(&self, word: &str) -> isize {
         let c_word = CString::new(word).unwrap();
-        unsafe {
-            cft_fasttext_get_subword_id(self.inner, c_word.as_ptr()) as isize
-        }
+        unsafe { cft_fasttext_get_subword_id(self.inner, c_word.as_ptr()) as isize }
     }
 
     pub fn is_quant(&self) -> bool {
-        unsafe {
-            cft_fasttext_is_quant(self.inner)
-        }
+        unsafe { cft_fasttext_is_quant(self.inner) }
     }
 
     pub fn train(&mut self, args: &Args) -> Result<(), String> {
@@ -452,13 +451,16 @@ impl FastText {
 
     fn convert_predictions(c_preds: &[fasttext_prediction_t]) -> Vec<Prediction> {
         unsafe {
-            let preds: Vec<Prediction> = c_preds.iter().map(|p| {
-                let label = CStr::from_ptr((*p).label).to_string_lossy().to_string();
-                Prediction {
-                    prob: (*p).prob,
-                    label: label
-                }
-            }).collect();
+            let preds: Vec<Prediction> = c_preds
+                .iter()
+                .map(|p| {
+                    let label = CStr::from_ptr((*p).label).to_string_lossy().to_string();
+                    Prediction {
+                        prob: (*p).prob,
+                        label: label,
+                    }
+                })
+                .collect();
             preds
         }
     }
@@ -466,7 +468,12 @@ impl FastText {
     pub fn predict(&self, text: &str, k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
         let c_text = CString::new(text).unwrap();
         unsafe {
-            let ret = ffi_try!(cft_fasttext_predict(self.inner, c_text.as_ptr(), k, threshold));
+            let ret = ffi_try!(cft_fasttext_predict(
+                self.inner,
+                c_text.as_ptr(),
+                k,
+                threshold
+            ));
             let c_preds = slice::from_raw_parts((*ret).predictions, (*ret).length);
             let preds = Self::convert_predictions(c_preds);
             cft_fasttext_predictions_free(ret);
@@ -474,13 +481,20 @@ impl FastText {
         }
     }
 
-    pub fn predict_on_words(&self, words: &[i32], k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
+    pub fn predict_on_words(
+        &self,
+        words: &[i32],
+        k: i32,
+        threshold: f32,
+    ) -> Result<Vec<Prediction>, String> {
         unsafe {
             let words = fasttext_words_t {
                 words: words.as_ptr(),
-                length: words.len()
+                length: words.len(),
             };
-            let ret = ffi_try!(cft_fasttext_predict_on_words(self.inner, &words, k, threshold));
+            let ret = ffi_try!(cft_fasttext_predict_on_words(
+                self.inner, &words, k, threshold
+            ));
             let c_preds = slice::from_raw_parts((*ret).predictions, (*ret).length);
             let preds = Self::convert_predictions(c_preds);
             cft_fasttext_predictions_free(ret);
@@ -511,9 +525,10 @@ impl FastText {
         unsafe {
             let ret = cft_fasttext_tokenize(self.inner, c_text.as_ptr());
             let c_tokens = slice::from_raw_parts((*ret).tokens, (*ret).length);
-            let tokens: Vec<String> = c_tokens.iter().map(|p| {
-                CStr::from_ptr(*p).to_string_lossy().to_string()
-            }).collect();
+            let tokens: Vec<String> = c_tokens
+                .iter()
+                .map(|p| CStr::from_ptr(*p).to_string_lossy().to_string())
+                .collect();
             cft_fasttext_tokens_free(ret);
             tokens
         }
@@ -552,7 +567,7 @@ unsafe impl Sync for FastText {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, FastText, ModelName, LossName};
+    use super::{Args, FastText, LossName, ModelName};
 
     #[test]
     fn test_args_new_default() {
@@ -795,7 +810,9 @@ mod tests {
     #[test]
     fn test_fasttext_get_word_vector() {
         let mut fasttext = FastText::default();
-        fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
+        fasttext
+            .load_model("tests/fixtures/cooking.model.bin")
+            .unwrap();
 
         // The model contains the word "banana", right?
         let v = fasttext.get_word_vector("banana");
@@ -808,7 +825,9 @@ mod tests {
     #[test]
     fn test_fasttext_get_sentence_vector() {
         let mut fasttext = FastText::default();
-        fasttext.load_model("tests/fixtures/cooking.model.bin").unwrap();
+        fasttext
+            .load_model("tests/fixtures/cooking.model.bin")
+            .unwrap();
 
         // The model contains the word "banana", right?
         let v = fasttext.get_sentence_vector("banana");
