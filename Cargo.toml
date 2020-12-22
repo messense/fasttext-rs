@@ -12,6 +12,3 @@ repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
 cfasttext-sys = { path = "cfasttext-sys", version = "0.5.0" }
-
-[badges]
-travis-ci = { repository = "messense/fasttext-rs" }
