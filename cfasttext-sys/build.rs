@@ -1,4 +1,4 @@
-use std::{fs, str};
+use std::{env, fs, str};
 
 fn fail_on_empty_directory(name: &str) {
     if fs::read_dir(name).unwrap().count() == 0 {
@@ -15,12 +15,29 @@ fn build_cfasttext() {
     let dst = cmake::Config::new("cfasttext")
         .build_target("cfasttext_static")
         .build();
-    println!("cargo:rustc-link-search=native={}/build", dst.display());
+    if cfg!(target_os = "windows") {
+        let profile = match &*env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned()) {
+            "bench" | "release" => "Release",
+            _ => "Debug",
+        };
+        println!(
+            "cargo:rustc-link-search=native={}/build/{}",
+            dst.display(),
+            profile
+        );
+        println!(
+            "cargo:rustc-link-search=native={}/build/fasttext/{}",
+            dst.display(),
+            profile
+        );
+    } else {
+        println!("cargo:rustc-link-search=native={}/build", dst.display());
+        println!(
+            "cargo:rustc-link-search=native={}/build/fasttext",
+            dst.display()
+        );
+    }
     println!("cargo:rustc-link-lib=static=cfasttext_static");
-    println!(
-        "cargo:rustc-link-search=native={}/build/fasttext",
-        dst.display()
-    );
     println!("cargo:rustc-link-lib=static=fasttext");
 }
 
@@ -28,6 +45,8 @@ fn link_cpp() {
     // XXX: static link libc++?
     if cfg!(any(target_os = "macos", target_os = "freebsd")) {
         println!("cargo:rustc-link-lib=dylib=c++");
+    } else if cfg!(target_os = "windows") {
+        return;
     } else {
         println!("cargo:rustc-link-lib=dylib=stdc++");
         println!("cargo:rustc-link-lib=dylib=gcc");
