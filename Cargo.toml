@@ -1,6 +1,6 @@
 [package]
 name = "fasttext"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Messense Lv <messense@icloud.com>"]
 categories = ["api-bindings", "external-ffi-bindings"]
 description = "fastText Rust binding"
@@ -11,4 +11,4 @@ readme = "README.md"
 repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
-cfasttext-sys = { path = "cfasttext-sys", version = "0.5.0" }
+cfasttext-sys = { path = "cfasttext-sys", version = "0.5.2" }
