@@ -112,11 +112,12 @@ impl Args {
         }
     }
 
-    pub fn set_input(&mut self, input: &str) {
-        let c_input = CString::new(input).unwrap();
+    pub fn set_input(&mut self, input: &str) -> Result<(), String> {
+        let c_input = CString::new(input).map_err(|e| format!("{:?}", e))?;
         unsafe {
             cft_args_set_input(self.inner, c_input.as_ptr());
         }
+        Ok(())
     }
 
     pub fn output(&self) -> Cow<str> {
@@ -126,11 +127,12 @@ impl Args {
         }
     }
 
-    pub fn set_output(&mut self, input: &str) {
-        let c_input = CString::new(input).unwrap();
+    pub fn set_output(&mut self, input: &str) -> Result<(), String> {
+        let c_input = CString::new(input).map_err(|e| format!("{:?}", e))?;
         unsafe {
             cft_args_set_output(self.inner, c_input.as_ptr());
         }
+        Ok(())
     }
 
     pub fn lr(&self) -> f64 {
@@ -282,11 +284,12 @@ impl Args {
         }
     }
 
-    pub fn set_label(&mut self, label: &str) {
-        let c_label = CString::new(label).unwrap();
+    pub fn set_label(&mut self, label: &str) -> Result<(), String> {
+        let c_label = CString::new(label).map_err(|e| format!("{:?}", e))?;
         unsafe {
             cft_args_set_label(self.inner, c_label.as_ptr());
         }
+        Ok(())
     }
 
     pub fn save_output(&self) -> bool {
@@ -390,7 +393,7 @@ impl FastText {
     }
 
     pub fn load_model(&mut self, filename: &str) -> Result<(), String> {
-        let c_path = CString::new(filename).unwrap();
+        let c_path = CString::new(filename).map_err(|e| format!("{:?}", e))?;
         unsafe {
             ffi_try!(cft_fasttext_load_model(self.inner, c_path.as_ptr()));
         }
@@ -398,7 +401,7 @@ impl FastText {
     }
 
     pub fn save_model(&mut self, filename: &str) -> Result<(), String> {
-        let c_path = CString::new(filename).unwrap();
+        let c_path = CString::new(filename).map_err(|e| format!("{:?}", e))?;
         unsafe {
             ffi_try!(cft_fasttext_save_model(self.inner, c_path.as_ptr()));
         }
@@ -406,7 +409,7 @@ impl FastText {
     }
 
     pub fn save_output(&mut self, filename: &str) -> Result<(), String> {
-        let c_path = CString::new(filename).unwrap();
+        let c_path = CString::new(filename).map_err(|e| format!("{:?}", e))?;
         unsafe {
             ffi_try!(cft_fasttext_save_output(self.inner, c_path.as_ptr()));
         }
@@ -414,7 +417,7 @@ impl FastText {
     }
 
     pub fn save_vectors(&mut self, filename: &str) -> Result<(), String> {
-        let c_path = CString::new(filename).unwrap();
+        let c_path = CString::new(filename).map_err(|e| format!("{:?}", e))?;
         unsafe {
             ffi_try!(cft_fasttext_save_vectors(self.inner, c_path.as_ptr()));
         }
@@ -425,14 +428,14 @@ impl FastText {
         unsafe { cft_fasttext_get_dimension(self.inner) as isize }
     }
 
-    pub fn get_word_id(&self, word: &str) -> isize {
-        let c_word = CString::new(word).unwrap();
-        unsafe { cft_fasttext_get_word_id(self.inner, c_word.as_ptr()) as isize }
+    pub fn get_word_id(&self, word: &str) -> Result<isize, String> {
+        let c_word = CString::new(word).map_err(|e| format!("{:?}", e))?;
+        Ok(unsafe { cft_fasttext_get_word_id(self.inner, c_word.as_ptr()) as isize })
     }
 
-    pub fn get_subword_id(&self, word: &str) -> isize {
-        let c_word = CString::new(word).unwrap();
-        unsafe { cft_fasttext_get_subword_id(self.inner, c_word.as_ptr()) as isize }
+    pub fn get_subword_id(&self, word: &str) -> Result<isize, String> {
+        let c_word = CString::new(word).map_err(|e| format!("{:?}", e))?;
+        unsafe { Ok(cft_fasttext_get_subword_id(self.inner, c_word.as_ptr()) as isize) }
     }
 
     pub fn is_quant(&self) -> bool {
@@ -454,7 +457,7 @@ impl FastText {
                     let label = CStr::from_ptr((*p).label).to_string_lossy().to_string();
                     Prediction {
                         prob: (*p).prob,
-                        label: label,
+                        label,
                     }
                 })
                 .collect();
@@ -463,7 +466,7 @@ impl FastText {
     }
 
     pub fn predict(&self, text: &str, k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
-        let c_text = CString::new(text).unwrap();
+        let c_text = CString::new(text).map_err(|e| format!("{:?}", e))?;
         unsafe {
             let ret = ffi_try!(cft_fasttext_predict(
                 self.inner,
@@ -506,19 +509,19 @@ impl FastText {
         Ok(())
     }
 
-    pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
-        let c_text = CString::new(word).unwrap();
+    pub fn get_word_vector(&self, word: &str) -> Result<Vec<f32>, String> {
+        let c_text = CString::new(word).map_err(|e| format!("{:?}", e))?;
         let dim = self.get_dimension() as usize;
         let mut v = Vec::with_capacity(dim);
         unsafe {
             cft_fasttext_get_word_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
             v.set_len(dim);
         }
-        v
+        Ok(v)
     }
 
-    pub fn tokenize(&self, text: &str) -> Vec<String> {
-        let c_text = CString::new(text).unwrap();
+    pub fn tokenize(&self, text: &str) -> Result<Vec<String>, String> {
+        let c_text = CString::new(text).map_err(|e| format!("{:?}", e))?;
         unsafe {
             let ret = cft_fasttext_tokenize(self.inner, c_text.as_ptr());
             let c_tokens = slice::from_raw_parts((*ret).tokens, (*ret).length);
@@ -527,19 +530,19 @@ impl FastText {
                 .map(|p| CStr::from_ptr(*p).to_string_lossy().to_string())
                 .collect();
             cft_fasttext_tokens_free(ret);
-            tokens
+            Ok(tokens)
         }
     }
 
-    pub fn get_sentence_vector(&self, sentence: &str) -> Vec<f32> {
-        let c_text = CString::new(sentence).unwrap();
+    pub fn get_sentence_vector(&self, sentence: &str) -> Result<Vec<f32>, String> {
+        let c_text = CString::new(sentence).map_err(|e| format!("{:?}", e))?;
         let dim = self.get_dimension() as usize;
         let mut v = Vec::with_capacity(dim);
         unsafe {
             cft_fasttext_get_sentence_vector(self.inner, c_text.as_ptr(), v.as_mut_ptr());
             v.set_len(dim);
         }
-        v
+        Ok(v)
     }
 
     pub fn abort(&self) {
@@ -574,14 +577,14 @@ mod tests {
     #[test]
     fn test_args_input() {
         let mut args = Args::new();
-        args.set_input("input");
+        args.set_input("input").unwrap();
         assert_eq!("input", args.input());
     }
 
     #[test]
     fn test_args_output() {
         let mut args = Args::new();
-        args.set_output("output.model");
+        args.set_output("output.model").unwrap();
         assert_eq!("output.model", args.output());
     }
 
@@ -741,7 +744,7 @@ mod tests {
         let mut args = Args::new();
         assert_eq!("__label__", args.label());
 
-        args.set_label("__my_label__");
+        args.set_label("__my_label__").unwrap();
         assert_eq!("__my_label__", args.label());
     }
 
@@ -812,11 +815,26 @@ mod tests {
             .unwrap();
 
         // The model contains the word "banana", right?
-        let v = fasttext.get_word_vector("banana");
+        let v = fasttext.get_word_vector("banana").unwrap();
         assert!(fasttext.get_dimension() == v.len() as isize);
         assert!(v[0] != 0f32);
         // And it doesn't contain "hello".
-        assert!(fasttext.get_word_vector("hello")[0] == 0f32);
+        assert!(fasttext.get_word_vector("hello").unwrap()[0] == 0f32);
+    }
+
+    #[test]
+    fn test_fasttext_get_word_vector_nullbyte() {
+        let mut fasttext = FastText::default();
+        fasttext
+            .load_model("tests/fixtures/cooking.model.bin")
+            .unwrap();
+
+        //take an inoffensive word and add nullbyte
+        let mut nullword = String::from("banana");
+        nullword.push(char::from(0));
+
+        let v = fasttext.get_word_vector(&nullword);
+        assert!(v.is_err());
     }
 
     #[test]
@@ -827,20 +845,47 @@ mod tests {
             .unwrap();
 
         // The model contains the word "banana", right?
-        let v = fasttext.get_sentence_vector("banana");
+        let v = fasttext.get_sentence_vector("banana").unwrap();
         assert!(fasttext.get_dimension() == v.len() as isize);
         assert!(v[0] != 0f32);
         // And it doesn't contain "hello".
-        assert!(fasttext.get_sentence_vector("hello")[0] == 0f32);
+        assert!(fasttext.get_sentence_vector("hello").unwrap()[0] == 0f32);
+    }
+
+    #[test]
+    fn test_fasttext_get_sentence_vector_nullbyte() {
+        let mut fasttext = FastText::default();
+        fasttext
+            .load_model("tests/fixtures/cooking.model.bin")
+            .unwrap();
+
+        //take an inoffensive word and add nullbyte
+        let mut nullword = String::from("banana");
+        nullword.push(char::from(0));
+
+        let v = fasttext.get_sentence_vector(&nullword);
+        assert!(v.is_err())
     }
 
     #[test]
     fn test_fasttext_tokenize() {
         let fasttext = FastText::default();
-        let tokens = fasttext.tokenize("I love banana");
+        let tokens = fasttext.tokenize("I love banana").unwrap();
         assert_eq!(tokens, ["I", "love", "banana"]);
 
-        let tokens = fasttext.tokenize("不支持中文");
+        let tokens = fasttext.tokenize("不支持中文").unwrap();
         assert_eq!(tokens, ["不支持中文"]);
+    }
+
+    #[test]
+    fn test_fasttext_tokenize_nullbyte() {
+        let fasttext = FastText::default();
+
+        let mut nullsentence = String::from("I love ");
+        nullsentence.push(char::from(0));
+        nullsentence.push_str(" banana");
+
+        let tokens = fasttext.tokenize(&nullsentence);
+        assert!(tokens.is_err())
     }
 }

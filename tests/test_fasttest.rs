@@ -50,7 +50,7 @@ fn test_fasttext_predict_on_words() {
     ];
     let words_ids: Vec<i32> = words
         .iter()
-        .map(|&x| fasttext.get_word_id(x) as i32)
+        .map(|&x| fasttext.get_word_id(x).unwrap() as i32)
         .collect();
     let preds = fasttext.predict_on_words(&words_ids, 2, 0.0).unwrap();
     assert_eq!(2, preds.len());
