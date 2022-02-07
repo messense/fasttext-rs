@@ -12,3 +12,9 @@ repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
 cfasttext-sys = { path = "cfasttext-sys", version = "0.6.0" }
+
+[workspace]
+members = [
+    ".",
+    "cfasttext-sys"
+]
