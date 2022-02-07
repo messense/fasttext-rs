@@ -5,12 +5,12 @@ use std::slice;
 
 use cfasttext_sys::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Args {
     inner: *mut fasttext_args_t,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FastText {
     inner: *mut fasttext_t,
 }
