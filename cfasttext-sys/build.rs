@@ -15,7 +15,8 @@ fn build_cfasttext() {
     let dst = cmake::Config::new("cfasttext")
         .build_target("cfasttext_static")
         .build();
-    if cfg!(target_os = "windows") {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target_os == "windows" {
         let profile = match &*env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned()) {
             "bench" | "release" => "Release",
             _ => "Debug",
@@ -43,9 +44,10 @@ fn build_cfasttext() {
 
 fn link_cpp() {
     // XXX: static link libc++?
-    if cfg!(any(target_os = "macos", target_os = "freebsd")) {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target_os == "macos" || target_os == "freebsd" {
         println!("cargo:rustc-link-lib=dylib=c++");
-    } else if cfg!(target_os = "windows") {
+    } else if target_os == "windows" {
         return;
     } else {
         println!("cargo:rustc-link-lib=dylib=stdc++");
