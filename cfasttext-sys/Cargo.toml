@@ -7,6 +7,16 @@ description = "fastText ffi binding"
 edition = "2018"
 license = "MIT"
 keywords = ["fastText", "text", "classify"]
+exclude = [
+  "cfasttext/fasttext/.circleci/**",
+  "cfasttext/fasttext/crawl/**",
+  "cfasttext/fasttext/docs/**",
+  "cfasttext/fasttext/website/**",
+  "cfasttext/fasttext/webassembly/**",
+  "cfasttext/fasttext/alignment/**",
+  "cfasttext/fasttext/python/**",
+  "cfasttext/fasttext/scripts/**"
+]
 build = "build.rs"
 links = "cfasttext_static"
 repository = "https://github.com/messense/fasttext-rs"
