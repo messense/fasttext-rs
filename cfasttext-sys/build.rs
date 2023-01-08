@@ -12,34 +12,29 @@ fn fail_on_empty_directory(name: &str) {
 }
 
 fn build_cfasttext() {
-    let dst = cmake::Config::new("cfasttext")
-        .build_target("cfasttext_static")
-        .build();
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if target_os == "windows" {
-        let profile = match &*env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned()) {
-            "bench" | "release" => "Release",
-            _ => "Debug",
-        };
-        println!(
-            "cargo:rustc-link-search=native={}/build/{}",
-            dst.display(),
-            profile
-        );
-        println!(
-            "cargo:rustc-link-search=native={}/build/fasttext/{}",
-            dst.display(),
-            profile
-        );
-    } else {
-        println!("cargo:rustc-link-search=native={}/build", dst.display());
-        println!(
-            "cargo:rustc-link-search=native={}/build/fasttext",
-            dst.display()
-        );
-    }
-    println!("cargo:rustc-link-lib=static=cfasttext_static");
-    println!("cargo:rustc-link-lib=static=fasttext");
+    cc::Build::new()
+        .cpp(true)
+        .files([
+            "cfasttext/fasttext/src/args.cc",
+            "cfasttext/fasttext/src/autotune.cc",
+            "cfasttext/fasttext/src/matrix.cc",
+            "cfasttext/fasttext/src/dictionary.cc",
+            "cfasttext/fasttext/src/loss.cc",
+            "cfasttext/fasttext/src/productquantizer.cc",
+            "cfasttext/fasttext/src/densematrix.cc",
+            "cfasttext/fasttext/src/quantmatrix.cc",
+            "cfasttext/fasttext/src/vector.cc",
+            "cfasttext/fasttext/src/model.cc",
+            "cfasttext/fasttext/src/utils.cc",
+            "cfasttext/fasttext/src/meter.cc",
+            "cfasttext/fasttext/src/fasttext.cc",
+            "cfasttext/lib/cfasttext.cc",
+        ])
+        .includes(["cfasttext/fasttext/src", "cfasttext/include"])
+        .flag("-std=c++11")
+        .flag_if_supported("-pthread")
+        .flag_if_supported("-funroll-loops")
+        .compile("cfasttext");
 }
 
 fn link_cpp() {
