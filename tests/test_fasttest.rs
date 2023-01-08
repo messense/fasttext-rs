@@ -17,6 +17,16 @@ fn test_fasttext_load_invalid_model() {
 }
 
 #[test]
+fn test_fasttext_get_args() {
+    let mut fasttext = FastText::new();
+    fasttext
+        .load_model("tests/fixtures/cooking.model.bin")
+        .unwrap();
+    let args = fasttext.get_args();
+    assert_eq!(fasttext::ModelName::SUP, args.model());
+}
+
+#[test]
 fn test_fasttext_is_quant() {
     let mut fasttext = FastText::new();
     fasttext
@@ -37,6 +47,32 @@ fn test_fasttext_predict() {
     assert_eq!(2, preds.len());
     assert_eq!("__label__baking", &preds[0].label);
     assert_eq!("__label__bread", &preds[1].label);
+}
+
+#[test]
+fn test_fasttext_get_vocab() {
+    let mut fasttext = FastText::new();
+    fasttext
+        .load_model("tests/fixtures/cooking.model.bin")
+        .unwrap();
+    let (words, freqs) = fasttext.get_vocab().unwrap();
+    assert_eq!(14543, words.len());
+    assert_eq!(14543, freqs.len());
+    assert_eq!("</s>", &words[0]);
+    assert_eq!(12404, freqs[0]);
+}
+
+#[test]
+fn test_fasttext_get_labels() {
+    let mut fasttext = FastText::new();
+    fasttext
+        .load_model("tests/fixtures/cooking.model.bin")
+        .unwrap();
+    let (labels, freqs) = fasttext.get_labels().unwrap();
+    assert_eq!(735, labels.len());
+    assert_eq!(735, freqs.len());
+    assert_eq!("__label__baking", &labels[0]);
+    assert_eq!(1156, freqs[0]);
 }
 
 #[test]
