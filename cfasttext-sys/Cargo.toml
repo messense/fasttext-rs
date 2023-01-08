@@ -24,4 +24,4 @@ repository = "https://github.com/messense/fasttext-rs"
 [dependencies]
 
 [build-dependencies]
-cmake = "0.1"
+cc = "1.0"
