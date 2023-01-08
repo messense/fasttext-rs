@@ -12,7 +12,14 @@ fn fail_on_empty_directory(name: &str) {
 }
 
 fn build_cfasttext() {
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    let compiler = build.get_compiler();
+    if compiler.is_like_msvc() {
+        // Enable exception for clang-cl
+        // https://learn.microsoft.com/en-us/cpp/build/reference/eh-exception-handling-model?redirectedfrom=MSDN&view=msvc-170
+        build.flag("/EHsc");
+    }
+    build
         .cpp(true)
         .files([
             "cfasttext/fasttext/src/args.cc",
