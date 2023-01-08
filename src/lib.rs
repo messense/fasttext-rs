@@ -392,6 +392,11 @@ impl FastText {
         }
     }
 
+    pub fn get_args(&self) -> Args {
+        let inner = unsafe { cft_fasttext_get_args(self.inner) };
+        Args { inner }
+    }
+
     pub fn load_model(&mut self, filename: &str) -> Result<(), String> {
         let c_path = CString::new(filename).map_err(|e| format!("{:?}", e))?;
         unsafe {
@@ -499,6 +504,49 @@ impl FastText {
             let preds = Self::convert_predictions(c_preds);
             cft_fasttext_predictions_free(ret);
             Ok(preds)
+        }
+    }
+
+    pub fn get_vocab(&self) -> Result<(Vec<String>, Vec<i64>), String> {
+        unsafe {
+            let ret = cft_fasttext_get_vocab(self.inner);
+            let length = (*ret).length;
+            let c_words = slice::from_raw_parts((*ret).words, length);
+            let c_freqs = slice::from_raw_parts((*ret).freqs, length);
+            let mut words = Vec::with_capacity(length);
+            let mut freqs = Vec::with_capacity(length);
+            for i in 0..length {
+                let c_word = CStr::from_ptr(c_words[i] as _);
+                let word = c_word.to_str().map_err(|e| format!("{:?}", e))?.to_string();
+                words.push(word);
+                let freq = c_freqs[i];
+                freqs.push(freq);
+            }
+            cft_fasttext_vocab_free(ret);
+            Ok((words, freqs))
+        }
+    }
+
+    pub fn get_labels(&self) -> Result<(Vec<String>, Vec<i64>), String> {
+        unsafe {
+            let ret = cft_fasttext_get_labels(self.inner);
+            let length = (*ret).length;
+            let c_labels = slice::from_raw_parts((*ret).labels, length);
+            let c_freqs = slice::from_raw_parts((*ret).freqs, length);
+            let mut labels = Vec::with_capacity(length);
+            let mut freqs = Vec::with_capacity(length);
+            for i in 0..length {
+                let c_label = CStr::from_ptr(c_labels[i] as _);
+                let label = c_label
+                    .to_str()
+                    .map_err(|e| format!("{:?}", e))?
+                    .to_string();
+                labels.push(label);
+                let freq = c_freqs[i];
+                freqs.push(freq);
+            }
+            cft_fasttext_labels_free(ret);
+            Ok((labels, freqs))
         }
     }
 

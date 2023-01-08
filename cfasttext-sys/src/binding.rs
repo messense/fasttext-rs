@@ -34,6 +34,20 @@ pub struct fasttext_words_t {
     pub words: *const i32,
     pub length: usize,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fasttext_vocab_t {
+    pub words: *mut *mut ::std::os::raw::c_char,
+    pub freqs: *const i64,
+    pub length: usize,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fasttext_labels_t {
+    pub labels: *mut *mut ::std::os::raw::c_char,
+    pub freqs: *const i64,
+    pub length: usize,
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum model_name_t {
@@ -122,6 +136,7 @@ extern "C" {
 
     pub fn cft_fasttext_new() -> *mut fasttext_t;
     pub fn cft_fasttext_free(handle: *mut fasttext_t);
+    pub fn cft_fasttext_get_args(handle: *mut fasttext_t) -> *mut fasttext_args_t;
     pub fn cft_fasttext_load_model(
         handle: *mut fasttext_t,
         filename: *const ::std::os::raw::c_char,
@@ -172,6 +187,10 @@ extern "C" {
         errptr: *mut *mut ::std::os::raw::c_char,
     ) -> *mut fasttext_predictions_t;
     pub fn cft_fasttext_predictions_free(predictions: *mut fasttext_predictions_t);
+    pub fn cft_fasttext_get_vocab(handle: *mut fasttext_t) -> *mut fasttext_vocab_t;
+    pub fn cft_fasttext_vocab_free(labels: *mut fasttext_vocab_t);
+    pub fn cft_fasttext_get_labels(handle: *mut fasttext_t) -> *mut fasttext_labels_t;
+    pub fn cft_fasttext_labels_free(labels: *mut fasttext_labels_t);
     pub fn cft_fasttext_quantize(
         handle: *mut fasttext_t,
         args: *mut fasttext_args_t,
