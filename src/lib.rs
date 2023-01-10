@@ -363,7 +363,7 @@ impl Args {
         unsafe { cft_args_set_dsub(self.inner, dsub) }
     }
 
-    pub fn get_pretrained_vectors(&self) -> Cow<str> {
+    pub fn pretrained_vectors(&self) -> Cow<str> {
         unsafe {
             let ret = cft_args_get_pretrained_vectors(self.inner);
             CStr::from_ptr(ret).to_string_lossy()
@@ -378,7 +378,7 @@ impl Args {
         Ok(())
     }
 
-    pub fn get_autotune_validation_file(&self) -> Cow<str> {
+    pub fn autotune_validation_file(&self) -> Cow<str> {
         unsafe {
             let ret = cft_args_get_autotune_validation_file(self.inner);
             CStr::from_ptr(ret).to_string_lossy()
@@ -393,18 +393,18 @@ impl Args {
         Ok(())
     }
 
-    pub fn get_autotune_metric(&self) -> MetricName {
+    pub fn autotune_metric(&self) -> MetricName {
         unsafe { cft_args_get_autotune_metric(self.inner).into() }
     }
 
-    pub fn get_autotune_metric_label(&self) -> Cow<str> {
+    pub fn autotune_metric_label(&self) -> Cow<str> {
         unsafe {
             let ret = cft_args_get_autotune_metric_label(self.inner);
             CStr::from_ptr(ret).to_string_lossy()
         }
     }
 
-    pub fn get_autotune_model_size(&self) -> i64 {
+    pub fn autotune_model_size(&self) -> i64 {
         unsafe { cft_args_get_autotune_model_size(self.inner) }
     }
 
@@ -416,7 +416,7 @@ impl Args {
         unsafe { cft_args_set_autotune_predictions(self.inner, predictions) }
     }
 
-    pub fn get_autotune_duration(&self) -> i32 {
+    pub fn autotune_duration(&self) -> i32 {
         unsafe { cft_args_get_autotune_duration(self.inner) }
     }
 
