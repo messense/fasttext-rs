@@ -12,6 +12,11 @@ pub struct fasttext_args_t {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct fasttext_autotune_t {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct fasttext_prediction_t {
     pub prob: f32,
     pub label: *mut ::std::os::raw::c_char,
@@ -62,6 +67,12 @@ pub enum loss_name_t {
     LOSS_NS = 2,
     LOSS_SOFTMAX = 3,
     LOSS_OVA = 4,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum metric_name_t {
+    F1_SCORE = 1,
+    LABEL_F1_SCORE = 2,
 }
 
 extern "C" {
@@ -128,6 +139,39 @@ extern "C" {
     pub fn cft_args_set_cutoff(handle: *mut fasttext_args_t, cutoff: usize);
     pub fn cft_args_get_dsub(handle: *mut fasttext_args_t) -> usize;
     pub fn cft_args_set_dsub(handle: *mut fasttext_args_t, dsub: usize);
+    pub fn cft_args_get_pretrained_vectors(
+        handle: *mut fasttext_args_t,
+    ) -> *const ::std::os::raw::c_char;
+    pub fn cft_args_set_pretrained_vectors(
+        handle: *mut fasttext_args_t,
+        vectors: *const ::std::os::raw::c_char,
+    );
+    pub fn cft_args_get_seed(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_seed(handle: *mut fasttext_args_t, seed: ::std::os::raw::c_int);
+    pub fn cft_args_get_autotune_validation_file(
+        handle: *mut fasttext_args_t,
+    ) -> *const ::std::os::raw::c_char;
+    pub fn cft_args_set_autotune_validation_file(
+        handle: *mut fasttext_args_t,
+        autotune_validation_file: *const ::std::os::raw::c_char,
+    );
+    pub fn cft_args_get_autotune_metric(handle: *mut fasttext_args_t) -> metric_name_t;
+    pub fn cft_args_get_autotune_metric_label(
+        handle: *mut fasttext_args_t,
+    ) -> *const ::std::os::raw::c_char;
+    pub fn cft_args_get_autotune_model_size(handle: *mut fasttext_args_t) -> i64;
+    pub fn cft_args_has_autotune(handle: *mut fasttext_args_t) -> bool;
+    pub fn cft_args_get_autotune_predictions(handle: *mut fasttext_args_t)
+        -> ::std::os::raw::c_int;
+    pub fn cft_args_set_autotune_predictions(
+        handle: *mut fasttext_args_t,
+        autotune_predictions: ::std::os::raw::c_int,
+    );
+    pub fn cft_args_get_autotune_duration(handle: *mut fasttext_args_t) -> ::std::os::raw::c_int;
+    pub fn cft_args_set_autotune_duration(
+        handle: *mut fasttext_args_t,
+        autotune_duration: ::std::os::raw::c_int,
+    );
     pub fn cft_args_print_help(handle: *mut fasttext_args_t);
     pub fn cft_args_print_basic_help(handle: *mut fasttext_args_t);
     pub fn cft_args_print_dictionary_help(handle: *mut fasttext_args_t);
@@ -212,4 +256,11 @@ extern "C" {
         text: *const ::std::os::raw::c_char,
     ) -> *mut fasttext_tokens_t;
     pub fn cft_fasttext_tokens_free(tokens: *mut fasttext_tokens_t);
+    pub fn cft_autotune_new(handle: *mut fasttext_t) -> *mut fasttext_autotune_t;
+    pub fn cft_autotune_free(handle: *mut fasttext_autotune_t);
+    pub fn cft_autotune_train(
+        handle: *mut fasttext_autotune_t,
+        args: *mut fasttext_args_t,
+        errptr: *mut *mut ::std::os::raw::c_char,
+    );
 }
