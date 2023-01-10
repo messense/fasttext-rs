@@ -8,7 +8,11 @@ mod binding;
 
 pub use self::binding::*;
 
-pub fn error_message(ptr: *mut c_char) -> String {
+/// Convert error message to string
+///
+/// ## Safety
+/// Should only be called in `ffi_try` to ensure that `ptr` isn't null
+pub unsafe fn error_message(ptr: *mut c_char) -> String {
     let c_str = unsafe { CStr::from_ptr(ptr) };
     let s = format!("{}", c_str.to_string_lossy());
     unsafe {
@@ -24,7 +28,7 @@ macro_rules! ffi_try {
         let mut err = ptr::null_mut();
         let res = $crate::$func($($arg),*, &mut err);
         if !err.is_null() {
-            return Err($crate::error_message(err));
+            return Err(unsafe { $crate::error_message(err) });
         }
         res
     })

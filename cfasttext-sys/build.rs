@@ -1,4 +1,4 @@
-use std::{env, fs, str};
+use std::{fs, str};
 
 fn fail_on_empty_directory(name: &str) {
     if fs::read_dir(name).unwrap().count() == 0 {
@@ -41,25 +41,11 @@ fn build_cfasttext() {
         .flag("-std=c++11")
         .flag_if_supported("-pthread")
         .flag_if_supported("-funroll-loops")
-        .compile("cfasttext");
-}
-
-fn link_cpp() {
-    // XXX: static link libc++?
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if target_os == "macos" || target_os == "freebsd" {
-        println!("cargo:rustc-link-lib=dylib=c++");
-    } else if target_os == "windows" {
-        return;
-    } else {
-        println!("cargo:rustc-link-lib=dylib=stdc++");
-        println!("cargo:rustc-link-lib=dylib=gcc");
-    }
+        .compile("cfasttext_static");
 }
 
 fn main() {
     fail_on_empty_directory("cfasttext");
     fail_on_empty_directory("cfasttext/fasttext");
     build_cfasttext();
-    link_cpp();
 }
