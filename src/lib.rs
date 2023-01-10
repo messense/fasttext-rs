@@ -39,6 +39,12 @@ pub enum LossName {
     OVA,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetricName {
+    F1Score,
+    LabelF1Score,
+}
+
 impl From<ModelName> for model_name_t {
     fn from(mt: ModelName) -> model_name_t {
         match mt {
@@ -81,6 +87,23 @@ impl From<loss_name_t> for LossName {
     }
 }
 
+impl From<MetricName> for metric_name_t {
+    fn from(value: MetricName) -> Self {
+        match value {
+            MetricName::F1Score => metric_name_t::F1_SCORE,
+            MetricName::LabelF1Score => metric_name_t::LABEL_F1_SCORE,
+        }
+    }
+}
+
+impl From<metric_name_t> for MetricName {
+    fn from(value: metric_name_t) -> Self {
+        match value {
+            metric_name_t::F1_SCORE => MetricName::F1Score,
+            metric_name_t::LABEL_F1_SCORE => MetricName::LabelF1Score,
+        }
+    }
+}
 impl Args {
     pub fn new() -> Self {
         unsafe {
@@ -340,6 +363,67 @@ impl Args {
         unsafe { cft_args_set_dsub(self.inner, dsub) }
     }
 
+    pub fn get_pretrained_vectors(&self) -> Cow<str> {
+        unsafe {
+            let ret = cft_args_get_pretrained_vectors(self.inner);
+            CStr::from_ptr(ret).to_string_lossy()
+        }
+    }
+
+    pub fn set_pretrained_vectors(&mut self, vectors: &str) -> Result<(), String> {
+        unsafe {
+            let c_vectors = CString::new(vectors).map_err(|e| format!("{:?}", e))?;
+            cft_args_set_pretrained_vectors(self.inner, c_vectors.as_ptr());
+        }
+        Ok(())
+    }
+
+    pub fn get_autotune_validation_file(&self) -> Cow<str> {
+        unsafe {
+            let ret = cft_args_get_autotune_validation_file(self.inner);
+            CStr::from_ptr(ret).to_string_lossy()
+        }
+    }
+
+    pub fn set_autotune_validation_file(&mut self, file: &str) -> Result<(), String> {
+        unsafe {
+            let c_file = CString::new(file).map_err(|e| format!("{:?}", e))?;
+            cft_args_set_autotune_validation_file(self.inner, c_file.as_ptr());
+        }
+        Ok(())
+    }
+
+    pub fn get_autotune_metric(&self) -> MetricName {
+        unsafe { cft_args_get_autotune_metric(self.inner).into() }
+    }
+
+    pub fn get_autotune_metric_label(&self) -> Cow<str> {
+        unsafe {
+            let ret = cft_args_get_autotune_metric_label(self.inner);
+            CStr::from_ptr(ret).to_string_lossy()
+        }
+    }
+
+    pub fn get_autotune_model_size(&self) -> i64 {
+        unsafe { cft_args_get_autotune_model_size(self.inner) }
+    }
+
+    pub fn has_autotune(&self) -> bool {
+        unsafe { cft_args_has_autotune(self.inner) }
+    }
+
+    pub fn set_autotune_predictions(&mut self, predictions: i32) {
+        unsafe { cft_args_set_autotune_predictions(self.inner, predictions) }
+    }
+
+    pub fn get_autotune_duration(&self) -> i32 {
+        unsafe { cft_args_get_autotune_duration(self.inner) }
+    }
+
+    pub fn set_autotune_duration(&mut self, duration: i32) {
+        unsafe { cft_args_set_autotune_duration(self.inner, duration) }
+    }
+
     pub fn print_help(&self) {
         unsafe { cft_args_print_help(self.inner) }
     }
@@ -448,8 +532,16 @@ impl FastText {
     }
 
     pub fn train(&mut self, args: &Args) -> Result<(), String> {
-        unsafe {
-            ffi_try!(cft_fasttext_train(self.inner, args.inner));
+        if args.has_autotune() {
+            unsafe {
+                let autotune = cft_autotune_new(self.inner);
+                ffi_try!(cft_autotune_train(autotune, args.inner));
+                cft_autotune_free(autotune);
+            }
+        } else {
+            unsafe {
+                ffi_try!(cft_fasttext_train(self.inner, args.inner));
+            }
         }
         Ok(())
     }
