@@ -459,9 +459,9 @@ impl FastText {
             let preds: Vec<Prediction> = c_preds
                 .iter()
                 .map(|p| {
-                    let label = CStr::from_ptr((*p).label).to_string_lossy().to_string();
+                    let label = CStr::from_ptr(p.label).to_string_lossy().to_string();
                     Prediction {
-                        prob: (*p).prob,
+                        prob: p.prob,
                         label,
                     }
                 })
@@ -799,37 +799,37 @@ mod tests {
     #[test]
     fn test_args_save_output() {
         let mut args = Args::new();
-        assert_eq!(false, args.save_output());
+        assert!(!args.save_output());
 
         args.set_save_output(true);
-        assert_eq!(true, args.save_output());
+        assert!(args.save_output());
     }
 
     #[test]
     fn test_args_qout() {
         let mut args = Args::new();
-        assert_eq!(false, args.qout());
+        assert!(!args.qout());
 
         args.set_qout(true);
-        assert_eq!(true, args.qout());
+        assert!(args.qout());
     }
 
     #[test]
     fn test_args_retrain() {
         let mut args = Args::new();
-        assert_eq!(false, args.retrain());
+        assert!(!args.retrain());
 
         args.set_retrain(true);
-        assert_eq!(true, args.retrain());
+        assert!(args.retrain());
     }
 
     #[test]
     fn test_args_qnorm() {
         let mut args = Args::new();
-        assert_eq!(false, args.qnorm());
+        assert!(!args.qnorm());
 
         args.set_qnorm(true);
-        assert_eq!(true, args.qnorm());
+        assert!(args.qnorm());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::{env, fs, str};
+use std::{fs, str};
 
 fn fail_on_empty_directory(name: &str) {
     if fs::read_dir(name).unwrap().count() == 0 {
