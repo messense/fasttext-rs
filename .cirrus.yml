@@ -26,7 +26,7 @@ freebsd_task:
       - echo $CIRRUS_OS
       - cat Cargo.toml
   install_script:
-    - pkg install -y curl bash
+    - pkg install -y bash
   <<: *BUILD_AND_TEST
 
 macos_arm64_task:
