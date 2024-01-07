@@ -563,7 +563,9 @@ impl FastText {
     }
 
     pub fn predict(&self, text: &str, k: i32, threshold: f32) -> Result<Vec<Prediction>, String> {
-        let c_text = CString::new(text).map_err(|e| format!("{:?}", e))?;
+        let string_binding = text.replace("\0","");
+        let clean_str = string_binding.as_str();
+        let c_text = CString::new(clean_str).map_err(|e| format!("{:?}", e))?;
         unsafe {
             let ret = ffi_try!(cft_fasttext_predict(
                 self.inner,

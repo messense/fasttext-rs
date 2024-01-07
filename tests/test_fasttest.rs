@@ -42,7 +42,7 @@ fn test_fasttext_predict() {
         .load_model("tests/fixtures/cooking.model.bin")
         .unwrap();
     let preds = fasttext
-        .predict("Which baking dish is best to bake a banana bread ?", 2, 0.0)
+        .predict("Which baking\0 dish is best to bake a banana bread ?", 2, 0.0)
         .unwrap();
     assert_eq!(2, preds.len());
     assert_eq!("__label__baking", &preds[0].label);
