@@ -347,7 +347,12 @@ impl Matrix for DenseMatrix {
         {
             match self.n {
                 512 | 256 | 64 | 32 | 16 => {
-                    average_rows_fast_sse2(x, rows, self);
+                    if is_x86_feature_detected!("avx2") {
+                        // SAFETY: AVX2 availability verified by is_x86_feature_detected!
+                        unsafe { average_rows_fast_avx2(x, rows, self) };
+                    } else {
+                        average_rows_fast_sse2(x, rows, self);
+                    }
                     return;
                 }
                 _ => {}
@@ -700,6 +705,182 @@ fn average_rows_fast_sse2(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
     }
 }
 
+// ---------- x86_64 AVX2 ----------
+
+/// AVX2-accelerated dot product of two slices.
+///
+/// Uses 8-wide f32 lanes (256-bit registers) with 4-way unrolling.
+/// # Safety
+/// Caller must ensure AVX2 is available (e.g., via `is_x86_feature_detected!`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn dot_simd_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let n = a.len();
+    let chunks4 = n / 32; // 4 AVX2 registers × 8 f32 = 32 elements per iteration
+    let chunks1 = (n % 32) / 8; // remaining full 8-element chunks
+    let remainder = n % 8;
+
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    for i in 0..chunks4 {
+        let off = i * 32;
+        let a0 = _mm256_loadu_ps(a_ptr.add(off));
+        let a1 = _mm256_loadu_ps(a_ptr.add(off + 8));
+        let a2 = _mm256_loadu_ps(a_ptr.add(off + 16));
+        let a3 = _mm256_loadu_ps(a_ptr.add(off + 24));
+        let b0 = _mm256_loadu_ps(b_ptr.add(off));
+        let b1 = _mm256_loadu_ps(b_ptr.add(off + 8));
+        let b2 = _mm256_loadu_ps(b_ptr.add(off + 16));
+        let b3 = _mm256_loadu_ps(b_ptr.add(off + 24));
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(a0, b0));
+        acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(a1, b1));
+        acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(a2, b2));
+        acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(a3, b3));
+    }
+
+    acc0 = _mm256_add_ps(acc0, acc1);
+    acc2 = _mm256_add_ps(acc2, acc3);
+    acc0 = _mm256_add_ps(acc0, acc2);
+
+    let rem_start4 = chunks4 * 32;
+    for i in 0..chunks1 {
+        let off = rem_start4 + i * 8;
+        let a0 = _mm256_loadu_ps(a_ptr.add(off));
+        let b0 = _mm256_loadu_ps(b_ptr.add(off));
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(a0, b0));
+    }
+
+    // Horizontal sum: add the two 128-bit halves, then reduce to scalar
+    let low = _mm256_castps256_ps128(acc0);
+    let high = _mm256_extractf128_ps(acc0, 1);
+    let sum128 = _mm_add_ps(low, high);
+    let hi = _mm_movehl_ps(sum128, sum128);
+    let s = _mm_add_ps(sum128, hi);
+    let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
+    let mut result = _mm_cvtss_f32(s);
+
+    let rem_start = rem_start4 + chunks1 * 8;
+    for i in 0..remainder {
+        result += a[rem_start + i] * b[rem_start + i];
+    }
+
+    result
+}
+
+/// AVX2-accelerated `dest += scale * src` (8-wide fused multiply-add).
+///
+/// # Safety
+/// Caller must ensure AVX2 is available (e.g., via `is_x86_feature_detected!`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn add_vector_simd_avx2(dest: &mut [f32], src: &[f32], scale: f32) {
+    use std::arch::x86_64::*;
+    let n = dest.len();
+    let chunks4 = n / 32;
+    let chunks1 = (n % 32) / 8;
+    let remainder = n % 8;
+
+    let scale_v = _mm256_set1_ps(scale);
+    let d_ptr = dest.as_mut_ptr();
+    let s_ptr = src.as_ptr();
+
+    for i in 0..chunks4 {
+        let off = i * 32;
+        let d0 = _mm256_loadu_ps(d_ptr.add(off));
+        let d1 = _mm256_loadu_ps(d_ptr.add(off + 8));
+        let d2 = _mm256_loadu_ps(d_ptr.add(off + 16));
+        let d3 = _mm256_loadu_ps(d_ptr.add(off + 24));
+        let s0 = _mm256_loadu_ps(s_ptr.add(off));
+        let s1 = _mm256_loadu_ps(s_ptr.add(off + 8));
+        let s2 = _mm256_loadu_ps(s_ptr.add(off + 16));
+        let s3 = _mm256_loadu_ps(s_ptr.add(off + 24));
+        _mm256_storeu_ps(
+            d_ptr.add(off),
+            _mm256_add_ps(d0, _mm256_mul_ps(scale_v, s0)),
+        );
+        _mm256_storeu_ps(
+            d_ptr.add(off + 8),
+            _mm256_add_ps(d1, _mm256_mul_ps(scale_v, s1)),
+        );
+        _mm256_storeu_ps(
+            d_ptr.add(off + 16),
+            _mm256_add_ps(d2, _mm256_mul_ps(scale_v, s2)),
+        );
+        _mm256_storeu_ps(
+            d_ptr.add(off + 24),
+            _mm256_add_ps(d3, _mm256_mul_ps(scale_v, s3)),
+        );
+    }
+
+    let rem_start4 = chunks4 * 32;
+    for i in 0..chunks1 {
+        let off = rem_start4 + i * 8;
+        let d0 = _mm256_loadu_ps(d_ptr.add(off));
+        let s0 = _mm256_loadu_ps(s_ptr.add(off));
+        _mm256_storeu_ps(
+            d_ptr.add(off),
+            _mm256_add_ps(d0, _mm256_mul_ps(scale_v, s0)),
+        );
+    }
+
+    let rem_start = rem_start4 + chunks1 * 8;
+    for i in 0..remainder {
+        dest[rem_start + i] += scale * src[rem_start + i];
+    }
+}
+
+/// AVX2-accelerated row averaging: compute `x = average of selected rows`.
+///
+/// # Safety
+/// Caller must ensure AVX2 is available (e.g., via `is_x86_feature_detected!`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn average_rows_fast_avx2(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
+    use std::arch::x86_64::*;
+
+    if rows.is_empty() {
+        x.zero();
+        return;
+    }
+
+    let n = mat.n as usize;
+
+    // First row: copy to x
+    let first_row = mat.row(rows[0] as i64);
+    x.data_mut().copy_from_slice(first_row);
+
+    // Add remaining rows using AVX2
+    for &row_idx in &rows[1..] {
+        let row = mat.row(row_idx as i64);
+        add_vector_simd_avx2(x.data_mut(), row, 1.0);
+    }
+
+    // Scale by 1.0 / rows.len() using AVX2
+    let scale = 1.0 / rows.len() as f32;
+    let scale_v = _mm256_set1_ps(scale);
+    let n_chunks = n / 8;
+    let remainder = n % 8;
+    let d_ptr = x.data_mut().as_mut_ptr();
+
+    for i in 0..n_chunks {
+        let off = i * 8;
+        let v = _mm256_loadu_ps(d_ptr.add(off));
+        _mm256_storeu_ps(d_ptr.add(off), _mm256_mul_ps(v, scale_v));
+    }
+
+    let rem_start = n_chunks * 8;
+    for i in 0..remainder {
+        x.data_mut()[rem_start + i] *= scale;
+    }
+}
+
 // ---------- dispatch functions ----------
 
 /// Dispatch dot product to best available implementation.
@@ -711,7 +892,12 @@ fn dot_impl(a: &[f32], b: &[f32]) -> f32 {
     }
     #[cfg(target_arch = "x86_64")]
     {
-        dot_simd_sse2(a, b)
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 availability verified by is_x86_feature_detected!
+            unsafe { dot_simd_avx2(a, b) }
+        } else {
+            dot_simd_sse2(a, b)
+        }
     }
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
@@ -728,7 +914,12 @@ fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
     }
     #[cfg(target_arch = "x86_64")]
     {
-        add_vector_simd_sse2(dest, src, scale)
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 availability verified by is_x86_feature_detected!
+            unsafe { add_vector_simd_avx2(dest, src, scale) }
+        } else {
+            add_vector_simd_sse2(dest, src, scale)
+        }
     }
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
@@ -1677,5 +1868,107 @@ mod tests {
         }
         // dot of 100 ones with 100 ones = 100
         assert!((m.dot_row(&v, 0).unwrap() - 100.0).abs() < 0.01);
+    }
+
+    // --- AVX2 consistency tests (x86_64 only) ---
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_dense_matrix_avx2_consistency() {
+        if !is_x86_feature_detected!("avx2") {
+            // AVX2 not available on this CPU, skip runtime checks
+            return;
+        }
+        for &dim in &[16_i64, 32, 64, 256, 512] {
+            let mut m = DenseMatrix::new(3, dim);
+            let n = dim as usize;
+
+            // Fill matrix with deterministic values
+            for i in 0..3 {
+                for j in 0..n {
+                    *m.at_mut(i as i64, j as i64) = ((i * n + j) as f32) * 0.01;
+                }
+            }
+
+            let mut v = Vector::new(n);
+            for j in 0..n {
+                v[j] = ((n - j) as f32) * 0.01;
+            }
+
+            // Test dot_simd_avx2 vs scalar for dot_row
+            let row1 = m.row(1);
+            let avx2_dot = unsafe { dot_simd_avx2(row1, v.data()) };
+            let scalar_dot = dot_scalar(row1, v.data());
+            let tolerance = scalar_dot.abs().max(avx2_dot.abs()).max(1.0)
+                * f32::EPSILON
+                * n as f32;
+            assert!(
+                (avx2_dot - scalar_dot).abs() < tolerance,
+                "dot_simd_avx2 vs scalar mismatch for dim={}: AVX2={}, scalar={}",
+                dim,
+                avx2_dot,
+                scalar_dot,
+            );
+
+            // Test add_vector_simd_avx2 vs scalar for add_vector_to_row
+            let mut dest_avx2: Vec<f32> = (0..n).map(|j| j as f32 * 0.5).collect();
+            let mut dest_scalar: Vec<f32> = (0..n).map(|j| j as f32 * 0.5).collect();
+            let src: Vec<f32> = (0..n).map(|j| j as f32 * 0.1).collect();
+            unsafe { add_vector_simd_avx2(&mut dest_avx2, &src, 2.0) };
+            add_vector_scalar(&mut dest_scalar, &src, 2.0);
+            for j in 0..n {
+                let mag = dest_avx2[j].abs().max(dest_scalar[j].abs()).max(1.0);
+                let tol = mag * f32::EPSILON * 4.0;
+                assert!(
+                    (dest_avx2[j] - dest_scalar[j]).abs() < tol,
+                    "add_vector_simd_avx2 vs scalar mismatch at j={} for dim={}: AVX2={}, scalar={}",
+                    j,
+                    dim,
+                    dest_avx2[j],
+                    dest_scalar[j],
+                );
+            }
+
+            // Test add_vector_simd_avx2 vs scalar for add_row_to_vector
+            let mut v_avx2 = Vector::new(n);
+            let mut v_scalar = Vector::new(n);
+            for j in 0..n {
+                v_avx2[j] = j as f32 * 0.1;
+                v_scalar[j] = j as f32 * 0.1;
+            }
+            let row2 = m.row(2);
+            unsafe { add_vector_simd_avx2(v_avx2.data_mut(), row2, 0.7) };
+            add_vector_scalar(v_scalar.data_mut(), row2, 0.7);
+            for j in 0..n {
+                let mag = v_avx2[j].abs().max(v_scalar[j].abs()).max(1.0);
+                let tol = mag * f32::EPSILON * 4.0;
+                assert!(
+                    (v_avx2[j] - v_scalar[j]).abs() < tol,
+                    "add_vector_simd_avx2 (add_row) vs scalar mismatch at j={} for dim={}: AVX2={}, scalar={}",
+                    j,
+                    dim,
+                    v_avx2[j],
+                    v_scalar[j],
+                );
+            }
+
+            // Test average_rows_fast_avx2 vs scalar for average_rows_to_vector
+            let mut v_avg_avx2 = Vector::new(n);
+            let mut v_avg_scalar = Vector::new(n);
+            unsafe { average_rows_fast_avx2(&mut v_avg_avx2, &[0, 1, 2], &m) };
+            average_rows_scalar(&mut v_avg_scalar, &[0, 1, 2], &m);
+            for j in 0..n {
+                let mag = v_avg_avx2[j].abs().max(v_avg_scalar[j].abs()).max(1.0);
+                let tol = mag * f32::EPSILON * n as f32;
+                assert!(
+                    (v_avg_avx2[j] - v_avg_scalar[j]).abs() < tol,
+                    "average_rows_fast_avx2 vs scalar mismatch at j={} for dim={}: AVX2={}, scalar={}",
+                    j,
+                    dim,
+                    v_avg_avx2[j],
+                    v_avg_scalar[j],
+                );
+            }
+        }
     }
 }
