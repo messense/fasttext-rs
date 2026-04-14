@@ -209,6 +209,107 @@ impl FastText {
     pub fn is_quant(&self) -> bool {
         self.quant
     }
+
+    /// Return the word vector for a given word.
+    ///
+    /// For in-vocabulary words the vector is the average of all stored subword
+    /// IDs (which for `minn=0 / maxn=0` is just the word's own row).  For
+    /// OOV words the subwords are computed on-the-fly; if there are no subwords
+    /// (e.g. `bucket=0`) a zero vector is returned.
+    pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
+        let dim = self.args.dim() as usize;
+        let mut result = vec![0.0f32; dim];
+        let ids = self.dict.get_subwords_for_string(word);
+        if ids.is_empty() {
+            return result;
+        }
+        let scale = 1.0 / ids.len() as f32;
+        for &id in &ids {
+            let row = self.input.row(id as i64);
+            for (r, &v) in result.iter_mut().zip(row.iter()) {
+                *r += v * scale;
+            }
+        }
+        result
+    }
+
+    /// Predict the top-`k` labels for `text` using a softmax supervised model.
+    ///
+    /// Returns a list of `(label, probability)` pairs sorted by descending
+    /// probability.  Only predictions whose probability is ≥ `threshold` are
+    /// returned.  Returns an empty vec for empty input, `k = 0`, or models
+    /// with no labels.
+    ///
+    /// # Panics
+    /// Panics if the model is not a supervised (label) model.
+    pub fn predict(&self, text: &str, k: usize, threshold: f32) -> Vec<(String, f32)> {
+        if k == 0 {
+            return Vec::new();
+        }
+        let nlabels = self.dict.nlabels() as usize;
+        if nlabels == 0 {
+            return Vec::new();
+        }
+
+        // Tokenise into word (subword) IDs.
+        let mut words: Vec<i32> = Vec::new();
+        let mut labels: Vec<i32> = Vec::new();
+        self.dict.get_line_from_str(text, &mut words, &mut labels);
+        if words.is_empty() {
+            return Vec::new();
+        }
+
+        let dim = self.args.dim() as usize;
+
+        // Compute hidden: average of input-matrix rows for each word token.
+        let mut hidden = vec![0.0f32; dim];
+        let n = words.len() as f32;
+        for &wid in &words {
+            let row = self.input.row(wid as i64);
+            for (h, &r) in hidden.iter_mut().zip(row.iter()) {
+                *h += r;
+            }
+        }
+        for h in &mut hidden {
+            *h /= n;
+        }
+
+        // Compute raw scores: dot product of hidden with each output row.
+        let mut scores: Vec<f32> = (0..nlabels)
+            .map(|i| {
+                let row = self.output.row(i as i64);
+                hidden.iter().zip(row.iter()).map(|(&h, &r)| h * r).sum()
+            })
+            .collect();
+
+        // Softmax with max-subtraction for numerical stability.
+        let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let sum: f32 = scores.iter().map(|&s| (s - max_score).exp()).sum();
+        for s in &mut scores {
+            *s = (*s - max_score).exp() / sum;
+        }
+
+        // Collect candidates above threshold, sort descending, take top-k.
+        let mut indexed: Vec<(usize, f32)> = scores
+            .into_iter()
+            .enumerate()
+            .filter(|(_, p)| *p >= threshold)
+            .collect();
+        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        indexed.truncate(k);
+
+        indexed
+            .into_iter()
+            .map(|(i, p)| {
+                let label = self
+                    .dict
+                    .get_label(i as i32)
+                    .unwrap_or("__unknown__")
+                    .to_string();
+                (label, p)
+            })
+            .collect()
+    }
 }
 
 // =============================================================================
@@ -879,5 +980,302 @@ mod tests {
         v11[7] = v[3];
         let result = FastText::load(&mut Cursor::new(v11));
         assert!(result.is_ok(), "Version 11 should be accepted: {:?}", result.err());
+    }
+
+    // =========================================================================
+    // VAL-DICT-014: Full model save/load round-trip (cooking model)
+    // =========================================================================
+
+    /// Verify that saving the cooking model to a file and reloading it produces
+    /// a model whose args, vocabulary, word vectors, and predictions are
+    /// **bit-for-bit identical** to the original.
+    #[test]
+    fn test_model_save_load_roundtrip() {
+        // ------------------------------------------------------------------
+        // 1. Load the reference model.
+        // ------------------------------------------------------------------
+        let model1 = FastText::load_model(COOKING_MODEL)
+            .expect("Should load cooking model");
+
+        let test_input = "Which baking dish is best to bake a banana bread ?";
+
+        // ------------------------------------------------------------------
+        // 2. Capture baseline: predictions and word vector BEFORE save.
+        // ------------------------------------------------------------------
+        let preds_before = model1.predict(test_input, 5, 0.0);
+        assert!(
+            !preds_before.is_empty(),
+            "Model should produce predictions before save"
+        );
+
+        let vec_before = model1.get_word_vector("banana");
+        assert_eq!(
+            vec_before.len(),
+            model1.args().dim() as usize,
+            "Word vector should have dim={} elements",
+            model1.args().dim()
+        );
+
+        // ------------------------------------------------------------------
+        // 3. Save to a temp file.
+        // ------------------------------------------------------------------
+        let tmp_path = std::env::temp_dir().join("fasttext_roundtrip_cooking.bin");
+        let tmp_str = tmp_path.to_str().unwrap();
+        model1.save_model(tmp_str).expect("Should save model");
+
+        // ------------------------------------------------------------------
+        // 4. Reload from the temp file.
+        // ------------------------------------------------------------------
+        let model2 = FastText::load_model(tmp_str).expect("Should reload model");
+        // Clean up the temp file (ignore errors).
+        std::fs::remove_file(tmp_str).ok();
+
+        // ------------------------------------------------------------------
+        // 5. Verify all args match.
+        // ------------------------------------------------------------------
+        assert_eq!(
+            model1.args().dim(),
+            model2.args().dim(),
+            "dim should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().ws(),
+            model2.args().ws(),
+            "ws should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().epoch(),
+            model2.args().epoch(),
+            "epoch should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().min_count(),
+            model2.args().min_count(),
+            "minCount should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().neg(),
+            model2.args().neg(),
+            "neg should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().word_ngrams(),
+            model2.args().word_ngrams(),
+            "wordNgrams should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().loss(),
+            model2.args().loss(),
+            "loss should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().model(),
+            model2.args().model(),
+            "model should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().bucket(),
+            model2.args().bucket(),
+            "bucket should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().minn(),
+            model2.args().minn(),
+            "minn should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().maxn(),
+            model2.args().maxn(),
+            "maxn should match after round-trip"
+        );
+        assert_eq!(
+            model1.args().lr_update_rate(),
+            model2.args().lr_update_rate(),
+            "lrUpdateRate should match after round-trip"
+        );
+        assert!(
+            (model1.args().t() - model2.args().t()).abs() < f64::EPSILON,
+            "t should match after round-trip: {} vs {}",
+            model1.args().t(),
+            model2.args().t()
+        );
+
+        // ------------------------------------------------------------------
+        // 6. Verify vocabulary and labels match (count, words, frequencies).
+        // ------------------------------------------------------------------
+        assert_eq!(
+            model1.dict().nwords(),
+            model2.dict().nwords(),
+            "nwords should match after round-trip"
+        );
+        assert_eq!(
+            model1.dict().nlabels(),
+            model2.dict().nlabels(),
+            "nlabels should match after round-trip"
+        );
+        assert_eq!(
+            model1.dict().ntokens(),
+            model2.dict().ntokens(),
+            "ntokens should match after round-trip"
+        );
+        assert_eq!(
+            model1.dict().size(),
+            model2.dict().size(),
+            "dict size should match after round-trip"
+        );
+
+        // Verify all vocabulary entries (word string, frequency, entry type).
+        let words1 = model1.dict().words();
+        let words2 = model2.dict().words();
+        assert_eq!(
+            words1.len(),
+            words2.len(),
+            "words vec length should match"
+        );
+        for (i, (w1, w2)) in words1.iter().zip(words2.iter()).enumerate() {
+            assert_eq!(
+                w1.word, w2.word,
+                "word[{}] string should match: {} vs {}",
+                i, w1.word, w2.word
+            );
+            assert_eq!(
+                w1.count, w2.count,
+                "word[{}] '{}' count should match: {} vs {}",
+                i, w1.word, w1.count, w2.count
+            );
+            assert_eq!(
+                w1.entry_type, w2.entry_type,
+                "word[{}] '{}' type should match",
+                i, w1.word
+            );
+        }
+
+        // ------------------------------------------------------------------
+        // 7. Verify word vectors are bitwise identical.
+        // ------------------------------------------------------------------
+        let vec_after = model2.get_word_vector("banana");
+        assert_eq!(
+            vec_before.len(),
+            vec_after.len(),
+            "Word vector length should match"
+        );
+        for (j, (v1, v2)) in vec_before.iter().zip(vec_after.iter()).enumerate() {
+            assert_eq!(
+                v1.to_bits(),
+                v2.to_bits(),
+                "Word vector element [{}] should be bitwise equal: {} vs {}",
+                j,
+                v1,
+                v2
+            );
+        }
+
+        // ------------------------------------------------------------------
+        // 8. Verify predictions are bitwise identical.
+        // ------------------------------------------------------------------
+        let preds_after = model2.predict(test_input, 5, 0.0);
+        assert_eq!(
+            preds_before.len(),
+            preds_after.len(),
+            "Number of predictions should match after round-trip"
+        );
+        for (idx, ((label1, prob1), (label2, prob2))) in
+            preds_before.iter().zip(preds_after.iter()).enumerate()
+        {
+            assert_eq!(
+                label1, label2,
+                "Prediction[{}] label should match: {} vs {}",
+                idx, label1, label2
+            );
+            assert_eq!(
+                prob1.to_bits(),
+                prob2.to_bits(),
+                "Prediction[{}] label='{}' probability should be bitwise equal: {} vs {}",
+                idx,
+                label1,
+                prob1,
+                prob2
+            );
+        }
+
+        // Also verify the top label is baking-related (sanity check).
+        assert!(
+            preds_before[0].0.contains("baking") || preds_before[0].0.contains("bread"),
+            "Top prediction for banana bread question should be baking or bread related, got: {}",
+            preds_before[0].0
+        );
+    }
+
+    /// Verify word vector round-trip for multiple words.
+    #[test]
+    fn test_word_vectors_roundtrip() {
+        let model1 = FastText::load_model(COOKING_MODEL)
+            .expect("Should load cooking model");
+
+        // Save and reload.
+        let tmp_path = std::env::temp_dir().join("fasttext_wordvec_roundtrip.bin");
+        let tmp_str = tmp_path.to_str().unwrap();
+        model1.save_model(tmp_str).expect("Should save model");
+        let model2 = FastText::load_model(tmp_str).expect("Should reload model");
+        std::fs::remove_file(tmp_str).ok();
+
+        // Check several words from the cooking vocabulary.
+        let test_words = ["banana", "baking", "bread", "chicken", "salt"];
+        for word in &test_words {
+            let v1 = model1.get_word_vector(word);
+            let v2 = model2.get_word_vector(word);
+            assert_eq!(v1.len(), v2.len(), "Vector length mismatch for '{}'", word);
+            for (j, (a, b)) in v1.iter().zip(v2.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "Vector[{}] for '{}' should be bitwise equal: {} vs {}",
+                    j,
+                    word,
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    /// Verify that predictions are deterministic across multiple calls after round-trip.
+    #[test]
+    fn test_predictions_identical_after_roundtrip() {
+        let model1 = FastText::load_model(COOKING_MODEL)
+            .expect("Should load cooking model");
+
+        let tmp_path = std::env::temp_dir().join("fasttext_pred_roundtrip.bin");
+        let tmp_str = tmp_path.to_str().unwrap();
+        model1.save_model(tmp_str).expect("Should save model");
+        let model2 = FastText::load_model(tmp_str).expect("Should reload model");
+        std::fs::remove_file(tmp_str).ok();
+
+        let inputs = [
+            "how to make pasta",
+            "best knife for cutting vegetables",
+            "what temperature to bake chicken",
+        ];
+
+        for input in &inputs {
+            let p1 = model1.predict(input, 3, 0.0);
+            let p2 = model2.predict(input, 3, 0.0);
+            assert_eq!(
+                p1.len(),
+                p2.len(),
+                "Prediction count should match for: {}",
+                input
+            );
+            for (i, ((l1, pr1), (l2, pr2))) in p1.iter().zip(p2.iter()).enumerate() {
+                assert_eq!(l1, l2, "Label[{}] should match for: {}", i, input);
+                assert_eq!(
+                    pr1.to_bits(),
+                    pr2.to_bits(),
+                    "Prob[{}] should be bitwise equal for: {}",
+                    i,
+                    input
+                );
+            }
+        }
     }
 }
