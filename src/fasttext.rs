@@ -3,16 +3,29 @@
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::Arc;
 
-use crate::args::{Args, ModelName};
-use crate::dictionary::Dictionary;
+use crate::args::{Args, LossName, ModelName};
+use crate::dictionary::{Dictionary, EntryType, EOS};
 use crate::error::{FastTextError, Result};
+use crate::loss::{HierarchicalSoftmaxLoss, Loss, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
 use crate::matrix::{DenseMatrix, Matrix};
+use crate::model::{Model, State};
 use crate::utils;
 
 /// Magic number identifying a valid fastText binary model file.
 pub const FASTTEXT_FILEFORMAT_MAGIC_INT32: i32 = 793712314;
 /// Current binary format version.
 pub const FASTTEXT_VERSION: i32 = 12;
+
+/// A single prediction result.
+///
+/// Contains the predicted label string and its probability (in `[0, 1]`).
+#[derive(Debug, Clone)]
+pub struct Prediction {
+    /// Probability of this label (exponentiated from log-probability).
+    pub prob: f32,
+    /// The label string (e.g. `"__label__baking"`).
+    pub label: String,
+}
 
 /// Read a boolean (1 byte) from a reader.
 fn read_bool<R: Read>(reader: &mut R) -> Result<bool> {
@@ -27,22 +40,39 @@ fn write_bool<W: Write>(writer: &mut W, value: bool) -> Result<()> {
     Ok(())
 }
 
+/// Build the appropriate loss function based on `args.loss()`.
+///
+/// - `SoftmaxLoss` — full softmax (used for supervised models with softmax loss)
+/// - `NegativeSamplingLoss` — negative sampling (skipgram/CBOW)
+/// - `HierarchicalSoftmaxLoss` — Huffman-tree hierarchical softmax
+/// - `OneVsAllLoss` — one-vs-all binary logistic
+fn build_loss(args: &Args, wo: Arc<DenseMatrix>, target_counts: &[i64]) -> Box<dyn Loss> {
+    match args.loss() {
+        LossName::HS => Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts)),
+        LossName::NS => Box::new(NegativeSamplingLoss::new(wo, args.neg(), target_counts)),
+        LossName::OVA => Box::new(OneVsAllLoss::new(wo)),
+        LossName::SOFTMAX => Box::new(SoftmaxLoss::new(wo)),
+    }
+}
+
 /// A loaded fastText model.
 ///
-/// Contains the model arguments, dictionary, input matrix, and output matrix.
-/// Used for inference (prediction) and model inspection.
+/// Contains the model arguments, dictionary, input matrix, output matrix,
+/// and a pre-built `Model` for efficient inference.
 #[derive(Debug)]
 pub struct FastText {
     /// Model hyperparameters.
     args: Arc<Args>,
     /// The vocabulary dictionary.
     dict: Dictionary,
-    /// Input embedding matrix (word + subword vectors).
-    input: DenseMatrix,
-    /// Output matrix (label/word vectors).
-    output: DenseMatrix,
+    /// Input embedding matrix (word + subword vectors), shared via Arc for Model.
+    input: Arc<DenseMatrix>,
+    /// Output matrix (label/word vectors), shared via Arc for Model.
+    output: Arc<DenseMatrix>,
     /// Whether the model uses quantized (QuantMatrix) input.
     quant: bool,
+    /// Pre-built inference model.
+    model: Model,
 }
 
 impl FastText {
@@ -126,12 +156,27 @@ impl FastText {
             DenseMatrix::load(reader)?
         };
 
+        // 9. Build the inference model.
+        let input_arc = Arc::new(input);
+        let output_arc = Arc::new(output);
+        let label_counts = dict.get_counts(EntryType::Label);
+        let word_counts = dict.get_counts(EntryType::Word);
+        let target_counts = if args.model() == ModelName::SUP {
+            label_counts
+        } else {
+            word_counts
+        };
+        let loss = build_loss(&args, Arc::clone(&output_arc), &target_counts);
+        let normalize_gradient = args.model() == ModelName::SUP;
+        let model = Model::new(Arc::clone(&input_arc), loss, normalize_gradient);
+
         Ok(FastText {
             args: Arc::new(args),
             dict,
-            input,
-            output,
+            input: input_arc,
+            output: output_arc,
             quant: quant_input,
+            model,
         })
     }
 
@@ -237,20 +282,25 @@ impl FastText {
 
     /// Predict the top-`k` labels for `text`.
     ///
-    /// Returns a list of `(label, probability)` pairs sorted by descending
-    /// probability.  Only predictions whose probability is ≥ `threshold` are
-    /// returned.  Returns an empty vec for empty input, `k = 0`, or models
-    /// with no labels.
-    pub fn predict(&self, text: &str, k: usize, threshold: f32) -> Vec<(String, f32)> {
+    /// Tokenizes `text` via the dictionary, appends the EOS token (matching
+    /// C++ `predictLine` behavior where a stream newline triggers EOS), computes
+    /// the hidden representation, runs the appropriate loss function to get
+    /// predictions, and converts log-probabilities to probabilities via `exp`.
+    ///
+    /// Returns a list of `Prediction` pairs sorted by descending probability.
+    /// Only predictions whose probability is ≥ `threshold` are returned.
+    /// A negative `threshold` is treated as 0.
+    ///
+    /// Returns an empty vec for empty / whitespace-only input, `k = 0`, or
+    /// models with no labels.
+    pub fn predict(&self, text: &str, k: usize, threshold: f32) -> Vec<Prediction> {
         if k == 0 {
             return Vec::new();
         }
-        let nlabels = self.dict.nlabels() as usize;
-        if nlabels == 0 {
-            return Vec::new();
-        }
+        // Negative threshold treated as 0
+        let effective_threshold = if threshold < 0.0 { 0.0 } else { threshold };
 
-        // Tokenise into word (subword) IDs.
+        // Tokenise into word (subword) IDs (no EOS from get_line_from_str).
         let mut words: Vec<i32> = Vec::new();
         let mut labels: Vec<i32> = Vec::new();
         self.dict.get_line_from_str(text, &mut words, &mut labels);
@@ -258,54 +308,58 @@ impl FastText {
             return Vec::new();
         }
 
+        // Append EOS token to match C++ predictLine behavior: when reading
+        // from a stream the newline character produces an EOS token that is
+        // included in the hidden-representation average.
+        let eos_id = self.dict.get_id(EOS);
+        if eos_id >= 0 {
+            words.push(eos_id);
+        }
+
+        self.predict_words_internal(&words, k, effective_threshold)
+    }
+
+    /// Predict the top-`k` labels from pre-tokenized word IDs.
+    ///
+    /// `word_ids` must be valid input-matrix row indices (as produced by
+    /// `Dictionary::get_line_from_str` or equivalent tokenization).
+    ///
+    /// This is equivalent to `predict(text, k, threshold)` when `word_ids`
+    /// are the word IDs produced by tokenizing `text`.
+    pub fn predict_on_words(&self, word_ids: &[i32], k: usize, threshold: f32) -> Vec<Prediction> {
+        if k == 0 || word_ids.is_empty() {
+            return Vec::new();
+        }
+        let effective_threshold = if threshold < 0.0 { 0.0 } else { threshold };
+        self.predict_words_internal(word_ids, k, effective_threshold)
+    }
+
+    /// Internal helper: run model.predict on pre-validated word IDs.
+    fn predict_words_internal(&self, word_ids: &[i32], k: usize, threshold: f32) -> Vec<Prediction> {
+        let nlabels = self.dict.nlabels() as usize;
+        if nlabels == 0 {
+            return Vec::new();
+        }
+
         let dim = self.args.dim() as usize;
+        let mut state = State::new(dim, nlabels, 0);
 
-        // Compute hidden: average of input-matrix rows for each word token.
-        let mut hidden = vec![0.0f32; dim];
-        let n = words.len() as f32;
-        for &wid in &words {
-            let row = self.input.row(wid as i64);
-            for (h, &r) in hidden.iter_mut().zip(row.iter()) {
-                *h += r;
-            }
-        }
-        for h in &mut hidden {
-            *h /= n;
-        }
+        // Clamp k to at most the number of labels.
+        let k_eff = k.min(nlabels) as i32;
 
-        // Compute raw scores: dot product of hidden with each output row.
-        let mut scores: Vec<f32> = (0..nlabels)
-            .map(|i| {
-                let row = self.output.row(i as i64);
-                hidden.iter().zip(row.iter()).map(|(&h, &r)| h * r).sum()
-            })
-            .collect();
+        let raw = self.model.predict(word_ids, k_eff, threshold, &mut state);
 
-        // Softmax with max-subtraction for numerical stability.
-        let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let sum: f32 = scores.iter().map(|&s| (s - max_score).exp()).sum();
-        for s in &mut scores {
-            *s = (*s - max_score).exp() / sum;
-        }
-
-        // Collect candidates above threshold, sort descending, take top-k.
-        let mut indexed: Vec<(usize, f32)> = scores
-            .into_iter()
-            .enumerate()
-            .filter(|(_, p)| *p >= threshold)
-            .collect();
-        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        indexed.truncate(k);
-
-        indexed
-            .into_iter()
-            .map(|(i, p)| {
+        raw.into_iter()
+            .map(|(log_prob, label_idx)| {
                 let label = self
                     .dict
-                    .get_label(i as i32)
+                    .get_label(label_idx)
                     .unwrap_or("__unknown__")
                     .to_string();
-                (label, p)
+                Prediction {
+                    prob: log_prob.exp(),
+                    label,
+                }
             })
             .collect()
     }
@@ -321,6 +375,7 @@ mod tests {
     use std::io::Cursor;
 
     use crate::args::{Args, LossName, ModelName};
+    use crate::dictionary::EOS;
 
     /// Path to the cooking reference model fixture.
     const COOKING_MODEL: &str = "tests/fixtures/cooking.model.bin";
@@ -1190,30 +1245,30 @@ mod tests {
             preds_after.len(),
             "Number of predictions should match after round-trip"
         );
-        for (idx, ((label1, prob1), (label2, prob2))) in
+        for (idx, (p1, p2)) in
             preds_before.iter().zip(preds_after.iter()).enumerate()
         {
             assert_eq!(
-                label1, label2,
+                p1.label, p2.label,
                 "Prediction[{}] label should match: {} vs {}",
-                idx, label1, label2
+                idx, p1.label, p2.label
             );
             assert_eq!(
-                prob1.to_bits(),
-                prob2.to_bits(),
+                p1.prob.to_bits(),
+                p2.prob.to_bits(),
                 "Prediction[{}] label='{}' probability should be bitwise equal: {} vs {}",
                 idx,
-                label1,
-                prob1,
-                prob2
+                p1.label,
+                p1.prob,
+                p2.prob
             );
         }
 
         // Also verify the top label is baking-related (sanity check).
         assert!(
-            preds_before[0].0.contains("baking") || preds_before[0].0.contains("bread"),
+            preds_before[0].label.contains("baking") || preds_before[0].label.contains("bread"),
             "Top prediction for banana bread question should be baking or bread related, got: {}",
-            preds_before[0].0
+            preds_before[0].label
         );
     }
 
@@ -1368,11 +1423,11 @@ mod tests {
                 "Prediction count should match for: {}",
                 input
             );
-            for (i, ((l1, pr1), (l2, pr2))) in p1.iter().zip(p2.iter()).enumerate() {
-                assert_eq!(l1, l2, "Label[{}] should match for: {}", i, input);
+            for (i, (pred1, pred2)) in p1.iter().zip(p2.iter()).enumerate() {
+                assert_eq!(pred1.label, pred2.label, "Label[{}] should match for: {}", i, input);
                 assert_eq!(
-                    pr1.to_bits(),
-                    pr2.to_bits(),
+                    pred1.prob.to_bits(),
+                    pred2.prob.to_bits(),
                     "Prob[{}] should be bitwise equal for: {}",
                     i,
                     input
@@ -1380,4 +1435,419 @@ mod tests {
             }
         }
     }
+
+    // =========================================================================
+    // VAL-INF-007: predict() cooking model top-2 reference
+    // =========================================================================
+
+    /// Verify predict() returns __label__baking and __label__bread as top-2
+    /// for the canonical cooking test query.
+    #[test]
+    fn test_predict_cooking_top2() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let input = "Which baking dish is best to bake a banana bread ?";
+        let preds = model.predict(input, 2, 0.0);
+
+        assert_eq!(preds.len(), 2, "Should return exactly 2 predictions, got {:?}",
+            preds.iter().map(|p| &p.label).collect::<Vec<_>>());
+        assert_eq!(
+            preds[0].label, "__label__baking",
+            "Top-1 should be __label__baking, got '{}'", preds[0].label
+        );
+        assert_eq!(
+            preds[1].label, "__label__bread",
+            "Top-2 should be __label__bread, got '{}'", preds[1].label
+        );
+        // Top-1 probability > top-2 probability
+        assert!(
+            preds[0].prob > preds[1].prob,
+            "Top-1 prob ({}) should be > top-2 prob ({})",
+            preds[0].prob, preds[1].prob
+        );
+    }
+
+    // =========================================================================
+    // VAL-INF-008: predict() probability values match C++
+    // =========================================================================
+
+    /// Verify predicted probabilities match C++ output within 1e-4 absolute tolerance.
+    ///
+    /// C++ reference (predict-prob cooking.model.bin 5):
+    ///   __label__baking    0.706095
+    ///   __label__bread     0.137935
+    ///   __label__equipment 0.0167011
+    ///   __label__muffins   0.0107388
+    ///   __label__oven      0.0095826
+    #[test]
+    fn test_predict_cooking_probabilities() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let input = "Which baking dish is best to bake a banana bread ?";
+        let preds = model.predict(input, 5, 0.0);
+
+        assert!(preds.len() >= 2, "Should return at least 2 predictions");
+
+        // Expected values from C++ reference (exp of log-prob)
+        let expected = [
+            ("__label__baking",    0.706095_f32),
+            ("__label__bread",     0.137935_f32),
+            ("__label__equipment", 0.0167011_f32),
+            ("__label__muffins",   0.0107388_f32),
+            ("__label__oven",      0.0095826_f32),
+        ];
+
+        // Verify at least the first 2 predictions match
+        for (i, &(label, cpp_prob)) in expected.iter().take(2).enumerate() {
+            assert_eq!(
+                preds[i].label, label,
+                "Prediction[{}] label mismatch: expected '{}', got '{}'",
+                i, label, preds[i].label
+            );
+            assert!(
+                (preds[i].prob - cpp_prob).abs() < 1e-4,
+                "Prediction[{}] '{}': prob={} expected={} diff={}",
+                i, label, preds[i].prob, cpp_prob,
+                (preds[i].prob - cpp_prob).abs()
+            );
+        }
+
+        // If we have 5 predictions, check all 5
+        if preds.len() >= 5 {
+            for (i, &(label, cpp_prob)) in expected.iter().enumerate() {
+                assert_eq!(
+                    preds[i].label, label,
+                    "Prediction[{}] label mismatch", i
+                );
+                assert!(
+                    (preds[i].prob - cpp_prob).abs() < 1e-4,
+                    "Prediction[{}] '{}': prob={} expected={} diff={}",
+                    i, label, preds[i].prob, cpp_prob,
+                    (preds[i].prob - cpp_prob).abs()
+                );
+            }
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-009: predict() threshold filtering
+    // =========================================================================
+
+    /// Verify that only predictions with probability >= threshold are returned.
+    #[test]
+    fn test_predict_threshold_filtering() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let input = "Which baking dish is best to bake a banana bread ?";
+
+        // threshold=0.0: all predictions returned (up to k)
+        let preds_all = model.predict(input, 10, 0.0);
+        assert!(!preds_all.is_empty(), "threshold=0.0 should return predictions");
+        for p in &preds_all {
+            assert!(p.prob >= 0.0, "All probs should be >= 0.0");
+        }
+
+        // threshold=0.5: only high-confidence predictions
+        let preds_half = model.predict(input, 10, 0.5);
+        for p in &preds_half {
+            assert!(
+                p.prob >= 0.5,
+                "All probs should be >= 0.5 when threshold=0.5, got {}",
+                p.prob
+            );
+        }
+        // The top prediction (baking, ~0.706) should be above 0.5
+        assert!(
+            !preds_half.is_empty(),
+            "At least one prediction should have prob >= 0.5"
+        );
+        assert_eq!(
+            preds_half[0].label, "__label__baking",
+            "Top prediction above 0.5 threshold should be __label__baking"
+        );
+
+        // threshold=1.0: no predictions should be returned (softmax prob < 1 generally)
+        let preds_max = model.predict(input, 10, 1.0);
+        for p in &preds_max {
+            assert!(
+                p.prob >= 1.0,
+                "All probs should be >= 1.0 when threshold=1.0, got {}",
+                p.prob
+            );
+        }
+
+        // Verify threshold filtering: preds with high threshold is subset of low threshold
+        let preds_low = model.predict(input, 100, 0.01);
+        let preds_high = model.predict(input, 100, 0.1);
+        assert!(
+            preds_high.len() <= preds_low.len(),
+            "Higher threshold should return fewer or equal predictions"
+        );
+        // All preds_high labels should appear in preds_low
+        for p in &preds_high {
+            assert!(
+                p.prob >= 0.1,
+                "High threshold result should have prob >= 0.1, got {}",
+                p.prob
+            );
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-010: predict() edge cases
+    // =========================================================================
+
+    /// Empty string input returns empty predictions without panic.
+    #[test]
+    fn test_predict_empty_input() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let preds = model.predict("", 5, 0.0);
+        assert!(preds.is_empty(), "Empty input should return empty predictions");
+    }
+
+    /// Whitespace-only input returns empty predictions without panic.
+    #[test]
+    fn test_predict_whitespace_only() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let preds = model.predict("   \t  \n  ", 5, 0.0);
+        assert!(preds.is_empty(), "Whitespace-only input should return empty predictions");
+    }
+
+    /// k=0 returns empty predictions without panic.
+    #[test]
+    fn test_predict_k_zero() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let preds = model.predict("Which baking dish is best?", 0, 0.0);
+        assert!(preds.is_empty(), "k=0 should return empty predictions");
+    }
+
+    /// k > nlabels returns at most nlabels predictions.
+    #[test]
+    fn test_predict_k_large() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let nlabels = model.dict().nlabels() as usize;
+        let very_large_k = nlabels + 10000;
+        let preds = model.predict("Which baking dish is best?", very_large_k, 0.0);
+        assert!(
+            preds.len() <= nlabels,
+            "k > nlabels should return at most nlabels={} predictions, got {}",
+            nlabels, preds.len()
+        );
+    }
+
+    /// Negative threshold is treated as 0 (no threshold filtering).
+    #[test]
+    fn test_predict_negative_threshold() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let input = "Which baking dish is best to bake a banana bread ?";
+        let preds_zero = model.predict(input, 5, 0.0);
+        let preds_neg = model.predict(input, 5, -1.0);
+
+        // Negative threshold should return same as 0 threshold
+        assert_eq!(
+            preds_zero.len(),
+            preds_neg.len(),
+            "Negative threshold should return same count as threshold=0"
+        );
+        for (p1, p2) in preds_zero.iter().zip(preds_neg.iter()) {
+            assert_eq!(p1.label, p2.label, "Labels should match");
+            assert_eq!(p1.prob.to_bits(), p2.prob.to_bits(), "Probs should match");
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-011: predict_on_words() matches predict()
+    // =========================================================================
+
+    /// Verify predict_on_words produces identical results to predict for same input.
+    #[test]
+    fn test_predict_on_words_matches_predict() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let input = "Which baking dish is best to bake a banana bread ?";
+
+        // Get word IDs via tokenization (same as what predict() uses internally,
+        // including EOS to match C++ predictLine behavior).
+        let mut words: Vec<i32> = Vec::new();
+        let mut labels: Vec<i32> = Vec::new();
+        model.dict().get_line_from_str(input, &mut words, &mut labels);
+        assert!(!words.is_empty(), "Should produce word IDs");
+        // Add EOS just like predict() does
+        let eos_id = model.dict().get_id(EOS);
+        if eos_id >= 0 {
+            words.push(eos_id);
+        }
+
+        let preds_text = model.predict(input, 5, 0.0);
+        let preds_words = model.predict_on_words(&words, 5, 0.0);
+
+        assert_eq!(
+            preds_text.len(),
+            preds_words.len(),
+            "predict and predict_on_words should return same number of predictions"
+        );
+        for (p1, p2) in preds_text.iter().zip(preds_words.iter()) {
+            assert_eq!(p1.label, p2.label, "Labels should match exactly");
+            assert_eq!(
+                p1.prob.to_bits(),
+                p2.prob.to_bits(),
+                "Probabilities should be bitwise equal"
+            );
+        }
+    }
+
+    /// predict_on_words with empty slice returns empty.
+    #[test]
+    fn test_predict_on_words_empty() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let preds = model.predict_on_words(&[], 5, 0.0);
+        assert!(preds.is_empty(), "Empty word IDs should return empty predictions");
+    }
+
+    /// predict_on_words with k=0 returns empty.
+    #[test]
+    fn test_predict_on_words_k_zero() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let preds = model.predict_on_words(&[0, 1, 2], 0, 0.0);
+        assert!(preds.is_empty(), "k=0 should return empty predictions");
+    }
+
+    // =========================================================================
+    // VAL-INF-018: Prediction determinism
+    // =========================================================================
+
+    /// Verify 10 identical calls to predict() return bit-identical results.
+    #[test]
+    fn test_predict_determinism() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let input = "Which baking dish is best to bake a banana bread ?";
+
+        let first = model.predict(input, 5, 0.0);
+        assert!(!first.is_empty(), "Should produce predictions");
+
+        for i in 1..10 {
+            let preds = model.predict(input, 5, 0.0);
+            assert_eq!(
+                preds.len(), first.len(),
+                "Call {} prediction count should match", i
+            );
+            for (j, (p1, p2)) in first.iter().zip(preds.iter()).enumerate() {
+                assert_eq!(
+                    p1.label, p2.label,
+                    "Call {} prediction[{}] label should be identical", i, j
+                );
+                assert_eq!(
+                    p1.prob.to_bits(), p2.prob.to_bits(),
+                    "Call {} prediction[{}] prob should be bit-identical: {} vs {}",
+                    i, j, p1.prob, p2.prob
+                );
+            }
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-019: Thread safety for concurrent prediction
+    // =========================================================================
+
+    /// Verify that concurrent predict() calls via Arc<FastText> work correctly.
+    ///
+    /// Spawns 8 threads, each calling predict() 10 times. All results must
+    /// match the single-threaded reference result.
+    #[test]
+    fn test_predict_thread_safety() {
+        use std::thread;
+
+        let model = Arc::new(
+            FastText::load_model(COOKING_MODEL).expect("Should load cooking model")
+        );
+        let input = "Which baking dish is best to bake a banana bread ?";
+
+        // Get reference result single-threaded
+        let reference = model.predict(input, 5, 0.0);
+        assert!(!reference.is_empty(), "Reference should have predictions");
+
+        let reference = Arc::new(reference);
+        let n_threads = 8;
+        let n_calls = 10;
+        let mut handles = Vec::new();
+
+        for thread_id in 0..n_threads {
+            let model = Arc::clone(&model);
+            let reference = Arc::clone(&reference);
+            let input = input.to_string();
+            let handle = thread::spawn(move || {
+                for call in 0..n_calls {
+                    let preds = model.predict(&input, 5, 0.0);
+                    assert_eq!(
+                        preds.len(), reference.len(),
+                        "Thread {} call {}: prediction count mismatch",
+                        thread_id, call
+                    );
+                    for (j, (p, r)) in preds.iter().zip(reference.iter()).enumerate() {
+                        assert_eq!(
+                            p.label, r.label,
+                            "Thread {} call {}: prediction[{}] label mismatch: '{}' vs '{}'",
+                            thread_id, call, j, p.label, r.label
+                        );
+                        assert_eq!(
+                            p.prob.to_bits(), r.prob.to_bits(),
+                            "Thread {} call {}: prediction[{}] prob mismatch: {} vs {}",
+                            thread_id, call, j, p.prob, r.prob
+                        );
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-020: Prediction probabilities validity
+    // =========================================================================
+
+    /// Verify all predicted probabilities are in [0.0, 1.0] and not NaN/Inf.
+    #[test]
+    fn test_predict_probability_validity() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+
+        let test_inputs = [
+            "Which baking dish is best to bake a banana bread ?",
+            "how to make pasta at home",
+            "best knife for cutting vegetables",
+            "what temperature to bake chicken",
+            "how long to boil eggs",
+            "substitute for buttermilk",
+        ];
+
+        for input in &test_inputs {
+            let preds = model.predict(input, 10, 0.0);
+            assert!(!preds.is_empty(), "Should have predictions for: {}", input);
+            for p in &preds {
+                assert!(
+                    p.prob.is_finite(),
+                    "Probability should be finite for '{}': got {}",
+                    input, p.prob
+                );
+                assert!(
+                    p.prob >= 0.0,
+                    "Probability should be >= 0.0 for '{}': got {}",
+                    input, p.prob
+                );
+                assert!(
+                    p.prob <= 1.0 + 1e-5,
+                    "Probability should be <= 1.0 for '{}': got {}",
+                    input, p.prob
+                );
+            }
+            // Probabilities should be sorted descending
+            for i in 1..preds.len() {
+                assert!(
+                    preds[i-1].prob >= preds[i].prob,
+                    "Predictions should be sorted descending by prob for '{}': {} < {}",
+                    input, preds[i-1].prob, preds[i].prob
+                );
+            }
+        }
+    }
 }
+
