@@ -69,13 +69,7 @@ impl QuantMatrix {
     /// - `qnorm` controls whether row norms are separately quantized.
     ///
     /// Matches C++ `QuantMatrix::QuantMatrix(DenseMatrix&&, int32_t, bool)`.
-    pub fn from_dense(
-        data: &[f32],
-        m: i64,
-        n: i64,
-        dsub: i32,
-        qnorm: bool,
-    ) -> Self {
+    pub fn from_dense(data: &[f32], m: i64, n: i64, dsub: i32, qnorm: bool) -> Self {
         let nsubq = if n % dsub as i64 == 0 {
             n / dsub as i64
         } else {
@@ -142,7 +136,10 @@ impl QuantMatrix {
     #[inline]
     fn norm_for_row(&self, i: usize) -> f32 {
         if self.qnorm {
-            let norm_codes = self.norm_codes.as_ref().expect("norm_codes must exist when qnorm=true");
+            let norm_codes = self
+                .norm_codes
+                .as_ref()
+                .expect("norm_codes must exist when qnorm=true");
             let npq = self.npq.as_ref().expect("npq must exist when qnorm=true");
             npq.get_centroids(0, norm_codes[i])[0]
         } else {
@@ -199,7 +196,11 @@ impl Matrix for QuantMatrix {
     /// When `qnorm=true`, the scale is further multiplied by the quantized norm.
     /// Matches C++ `QuantMatrix::addRowToVector(x, i, a)`.
     fn add_row_to_vector(&self, x: &mut Vector, i: i32, scale: f32) {
-        assert!(i >= 0 && (i as i64) < self.m, "Row index out of bounds: {}", i);
+        assert!(
+            i >= 0 && (i as i64) < self.m,
+            "Row index out of bounds: {}",
+            i
+        );
         let norm = self.norm_for_row(i as usize);
         self.pq.addcode(x, &self.codes, i, scale * norm);
     }
@@ -240,7 +241,10 @@ impl Matrix for QuantMatrix {
         writer.write_all(&self.codes)?;
         self.pq.save(writer)?;
         if self.qnorm {
-            let norm_codes = self.norm_codes.as_ref().expect("norm_codes must exist when qnorm=true");
+            let norm_codes = self
+                .norm_codes
+                .as_ref()
+                .expect("norm_codes must exist when qnorm=true");
             writer.write_all(norm_codes)?;
             let npq = self.npq.as_ref().expect("npq must exist when qnorm=true");
             npq.save(writer)?;
@@ -418,7 +422,12 @@ mod tests {
 
         for i in 0..4i64 {
             let result = qm.dot_row(&x, i).expect("dot_row should succeed");
-            assert!((result - 3.0).abs() < 1e-6, "row {}: expected 3.0, got {}", i, result);
+            assert!(
+                (result - 3.0).abs() < 1e-6,
+                "row {}: expected 3.0, got {}",
+                i,
+                result
+            );
         }
     }
 
@@ -459,7 +468,7 @@ mod tests {
         let mut x = Vector::new(4);
         qm.add_row_to_vector(&mut x, 0, 1.0); // adds [1,0,2,0]
         qm.add_row_to_vector(&mut x, 1, 1.0); // adds [1,0,0,2]
-        // total: [2,0,2,2]
+                                              // total: [2,0,2,2]
         assert!((x[0] - 2.0).abs() < 1e-6);
         assert!((x[1] - 0.0).abs() < 1e-6);
         assert!((x[2] - 2.0).abs() < 1e-6);
@@ -689,7 +698,11 @@ mod tests {
 
             let mut recon = Vector::new(4);
             qm.add_row_to_vector(&mut recon, i as i32, 1.0);
-            let manual_dot: f32 = x_data.iter().zip(recon.data().iter()).map(|(&a, &b)| a * b).sum();
+            let manual_dot: f32 = x_data
+                .iter()
+                .zip(recon.data().iter())
+                .map(|(&a, &b)| a * b)
+                .sum();
 
             assert!(
                 (dot_result - manual_dot).abs() < 1e-6,
@@ -712,9 +725,7 @@ mod tests {
         let m = 300i64;
         let n = 4i64;
         let dsub = 2i32;
-        let data: Vec<f32> = (0..m * n)
-            .map(|i| (i as f32 * 0.001).sin())
-            .collect();
+        let data: Vec<f32> = (0..m * n).map(|i| (i as f32 * 0.001).sin()).collect();
 
         let qm = QuantMatrix::from_dense(&data, m, n, dsub, false);
         assert_eq!(qm.rows(), m);
@@ -731,9 +742,7 @@ mod tests {
         let m = 300i64;
         let n = 4i64;
         let dsub = 2i32;
-        let data: Vec<f32> = (0..m * n)
-            .map(|i| (i as f32 * 0.01).cos() + 0.5)
-            .collect();
+        let data: Vec<f32> = (0..m * n).map(|i| (i as f32 * 0.01).cos() + 0.5).collect();
 
         let qm = QuantMatrix::from_dense(&data, m, n, dsub, true);
         assert_eq!(qm.rows(), m);
@@ -751,11 +760,11 @@ mod tests {
     fn test_qm_load_negative_dims_rejected() {
         // Negative m or n should produce InvalidModel error.
         let mut buf = Vec::new();
-        write_bool(&mut buf, false).unwrap();           // qnorm
-        utils::write_i64(&mut buf, -1).unwrap();        // m (invalid)
-        utils::write_i64(&mut buf, 4).unwrap();         // n
-        utils::write_i32(&mut buf, 0).unwrap();         // codesize
-        // PQ data would follow, but we expect an error before that.
+        write_bool(&mut buf, false).unwrap(); // qnorm
+        utils::write_i64(&mut buf, -1).unwrap(); // m (invalid)
+        utils::write_i64(&mut buf, 4).unwrap(); // n
+        utils::write_i32(&mut buf, 0).unwrap(); // codesize
+                                                // PQ data would follow, but we expect an error before that.
         let mut cursor = Cursor::new(&buf);
         let result = QuantMatrix::load(&mut cursor);
         assert!(result.is_err(), "Expected error for negative m");
@@ -765,9 +774,9 @@ mod tests {
     fn test_qm_load_negative_codesize_rejected() {
         let mut buf = Vec::new();
         write_bool(&mut buf, false).unwrap();
-        utils::write_i64(&mut buf, 4).unwrap();         // m
-        utils::write_i64(&mut buf, 4).unwrap();         // n
-        utils::write_i32(&mut buf, -1).unwrap();        // codesize (invalid)
+        utils::write_i64(&mut buf, 4).unwrap(); // m
+        utils::write_i64(&mut buf, 4).unwrap(); // n
+        utils::write_i32(&mut buf, -1).unwrap(); // codesize (invalid)
         let mut cursor = Cursor::new(&buf);
         let result = QuantMatrix::load(&mut cursor);
         assert!(result.is_err(), "Expected error for negative codesize");

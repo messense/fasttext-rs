@@ -150,14 +150,7 @@ fn estep(x: &[f32], centroids: &[f32], codes: &mut [u8], d: usize, n: usize) {
 /// M-step: recompute `centroids` (shape `KSUB × d`) as the mean of assigned
 /// points. Empty clusters are filled by splitting the largest cluster with a
 /// small perturbation, using `rng` for random tie-breaking.
-fn mstep(
-    rng: &mut Minstd,
-    x: &[f32],
-    centroids: &mut [f32],
-    codes: &[u8],
-    d: usize,
-    n: usize,
-) {
+fn mstep(rng: &mut Minstd, x: &[f32], centroids: &mut [f32], codes: &[u8], d: usize, n: usize) {
     let ksub = KSUB as usize;
     let mut nelts = vec![0i32; ksub];
 
@@ -394,7 +387,12 @@ impl ProductQuantizer {
             let xi = &x[m * dsub..m * dsub + d];
             // All KSUB centroids for sub-quantizer m are contiguous starting at cstart.
             let cstart = m * ksub * dsub;
-            assign_centroid(xi, &self.centroids[cstart..cstart + ksub * d], &mut code[m], d);
+            assign_centroid(
+                xi,
+                &self.centroids[cstart..cstart + ksub * d],
+                &mut code[m],
+                d,
+            );
         }
     }
 
@@ -407,7 +405,10 @@ impl ProductQuantizer {
         let dim = self.dim as usize;
         let nsubq = self.nsubq as usize;
         for i in 0..n {
-            self.compute_code(&x[i * dim..(i + 1) * dim], &mut codes[i * nsubq..(i + 1) * nsubq]);
+            self.compute_code(
+                &x[i * dim..(i + 1) * dim],
+                &mut codes[i * nsubq..(i + 1) * nsubq],
+            );
         }
     }
 
@@ -805,7 +806,11 @@ mod tests {
         // Compute dot product with addcode reconstruction.
         let mut recon = Vector::new(4);
         pq.addcode(&mut recon, &codes, 0, 1.0);
-        let dot: f32 = x_data.iter().zip(recon.data().iter()).map(|(&a, &b)| a * b).sum();
+        let dot: f32 = x_data
+            .iter()
+            .zip(recon.data().iter())
+            .map(|(&a, &b)| a * b)
+            .sum();
 
         assert!(
             (mul_result - dot).abs() < 1e-6,
@@ -925,7 +930,7 @@ mod tests {
         let mut pq = ProductQuantizer::new(4, 2);
         let data = vec![0.0f32; 4 * 4]; // only 4 rows
         pq.train(4, &data); // should not panic
-        // Centroids remain zero.
+                            // Centroids remain zero.
         assert!(pq.centroids.iter().all(|&v| v == 0.0));
     }
 

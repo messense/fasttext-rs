@@ -227,12 +227,7 @@ mod tests {
         }
         // f32 edge values
         for &val in &[0.0f32, -1.0, 1.0, f32::MAX, f32::MIN, f32::MIN_POSITIVE] {
-            assert_eq!(
-                roundtrip_f32(val),
-                val,
-                "f32 roundtrip failed for {}",
-                val
-            );
+            assert_eq!(roundtrip_f32(val), val, "f32 roundtrip failed for {}", val);
         }
         assert_eq!(roundtrip_f32(f32::INFINITY), f32::INFINITY);
         assert_eq!(roundtrip_f32(f32::NEG_INFINITY), f32::NEG_INFINITY);
@@ -240,12 +235,7 @@ mod tests {
 
         // f64 edge values
         for &val in &[0.0f64, -1.0, 1.0, f64::MAX, f64::MIN, f64::MIN_POSITIVE] {
-            assert_eq!(
-                roundtrip_f64(val),
-                val,
-                "f64 roundtrip failed for {}",
-                val
-            );
+            assert_eq!(roundtrip_f64(val), val, "f64 roundtrip failed for {}", val);
         }
         assert_eq!(roundtrip_f64(f64::INFINITY), f64::INFINITY);
         assert_eq!(roundtrip_f64(f64::NEG_INFINITY), f64::NEG_INFINITY);
@@ -290,25 +280,37 @@ mod tests {
         // Single byte 0x80: signed=-128, unsigned=128
         let h_signed = hash(&[0x80]);
         let h_unsigned = hash_unsigned(&[0x80]);
-        assert_ne!(h_signed, h_unsigned, "0x80 should differ between signed and unsigned paths");
+        assert_ne!(
+            h_signed, h_unsigned,
+            "0x80 should differ between signed and unsigned paths"
+        );
         assert_eq!(h_signed, 83079839, "hash([0x80]) with signed extension");
 
         // Single byte 0xFF: signed=-1, unsigned=255
         let h_signed = hash(&[0xFF]);
         let h_unsigned = hash_unsigned(&[0xFF]);
-        assert_ne!(h_signed, h_unsigned, "0xFF should differ between signed and unsigned paths");
+        assert_ne!(
+            h_signed, h_unsigned,
+            "0xFF should differ between signed and unsigned paths"
+        );
         assert_eq!(h_signed, 4193493326, "hash([0xFF]) with signed extension");
 
         // Single byte 0xFE: signed=-2, unsigned=254
         let h_signed = hash(&[0xFE]);
         let h_unsigned = hash_unsigned(&[0xFE]);
-        assert_ne!(h_signed, h_unsigned, "0xFE should differ between signed and unsigned paths");
+        assert_ne!(
+            h_signed, h_unsigned,
+            "0xFE should differ between signed and unsigned paths"
+        );
         assert_eq!(h_signed, 4210270945, "hash([0xFE]) with signed extension");
 
         // Single byte 0xC0: signed=-64, unsigned=192
         let h_signed = hash(&[0xC0]);
         let h_unsigned = hash_unsigned(&[0xC0]);
-        assert_ne!(h_signed, h_unsigned, "0xC0 should differ between signed and unsigned paths");
+        assert_ne!(
+            h_signed, h_unsigned,
+            "0xC0 should differ between signed and unsigned paths"
+        );
         assert_eq!(h_signed, 3304279519, "hash([0xC0]) with signed extension");
     }
 

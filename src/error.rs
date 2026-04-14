@@ -96,8 +96,7 @@ mod tests {
 
     #[test]
     fn test_error_source() {
-        let io_err =
-            FastTextError::IoError(io::Error::new(io::ErrorKind::NotFound, "not found"));
+        let io_err = FastTextError::IoError(io::Error::new(io::ErrorKind::NotFound, "not found"));
         assert!(io_err.source().is_some());
 
         let arg_err = FastTextError::InvalidArgument("bad".to_string());

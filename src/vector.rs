@@ -397,9 +397,18 @@ fn add_vector_simd_sse2(dest: &mut [f32], src: &[f32], scale: f32) {
             let s2 = _mm_loadu_ps(s_ptr.add(offset + 8));
             let s3 = _mm_loadu_ps(s_ptr.add(offset + 12));
             vst(d_ptr.add(offset), _mm_add_ps(d0, _mm_mul_ps(scale_v, s0)));
-            vst(d_ptr.add(offset + 4), _mm_add_ps(d1, _mm_mul_ps(scale_v, s1)));
-            vst(d_ptr.add(offset + 8), _mm_add_ps(d2, _mm_mul_ps(scale_v, s2)));
-            vst(d_ptr.add(offset + 12), _mm_add_ps(d3, _mm_mul_ps(scale_v, s3)));
+            vst(
+                d_ptr.add(offset + 4),
+                _mm_add_ps(d1, _mm_mul_ps(scale_v, s1)),
+            );
+            vst(
+                d_ptr.add(offset + 8),
+                _mm_add_ps(d2, _mm_mul_ps(scale_v, s2)),
+            );
+            vst(
+                d_ptr.add(offset + 12),
+                _mm_add_ps(d3, _mm_mul_ps(scale_v, s3)),
+            );
         }
 
         // Handle remainder

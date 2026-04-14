@@ -557,17 +557,11 @@ impl Args {
         self.word_ngrams = utils::read_i32(reader)?;
         let loss_val = utils::read_i32(reader)?;
         self.loss = LossName::from_i32(loss_val).ok_or_else(|| {
-            crate::error::FastTextError::InvalidModel(format!(
-                "Invalid loss value: {}",
-                loss_val
-            ))
+            crate::error::FastTextError::InvalidModel(format!("Invalid loss value: {}", loss_val))
         })?;
         let model_val = utils::read_i32(reader)?;
         self.model = ModelName::from_i32(model_val).ok_or_else(|| {
-            crate::error::FastTextError::InvalidModel(format!(
-                "Invalid model value: {}",
-                model_val
-            ))
+            crate::error::FastTextError::InvalidModel(format!("Invalid model value: {}", model_val))
         })?;
         self.bucket = utils::read_i32(reader)?;
         self.minn = utils::read_i32(reader)?;

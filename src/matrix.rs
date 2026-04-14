@@ -82,10 +82,8 @@ unsafe impl Sync for DenseMatrix {}
 /// product overflows `usize`.
 #[inline]
 fn checked_dim_size(m: i64, n: i64) -> usize {
-    let m_u = usize::try_from(m)
-        .expect("DenseMatrix row count (m) must be non-negative");
-    let n_u = usize::try_from(n)
-        .expect("DenseMatrix column count (n) must be non-negative");
+    let m_u = usize::try_from(m).expect("DenseMatrix row count (m) must be non-negative");
+    let n_u = usize::try_from(n).expect("DenseMatrix column count (n) must be non-negative");
     m_u.checked_mul(n_u)
         .expect("DenseMatrix dimensions m*n overflow usize")
 }
@@ -201,7 +199,11 @@ impl DenseMatrix {
         // Process blocks (matching C++ uniformThread with single thread)
         for block in 0..10 {
             let start = block_size * block;
-            let end = if block == 9 { total } else { (block_size * (block + 1)).min(total) };
+            let end = if block == 9 {
+                total
+            } else {
+                (block_size * (block + 1)).min(total)
+            };
             // Use minstd_rand equivalent: LCG with a=48271, c=0, m=2^31-1
             let mut rng_state = (block as u32).wrapping_add(seed as u32);
             // Seed the LCG
@@ -1737,13 +1739,7 @@ mod tests {
         assert_eq!(loaded.cols(), 4);
         for i in 0..3 {
             for j in 0..4 {
-                assert_eq!(
-                    loaded.at(i, j),
-                    m.at(i, j),
-                    "Mismatch at ({}, {})",
-                    i,
-                    j,
-                );
+                assert_eq!(loaded.at(i, j), m.at(i, j), "Mismatch at ({}, {})", i, j,);
             }
         }
     }
@@ -1817,10 +1813,7 @@ mod tests {
 
         // Check not all zeros (should have some non-zero values)
         let non_zero_count = data.iter().filter(|&&v| v != 0.0).count();
-        assert!(
-            non_zero_count > 0,
-            "All values are zero after uniform init"
-        );
+        assert!(non_zero_count > 0, "All values are zero after uniform init");
     }
 
     #[test]
@@ -2009,9 +2002,7 @@ mod tests {
             let row1 = m.row(1);
             let avx2_dot = unsafe { dot_simd_avx2(row1, v.data()) };
             let scalar_dot = dot_scalar(row1, v.data());
-            let tolerance = scalar_dot.abs().max(avx2_dot.abs()).max(1.0)
-                * f32::EPSILON
-                * n as f32;
+            let tolerance = scalar_dot.abs().max(avx2_dot.abs()).max(1.0) * f32::EPSILON * n as f32;
             assert!(
                 (avx2_dot - scalar_dot).abs() < tolerance,
                 "dot_simd_avx2 vs scalar mismatch for dim={}: AVX2={}, scalar={}",

@@ -372,11 +372,11 @@ mod tests {
         utils::write_i32(&mut buf, 1).unwrap(); // nlabels
         utils::write_i64(&mut buf, 10).unwrap(); // ntokens
         utils::write_i64(&mut buf, -1i64).unwrap(); // pruneidx_size = -1 (not pruned)
-        // Entry 0: </s>, count=5, type=0 (word)
+                                                    // Entry 0: </s>, count=5, type=0 (word)
         buf.extend_from_slice(b"</s>\0");
         utils::write_i64(&mut buf, 5).unwrap();
         buf.push(0u8); // EntryType::Word
-        // Entry 1: __label__test, count=5, type=1 (label)
+                       // Entry 1: __label__test, count=5, type=1 (label)
         buf.extend_from_slice(b"__label__test\0");
         utils::write_i64(&mut buf, 5).unwrap();
         buf.push(1u8); // EntryType::Label
@@ -414,7 +414,11 @@ mod tests {
         let buf = make_minimal_model_bytes();
         let mut cursor = Cursor::new(&buf);
         let result = FastText::load(&mut cursor);
-        assert!(result.is_ok(), "Valid model should load: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Valid model should load: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -533,17 +537,11 @@ mod tests {
         let words = dict.words();
         assert_eq!(words[0].word, "</s>");
         assert_eq!(words[0].count, 5);
-        assert_eq!(
-            words[0].entry_type,
-            crate::dictionary::EntryType::Word
-        );
+        assert_eq!(words[0].entry_type, crate::dictionary::EntryType::Word);
 
         assert_eq!(words[1].word, "__label__test");
         assert_eq!(words[1].count, 5);
-        assert_eq!(
-            words[1].entry_type,
-            crate::dictionary::EntryType::Label
-        );
+        assert_eq!(words[1].entry_type, crate::dictionary::EntryType::Label);
 
         // Verify word lookup works
         assert_eq!(dict.get_id("</s>"), 0);
@@ -564,14 +562,30 @@ mod tests {
         let input = model.input_matrix();
         assert_eq!(input.rows(), 1);
         assert_eq!(input.cols(), 2);
-        assert!((input.at(0, 0) - 0.1).abs() < 1e-6, "input[0,0] = {}", input.at(0, 0));
-        assert!((input.at(0, 1) - 0.2).abs() < 1e-6, "input[0,1] = {}", input.at(0, 1));
+        assert!(
+            (input.at(0, 0) - 0.1).abs() < 1e-6,
+            "input[0,0] = {}",
+            input.at(0, 0)
+        );
+        assert!(
+            (input.at(0, 1) - 0.2).abs() < 1e-6,
+            "input[0,1] = {}",
+            input.at(0, 1)
+        );
 
         let output = model.output_matrix();
         assert_eq!(output.rows(), 1);
         assert_eq!(output.cols(), 2);
-        assert!((output.at(0, 0) - 0.5).abs() < 1e-6, "output[0,0] = {}", output.at(0, 0));
-        assert!((output.at(0, 1) - (-0.5)).abs() < 1e-6, "output[0,1] = {}", output.at(0, 1));
+        assert!(
+            (output.at(0, 0) - 0.5).abs() < 1e-6,
+            "output[0,0] = {}",
+            output.at(0, 0)
+        );
+        assert!(
+            (output.at(0, 1) - (-0.5)).abs() < 1e-6,
+            "output[0,1] = {}",
+            output.at(0, 1)
+        );
     }
 
     #[test]
@@ -625,8 +639,7 @@ mod tests {
 
     #[test]
     fn test_load_cooking_model_args() {
-        let model = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let args = model.args();
         // From C++ `dump args` reference output
@@ -651,8 +664,7 @@ mod tests {
 
     #[test]
     fn test_load_cooking_model_vocab() {
-        let model = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let dict = model.dict();
         assert_eq!(
@@ -667,17 +679,12 @@ mod tests {
             "Should have 735 labels, got {}",
             dict.nlabels()
         );
-        assert_eq!(
-            dict.size(),
-            14543 + 735,
-            "Total size should be 15278"
-        );
+        assert_eq!(dict.size(), 14543 + 735, "Total size should be 15278");
     }
 
     #[test]
     fn test_load_cooking_model_first_entry() {
-        let model = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let dict = model.dict();
         let words = dict.words();
@@ -689,16 +696,12 @@ mod tests {
             "First word frequency should be 12404, got {}",
             words[0].count
         );
-        assert_eq!(
-            words[0].entry_type,
-            crate::dictionary::EntryType::Word
-        );
+        assert_eq!(words[0].entry_type, crate::dictionary::EntryType::Word);
     }
 
     #[test]
     fn test_load_cooking_model_first_label() {
-        let model = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let dict = model.dict();
         // First label should be __label__baking with freq 1156
@@ -721,8 +724,7 @@ mod tests {
 
     #[test]
     fn test_load_cooking_model_matrices() {
-        let model = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         // Input matrix: nwords × dim (no subwords since maxn=0, bucket=0)
         let input = model.input_matrix();
@@ -735,13 +737,15 @@ mod tests {
         assert_eq!(output.cols(), 100, "Output cols should be dim=100");
 
         // Matrices should not be quantized
-        assert!(!model.is_quant(), "cooking.model.bin should not be quantized");
+        assert!(
+            !model.is_quant(),
+            "cooking.model.bin should not be quantized"
+        );
     }
 
     #[test]
     fn test_load_cooking_model_word_lookup() {
-        let model = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let dict = model.dict();
 
@@ -749,8 +753,14 @@ mod tests {
         assert_eq!(dict.get_id("</s>"), 0, "EOS should be at index 0");
 
         // Known words should be findable
-        assert!(dict.get_id("baking") >= 0, "'baking' should be in vocabulary");
-        assert!(dict.get_id("banana") >= 0, "'banana' should be in vocabulary");
+        assert!(
+            dict.get_id("baking") >= 0,
+            "'baking' should be in vocabulary"
+        );
+        assert!(
+            dict.get_id("banana") >= 0,
+            "'banana' should be in vocabulary"
+        );
 
         // Unknown words should return -1
         assert_eq!(
@@ -926,18 +936,17 @@ mod tests {
         for i in 0..w1.len() {
             assert_eq!(w1[i].word, w2[i].word, "Word {} mismatch", i);
             assert_eq!(w1[i].count, w2[i].count, "Count {} mismatch", i);
-            assert_eq!(
-                w1[i].entry_type, w2[i].entry_type,
-                "Type {} mismatch",
-                i
-            );
+            assert_eq!(w1[i].entry_type, w2[i].entry_type, "Type {} mismatch", i);
         }
     }
 
     #[test]
     fn test_model_is_quant_false_for_bin() {
         let model = FastText::load_model(COOKING_MODEL).unwrap();
-        assert!(!model.is_quant(), "cooking.model.bin should not be quantized");
+        assert!(
+            !model.is_quant(),
+            "cooking.model.bin should not be quantized"
+        );
     }
 
     // =========================================================================
@@ -950,7 +959,11 @@ mod tests {
         let buf = make_minimal_model_bytes();
         let mut cursor = Cursor::new(&buf);
         let result = FastText::load(&mut cursor);
-        assert!(result.is_ok(), "Valid magic+v12 should load: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Valid magic+v12 should load: {:?}",
+            result.err()
+        );
 
         // Wrong magic
         let mut bad_magic = buf.clone();
@@ -979,7 +992,11 @@ mod tests {
         v11[6] = v[2];
         v11[7] = v[3];
         let result = FastText::load(&mut Cursor::new(v11));
-        assert!(result.is_ok(), "Version 11 should be accepted: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Version 11 should be accepted: {:?}",
+            result.err()
+        );
     }
 
     // =========================================================================
@@ -994,8 +1011,7 @@ mod tests {
         // ------------------------------------------------------------------
         // 1. Load the reference model.
         // ------------------------------------------------------------------
-        let model1 = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model1 = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let test_input = "Which baking dish is best to bake a banana bread ?";
 
@@ -1127,11 +1143,7 @@ mod tests {
         // Verify all vocabulary entries (word string, frequency, entry type).
         let words1 = model1.dict().words();
         let words2 = model2.dict().words();
-        assert_eq!(
-            words1.len(),
-            words2.len(),
-            "words vec length should match"
-        );
+        assert_eq!(words1.len(), words2.len(), "words vec length should match");
         for (i, (w1, w2)) in words1.iter().zip(words2.iter()).enumerate() {
             assert_eq!(
                 w1.word, w2.word,
@@ -1209,8 +1221,7 @@ mod tests {
     /// Verify word vector round-trip for multiple words.
     #[test]
     fn test_word_vectors_roundtrip() {
-        let model1 = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model1 = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         // Save and reload.
         let tmp_path = std::env::temp_dir().join("fasttext_wordvec_roundtrip.bin");
@@ -1242,8 +1253,7 @@ mod tests {
     /// Verify that predictions are deterministic across multiple calls after round-trip.
     #[test]
     fn test_predictions_identical_after_roundtrip() {
-        let model1 = FastText::load_model(COOKING_MODEL)
-            .expect("Should load cooking model");
+        let model1 = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
         let tmp_path = std::env::temp_dir().join("fasttext_pred_roundtrip.bin");
         let tmp_str = tmp_path.to_str().unwrap();

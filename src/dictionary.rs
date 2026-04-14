@@ -284,8 +284,7 @@ impl Dictionary {
 
         while i < bytes.len() {
             let c = bytes[i];
-            let is_ws =
-                matches!(c, b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\0' | b'\r' | b'\n');
+            let is_ws = matches!(c, b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\0' | b'\r' | b'\n');
 
             if is_ws {
                 if word_bytes.is_empty() {
@@ -363,10 +362,8 @@ impl Dictionary {
                 }
                 Ok(_) => {
                     let c = buf[0];
-                    let is_ws = matches!(
-                        c,
-                        b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0'
-                    );
+                    let is_ws =
+                        matches!(c, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0');
 
                     if is_ws {
                         if word.is_empty() {
@@ -410,8 +407,7 @@ impl Dictionary {
         let capacity = self.word2int.len() as i32;
 
         loop {
-            let found =
-                Self::read_word_from_reader(reader, &mut pending_newline, &mut word);
+            let found = Self::read_word_from_reader(reader, &mut pending_newline, &mut word);
             if !found {
                 break;
             }
@@ -450,8 +446,7 @@ impl Dictionary {
         self.pdiscard.resize(self.size as usize, 0.0);
         for i in 0..self.size as usize {
             let f = self.words[i].count as f32 / self.ntokens as f32;
-            self.pdiscard[i] =
-                (self.args.t() as f32 / f).sqrt() + self.args.t() as f32 / f;
+            self.pdiscard[i] = (self.args.t() as f32 / f).sqrt() + self.args.t() as f32 / f;
         }
     }
 
@@ -609,9 +604,7 @@ impl Dictionary {
             let mut h: u64 = hashes[i] as i64 as u64;
             let limit = n_hashes.min(i + n as usize);
             for &hj in &hashes[(i + 1)..limit] {
-                h = h
-                    .wrapping_mul(116049371u64)
-                    .wrapping_add(hj as i64 as u64);
+                h = h.wrapping_mul(116049371u64).wrapping_add(hj as i64 as u64);
                 self.push_hash(line, (h % bucket) as i32);
             }
         }
@@ -915,8 +908,7 @@ impl Dictionary {
         // Write pruneidx pairs if pruneidx_size > 0
         if self.pruneidx_size > 0 {
             // Sort by key for deterministic output (C++ iterates unordered_map arbitrarily)
-            let mut pairs: Vec<(i32, i32)> =
-                self.pruneidx.iter().map(|(&k, &v)| (k, v)).collect();
+            let mut pairs: Vec<(i32, i32)> = self.pruneidx.iter().map(|(&k, &v)| (k, v)).collect();
             pairs.sort_unstable_by_key(|&(k, _)| k);
             for (first, second) in pairs {
                 utils::write_i32(writer, first)?;
@@ -968,9 +960,7 @@ impl Dictionary {
                 word_bytes.push(buf[0]);
             }
             let word = String::from_utf8(word_bytes).map_err(|_| {
-                FastTextError::InvalidModel(
-                    "Invalid UTF-8 in dictionary word".to_string(),
-                )
+                FastTextError::InvalidModel("Invalid UTF-8 in dictionary word".to_string())
             })?;
             let count = utils::read_i64(reader)?;
             let mut type_buf = [0u8; 1];
@@ -1036,8 +1026,8 @@ impl Dictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::args::Args;
+    use std::sync::Arc;
 
     /// Create a default Args reference.
     fn make_args() -> Arc<Args> {
@@ -1056,15 +1046,9 @@ mod tests {
     #[test]
     fn test_tokenize_whitespace() {
         // Space
-        assert_eq!(
-            Dictionary::tokenize("hello world"),
-            vec!["hello", "world"]
-        );
+        assert_eq!(Dictionary::tokenize("hello world"), vec!["hello", "world"]);
         // Tab
-        assert_eq!(
-            Dictionary::tokenize("hello\tworld"),
-            vec!["hello", "world"]
-        );
+        assert_eq!(Dictionary::tokenize("hello\tworld"), vec!["hello", "world"]);
         // Vertical tab (\v = 0x0b)
         assert_eq!(
             Dictionary::tokenize("hello\x0bworld"),
@@ -1076,15 +1060,9 @@ mod tests {
             vec!["hello", "world"]
         );
         // Null byte
-        assert_eq!(
-            Dictionary::tokenize("hello\0world"),
-            vec!["hello", "world"]
-        );
+        assert_eq!(Dictionary::tokenize("hello\0world"), vec!["hello", "world"]);
         // Carriage return (\r)
-        assert_eq!(
-            Dictionary::tokenize("hello\rworld"),
-            vec!["hello", "world"]
-        );
+        assert_eq!(Dictionary::tokenize("hello\rworld"), vec!["hello", "world"]);
         // Multiple consecutive whitespace (collapsed)
         assert_eq!(
             Dictionary::tokenize("hello   world"),
@@ -1124,10 +1102,7 @@ mod tests {
             vec!["hello", EOS, "world"]
         );
         // a \n b pattern
-        assert_eq!(
-            Dictionary::tokenize("a\nb"),
-            vec!["a", EOS, "b"]
-        );
+        assert_eq!(Dictionary::tokenize("a\nb"), vec!["a", EOS, "b"]);
         // Multiple words, then newline
         assert_eq!(
             Dictionary::tokenize("hello world\nfoo bar"),
@@ -1141,7 +1116,13 @@ mod tests {
         let words: Vec<String> = (0..1025).map(|i| format!("word{}", i)).collect();
         let text = words.join(" ");
         let result = Dictionary::tokenize(&text);
-        assert_eq!(result.len(), MAX_LINE_SIZE, "Expected {} tokens, got {}", MAX_LINE_SIZE, result.len());
+        assert_eq!(
+            result.len(),
+            MAX_LINE_SIZE,
+            "Expected {} tokens, got {}",
+            MAX_LINE_SIZE,
+            result.len()
+        );
 
         // The first 1024 words should be present
         for (i, token) in result.iter().enumerate() {
@@ -1280,7 +1261,10 @@ mod tests {
 
         assert!(hello_id >= 0, "hello should be in vocab");
         assert!(world_id >= 0, "world should be in vocab");
-        assert_ne!(hello_id, world_id, "hello and world should have different IDs");
+        assert_ne!(
+            hello_id, world_id,
+            "hello and world should have different IDs"
+        );
         assert_eq!(oov_id, -1, "foo should be OOV");
 
         // Lookup by ID
@@ -1333,10 +1317,18 @@ mod tests {
     fn test_vocab_sorted_order() {
         let mut dict = make_dict();
         // Add words with different frequencies
-        for _ in 0..5 { dict.add("rare"); }      // count 5
-        for _ in 0..10 { dict.add("common"); }  // count 10
-        for _ in 0..3 { dict.add("__label__cat"); } // label count 3
-        for _ in 0..7 { dict.add("__label__dog"); } // label count 7
+        for _ in 0..5 {
+            dict.add("rare");
+        } // count 5
+        for _ in 0..10 {
+            dict.add("common");
+        } // count 10
+        for _ in 0..3 {
+            dict.add("__label__cat");
+        } // label count 3
+        for _ in 0..7 {
+            dict.add("__label__dog");
+        } // label count 7
 
         dict.threshold(1, 1);
 
@@ -1366,8 +1358,8 @@ mod tests {
     #[test]
     fn test_vocab_threshold_filtering() {
         let mut dict = make_dict();
-        dict.add("rare");       // count 1
-        dict.add("common");     // count 2
+        dict.add("rare"); // count 1
+        dict.add("common"); // count 2
         dict.add("common");
         dict.add("__label__a"); // label count 1
         dict.add("__label__b"); // label count 2
@@ -1482,21 +1474,41 @@ mod tests {
         let mut pending = false;
         let mut word = String::new();
 
-        assert!(Dictionary::read_word_from_reader(&mut reader, &mut pending, &mut word));
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
         assert_eq!(word, "hello");
 
-        assert!(Dictionary::read_word_from_reader(&mut reader, &mut pending, &mut word));
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
         assert_eq!(word, "world");
 
         // Newline was pending → EOS
-        assert!(Dictionary::read_word_from_reader(&mut reader, &mut pending, &mut word));
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
         assert_eq!(word, EOS);
 
-        assert!(Dictionary::read_word_from_reader(&mut reader, &mut pending, &mut word));
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
         assert_eq!(word, "foo");
 
         // EOF
-        assert!(!Dictionary::read_word_from_reader(&mut reader, &mut pending, &mut word));
+        assert!(!Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
     }
 
     #[test]
@@ -1541,7 +1553,11 @@ mod tests {
 
         let mut ngrams = Vec::new();
         dict.compute_subwords("<he>", &mut ngrams);
-        assert_eq!(ngrams.len(), 3, "Should have 3 n-grams for '<he>' with minn=3 maxn=4");
+        assert_eq!(
+            ngrams.len(),
+            3,
+            "Should have 3 n-grams for '<he>' with minn=3 maxn=4"
+        );
     }
 
     #[test]
@@ -1605,10 +1621,19 @@ mod tests {
 
         // Verify the n-grams match manual computation.
         let ngram_strings = [
-            "<he", "<hel", "<hell", "<hello",
-            "hel", "hell", "hello", "hello>",
-            "ell", "ello", "ello>",
-            "llo", "llo>",
+            "<he",
+            "<hel",
+            "<hell",
+            "<hello",
+            "hel",
+            "hell",
+            "hello",
+            "hello>",
+            "ell",
+            "ello",
+            "ello>",
+            "llo",
+            "llo>",
             "lo>",
             // Note: "lo" alone would be from i=5 ('o') but 'o' + '>' has only 2 chars → skip
             // Actually wait, from i=4 we also get lo> as shown above
@@ -1697,8 +1722,10 @@ mod tests {
 
         // 1 word ID + 14 n-grams = 15 total.
         assert_eq!(
-            subwords.len(), 15,
-            "Expected 15 subwords for 'hello' (1 word ID + 14 n-grams): got {:?}", subwords
+            subwords.len(),
+            15,
+            "Expected 15 subwords for 'hello' (1 word ID + 14 n-grams): got {:?}",
+            subwords
         );
     }
 
@@ -1762,12 +1789,15 @@ mod tests {
         //   n=3: j=7 >= n_bytes: ends.
         // pos 6 '>': n=1: push '>', j=7=n_bytes → skip (n==1 && j==n_bytes)
         // Total: 2 + 2 + 2 + 2 + 1 = 9 n-grams
-        assert_eq!(ngrams.len(), 9, "Expected 9 n-grams for '<café>' with minn=2 maxn=3");
+        assert_eq!(
+            ngrams.len(),
+            9,
+            "Expected 9 n-grams for '<café>' with minn=2 maxn=3"
+        );
 
         // Verify the n-grams involving 'é' use raw bytes (UTF-8 bytes, not codepoints).
         // The hash of "fé>" should use the raw bytes of é (0xC3, 0xA9).
-        let expected_hash_of_f_e_gt =
-            (crate::utils::hash("fé>".as_bytes()) % 100000) as i32;
+        let expected_hash_of_f_e_gt = (crate::utils::hash("fé>".as_bytes()) % 100000) as i32;
         assert!(
             ngrams.contains(&expected_hash_of_f_e_gt),
             "N-grams should contain hash('fé>') = {}",
@@ -1793,7 +1823,11 @@ mod tests {
         assert!(eos_id >= 0, "EOS should be in vocab");
 
         let subwords = dict.get_subwords(eos_id);
-        assert_eq!(subwords.len(), 1, "EOS should have only 1 entry (its own ID)");
+        assert_eq!(
+            subwords.len(),
+            1,
+            "EOS should have only 1 entry (its own ID)"
+        );
         assert_eq!(subwords[0], eos_id, "EOS subwords[0] should be its own ID");
     }
 
@@ -1831,7 +1865,11 @@ mod tests {
 
         let wid = dict.get_id("hello");
         let subwords = dict.get_subwords(wid);
-        assert_eq!(subwords.len(), 1, "With maxn=0, only word ID should be in subwords");
+        assert_eq!(
+            subwords.len(),
+            1,
+            "With maxn=0, only word ID should be in subwords"
+        );
     }
 
     #[test]
@@ -1841,7 +1879,10 @@ mod tests {
         let dict = Dictionary::new_with_capacity(args, 1024);
         let mut ngrams = Vec::new();
         dict.compute_subwords("<hello>", &mut ngrams);
-        assert!(ngrams.is_empty(), "compute_subwords with bucket=0 should produce nothing");
+        assert!(
+            ngrams.is_empty(),
+            "compute_subwords with bucket=0 should produce nothing"
+        );
     }
 
     #[test]
@@ -1850,7 +1891,10 @@ mod tests {
         let dict = Dictionary::new_with_capacity(args, 1024);
         let mut ngrams = Vec::new();
         dict.compute_subwords("<hello>", &mut ngrams);
-        assert!(ngrams.is_empty(), "compute_subwords with maxn=0 should produce nothing");
+        assert!(
+            ngrams.is_empty(),
+            "compute_subwords with maxn=0 should produce nothing"
+        );
     }
 
     // =========================================================================
@@ -1910,7 +1954,11 @@ mod tests {
         // i=1: j=2 → bigram(h2,h3)
         // i=2: no j available
         // Total: 3 hashes
-        assert_eq!(line.len(), 3, "3 words with wordNgrams=3 should produce 3 hashes");
+        assert_eq!(
+            line.len(),
+            3,
+            "3 words with wordNgrams=3 should produce 3 hashes"
+        );
 
         // Verify bigram (h1, h2):
         let h12 = (h1 as i64 as u64)
@@ -1949,10 +1997,7 @@ mod tests {
         let mut line = Vec::new();
         dict.add_word_ngrams(&mut line, &hashes, 1);
 
-        assert!(
-            line.is_empty(),
-            "wordNgrams=1 should produce no n-grams"
-        );
+        assert!(line.is_empty(), "wordNgrams=1 should produce no n-grams");
     }
 
     #[test]
@@ -2073,9 +2118,18 @@ mod tests {
         assert!(wid >= 0);
 
         // Even with rand=1.0 (which would normally trigger discard), supervised returns false.
-        assert!(!dict.discard(wid, 1.0), "Supervised mode should never discard");
-        assert!(!dict.discard(wid, 0.5), "Supervised mode should never discard");
-        assert!(!dict.discard(wid, 0.0), "Supervised mode should never discard");
+        assert!(
+            !dict.discard(wid, 1.0),
+            "Supervised mode should never discard"
+        );
+        assert!(
+            !dict.discard(wid, 0.5),
+            "Supervised mode should never discard"
+        );
+        assert!(
+            !dict.discard(wid, 0.0),
+            "Supervised mode should never discard"
+        );
     }
 
     #[test]
@@ -2107,9 +2161,15 @@ mod tests {
         );
 
         // With rand=0.5 < pdiscard, discard returns false (not discarded).
-        assert!(!dict.discard(wid, 0.5), "Should not discard rare word with rand=0.5");
+        assert!(
+            !dict.discard(wid, 0.5),
+            "Should not discard rare word with rand=0.5"
+        );
         // With rand=0.99 < pdiscard_rare, discard returns false.
-        assert!(!dict.discard(wid, 0.99), "Should not discard rare word with rand=0.99");
+        assert!(
+            !dict.discard(wid, 0.99),
+            "Should not discard rare word with rand=0.99"
+        );
 
         let _wid_common = dict.get_id("common");
         // "common" has high frequency → low pdiscard.
@@ -2188,7 +2248,11 @@ mod tests {
 
         // Labels should contain the label ID (wid - nwords).
         assert_eq!(labels.len(), 1, "Should have one label");
-        assert_eq!(labels[0], wid_good - nwords, "Label should be __label__good");
+        assert_eq!(
+            labels[0],
+            wid_good - nwords,
+            "Label should be __label__good"
+        );
 
         // Words should contain the word IDs.
         assert_eq!(words.len(), 4, "Should have 4 words");
@@ -2366,14 +2430,8 @@ mod tests {
 
         // Words should contain: hello_id, world_id, plus one bigram hash.
         // (EOS is also in the line and gets its hash if it's in vocab, but it's not here)
-        assert!(
-            words.contains(&wid_hello),
-            "words should contain hello ID"
-        );
-        assert!(
-            words.contains(&wid_world),
-            "words should contain world ID"
-        );
+        assert!(words.contains(&wid_hello), "words should contain hello ID");
+        assert!(words.contains(&wid_world), "words should contain world ID");
         // The bigram hash should be appended.
         let h1 = crate::utils::hash(b"hello") as i32;
         let h2 = crate::utils::hash(b"world") as i32;
@@ -2475,7 +2533,10 @@ mod tests {
                 nwords
             );
         }
-        assert!(!oov_subwords.is_empty(), "OOV word with maxn>0 should have subwords");
+        assert!(
+            !oov_subwords.is_empty(),
+            "OOV word with maxn>0 should have subwords"
+        );
     }
 
     #[test]
@@ -2511,7 +2572,10 @@ mod tests {
         dict.add_subwords(&mut line, "hello", wid);
 
         let expected = dict.get_subwords(wid).clone();
-        assert_eq!(line, expected, "add_subwords should push all subwords for in-vocab word");
+        assert_eq!(
+            line, expected,
+            "add_subwords should push all subwords for in-vocab word"
+        );
     }
 
     #[test]
@@ -2527,6 +2591,10 @@ mod tests {
         let mut line = Vec::new();
         dict.add_subwords(&mut line, "hello", wid);
 
-        assert_eq!(line, vec![wid], "With maxn=0, add_subwords should only push word ID");
+        assert_eq!(
+            line,
+            vec![wid],
+            "With maxn=0, add_subwords should only push word ID"
+        );
     }
 }
