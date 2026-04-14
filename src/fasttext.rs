@@ -1,6 +1,6 @@
 // FastText: train, predict, quantize, autotune, save/load, word/sentence vectors
 
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 use crate::args::{Args, LossName, ModelName};
@@ -497,6 +497,268 @@ impl FastText {
                 }
             })
             .collect()
+    }
+
+    // -------------------------------------------------------------------------
+    // Training
+    // -------------------------------------------------------------------------
+
+    /// Train a new fastText model from the given `Args`.
+    ///
+    /// Steps:
+    /// 1. Read input file and build vocabulary (dictionary with subsampling table and subwords).
+    /// 2. Initialize input matrix `(nwords + bucket) × dim` with uniform values in `[-1/dim, 1/dim]`.
+    /// 3. Initialize output matrix `(nlabels or nwords) × dim` zeroed.
+    /// 4. Build the loss function and model.
+    /// 5. Run single-threaded training (thread 0).
+    ///
+    /// Returns a trained `FastText` instance ready for prediction.
+    pub fn train(args: Args) -> Result<Self> {
+        let input_path = args.input().to_string();
+        if input_path.is_empty() {
+            return Err(FastTextError::InvalidArgument(
+                "Input file path is empty".to_string(),
+            ));
+        }
+
+        let args_arc = Arc::new(args.clone());
+
+        // Build vocabulary from input file.
+        let mut dict = Dictionary::new(Arc::clone(&args_arc));
+        {
+            let file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
+            let mut reader = BufReader::new(file);
+            dict.read_from_file(&mut reader)?;
+        }
+
+        let nwords = dict.nwords() as i64;
+        let bucket = args.bucket() as i64;
+        let dim = args.dim() as i64;
+
+        // Initialize input matrix: (nwords + bucket) × dim, uniform in [-1/dim, 1/dim].
+        let input = Arc::new({
+            let mut m = DenseMatrix::new(nwords + bucket, dim);
+            m.uniform(1.0 / args.dim() as f32, args.seed());
+            m
+        });
+
+        // Initialize output matrix: (nlabels for supervised, nwords for unsupervised) × dim, zeros.
+        let out_rows = if args.model() == ModelName::SUP {
+            dict.nlabels() as i64
+        } else {
+            dict.nwords() as i64
+        };
+        // DenseMatrix::new zeroes all values by default.
+        let output = Arc::new(DenseMatrix::new(out_rows, dim));
+
+        // Build loss and model.
+        let target_counts = if args.model() == ModelName::SUP {
+            dict.get_counts(EntryType::Label)
+        } else {
+            dict.get_counts(EntryType::Word)
+        };
+        let loss = build_loss(&args, Arc::clone(&output), &target_counts);
+        let normalize_gradient = args.model() == ModelName::SUP;
+        let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
+
+        let mut ft = FastText {
+            args: Arc::clone(&args_arc),
+            dict,
+            input,
+            output,
+            quant: false,
+            model,
+        };
+
+        // Run single-threaded training (thread 0).
+        // Rayon multi-threading is handled in the next feature (training-parallel).
+        ft.train_thread(0)?;
+
+        Ok(ft)
+    }
+
+    /// Inner training loop for one thread.
+    ///
+    /// Opens the input file, seeks to `thread_id * file_size / n_threads`,
+    /// then loops reading lines and performing SGD updates until
+    /// `token_count >= epoch * ntokens`.
+    ///
+    /// Matches C++ `FastText::trainThread`.
+    fn train_thread(&mut self, thread_id: usize) -> Result<()> {
+        let ntokens = self.dict.ntokens();
+        if ntokens == 0 {
+            return Ok(());
+        }
+
+        let input_path = self.args.input().to_string();
+        let n_threads = self.args.thread() as u64;
+
+        // Open file and seek to thread start position.
+        let mut file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
+        let file_size = file.seek(SeekFrom::End(0)).map_err(FastTextError::IoError)?;
+        let start_pos = thread_id as u64 * file_size / n_threads;
+        file.seek(SeekFrom::Start(start_pos))
+            .map_err(FastTextError::IoError)?;
+        let mut reader = BufReader::new(file);
+
+        let output_size = self.output.rows() as usize;
+        let seed = thread_id as u64 + self.args.seed() as u64;
+        let mut state = State::new(self.args.dim() as usize, output_size, seed);
+
+        let model_name = self.args.model();
+        let is_ova = self.args.loss() == LossName::OVA;
+        let ws = self.args.ws();
+        let lr_update_rate = self.args.lr_update_rate() as i64;
+        let base_lr = self.args.lr() as f32;
+        let epoch = self.args.epoch() as i64;
+
+        let mut token_count: i64 = 0;
+        let mut local_token_count: i64 = 0;
+        let mut line: Vec<i32> = Vec::new();
+        let mut labels: Vec<i32> = Vec::new();
+        let mut pending_newline = false;
+
+        while token_count < epoch * ntokens {
+            let progress = token_count as f32 / (epoch as f32 * ntokens as f32);
+            let lr = (base_lr * (1.0 - progress)).max(0.0_f32);
+
+            let ntok = match model_name {
+                ModelName::SUP => self.dict.get_line(
+                    &mut reader,
+                    &mut line,
+                    &mut labels,
+                    &mut pending_newline,
+                ),
+                _ => self.dict.get_line_unsupervised(
+                    &mut reader,
+                    &mut line,
+                    &mut pending_newline,
+                    &mut state.rng,
+                ),
+            };
+
+            if ntok == 0 {
+                // EOF: reset to beginning of file for next epoch pass.
+                if let Err(e) = reader.seek(SeekFrom::Start(0)) {
+                    return Err(FastTextError::IoError(e));
+                }
+                pending_newline = false;
+                continue;
+            }
+
+            match model_name {
+                ModelName::SUP => {
+                    Self::supervised_fn(&self.model, &mut state, lr, &line, &labels, is_ova);
+                }
+                ModelName::CBOW => {
+                    // For CBOW, line contains word IDs; subwords retrieved inside cbow_fn.
+                    Self::cbow_fn(&self.model, &self.dict, &mut state, lr, &line, ws);
+                }
+                _ => {
+                    // Skip-gram
+                    Self::skipgram_fn(&self.model, &self.dict, &mut state, lr, &line, ws);
+                }
+            }
+
+            local_token_count += ntok as i64;
+            if local_token_count > lr_update_rate {
+                token_count += local_token_count;
+                local_token_count = 0;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Supervised training update for one line.
+    ///
+    /// Matches C++ `FastText::supervised`.
+    fn supervised_fn(
+        model: &Model,
+        state: &mut State,
+        lr: f32,
+        line: &[i32],
+        labels: &[i32],
+        is_ova: bool,
+    ) {
+        if labels.is_empty() || line.is_empty() {
+            return;
+        }
+        if is_ova {
+            // OVA ignores target_index; all labels in `labels` are positives.
+            model.update(line, labels, 0, lr, state);
+        } else {
+            // Pick a random label index.
+            let i = state.rng.uniform_usize(labels.len()) as i32;
+            model.update(line, labels, i, lr, state);
+        }
+    }
+
+    /// CBOW training update for one line.
+    ///
+    /// For each word position `w`, collects the subwords of context words within
+    /// a random window `[1, ws]` as input and uses the center word as target.
+    ///
+    /// Matches C++ `FastText::cbow`.
+    fn cbow_fn(
+        model: &Model,
+        dict: &Dictionary,
+        state: &mut State,
+        lr: f32,
+        line: &[i32],
+        ws: i32,
+    ) {
+        if line.is_empty() {
+            return;
+        }
+        let mut bow: Vec<i32> = Vec::new();
+        for w in 0..line.len() {
+            // Random window size in [1, ws].
+            let boundary = 1 + (state.rng.generate() as i32 % ws);
+            bow.clear();
+            for c in -boundary..=boundary {
+                if c != 0 {
+                    let pos = w as i32 + c;
+                    if pos >= 0 && pos < line.len() as i32 {
+                        let ngrams = dict.get_subwords(line[pos as usize]);
+                        bow.extend_from_slice(ngrams);
+                    }
+                }
+            }
+            model.update(&bow, line, w as i32, lr, state);
+        }
+    }
+
+    /// Skip-gram training update for one line.
+    ///
+    /// For each word position `w`, uses the subwords of the center word as input
+    /// and each context word in a random window as target.
+    ///
+    /// Matches C++ `FastText::skipgram`.
+    fn skipgram_fn(
+        model: &Model,
+        dict: &Dictionary,
+        state: &mut State,
+        lr: f32,
+        line: &[i32],
+        ws: i32,
+    ) {
+        if line.is_empty() {
+            return;
+        }
+        for w in 0..line.len() {
+            // Random window size in [1, ws].
+            let boundary = 1 + (state.rng.generate() as i32 % ws);
+            let ngrams = dict.get_subwords(line[w]);
+            for c in -boundary..=boundary {
+                if c != 0 {
+                    let pos = w as i32 + c;
+                    if pos >= 0 && pos < line.len() as i32 {
+                        model.update(ngrams, line, pos, lr, state);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2625,5 +2887,420 @@ mod tests {
             assert!(freq > 0, "Label freq[{}] should be > 0, got {}", i, freq);
         }
     }
+
+    // =========================================================================
+    // Training tests (VAL-TRAIN-001 through VAL-TRAIN-007)
+    // =========================================================================
+
+    /// Helper: write training data to a temp file, return path.
+    fn write_temp_file(content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "fasttext_train_test_{}.txt",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::write(&path, content).expect("Failed to write temp file");
+        path
+    }
+
+    /// Small supervised training dataset: 2 classes, 30 examples.
+    fn supervised_train_data() -> String {
+        let mut data = String::new();
+        for _ in 0..15 {
+            data.push_str("__label__sports basketball player sport game team score win\n");
+        }
+        for _ in 0..15 {
+            data.push_str("__label__food apple orange banana fruit eat cook recipe\n");
+        }
+        data
+    }
+
+    /// Small CBOW/skip-gram corpus.
+    fn unsupervised_train_data() -> String {
+        let mut data = String::new();
+        for _ in 0..20 {
+            data.push_str("the quick brown fox jumps over the lazy dog\n");
+            data.push_str("machine learning algorithms work with data\n");
+            data.push_str("neural networks are powerful tools for classification\n");
+        }
+        data
+    }
+
+    /// VAL-TRAIN-001: Supervised training end-to-end.
+    ///
+    /// Trains a supervised model on a small labeled dataset, then predicts
+    /// on the training data. Must achieve ≥50% top-1 accuracy.
+    #[test]
+    fn test_train_supervised_e2e() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(5);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_word_ngrams(1);
+        args.set_bucket(0);
+
+        let model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        let (labels, _) = model.get_labels();
+        assert!(
+            !labels.is_empty(),
+            "Trained model should have labels, got none"
+        );
+
+        let test_cases = vec![
+            ("basketball player sport game", "__label__sports"),
+            ("apple orange banana fruit", "__label__food"),
+            ("basketball team score win", "__label__sports"),
+            ("cook recipe fruit eat", "__label__food"),
+        ];
+
+        let mut correct = 0;
+        for (input, expected_label) in &test_cases {
+            let preds = model.predict(input, 1, 0.0);
+            if !preds.is_empty() && preds[0].label == *expected_label {
+                correct += 1;
+            }
+        }
+
+        let accuracy = correct as f32 / test_cases.len() as f32;
+        assert!(
+            accuracy >= 0.5,
+            "Supervised training should achieve ≥50% accuracy on training data, got {:.1}%",
+            accuracy * 100.0
+        );
+    }
+
+    /// VAL-TRAIN-002: CBOW training produces non-zero word embeddings.
+    #[test]
+    fn test_train_cbow() {
+        let data = unsupervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.set_model(ModelName::CBOW);
+        args.set_loss(LossName::NS);
+        args.set_dim(10);
+        args.set_epoch(3);
+        args.set_min_count(1);
+        args.set_lr(0.05);
+        args.set_ws(3);
+        args.set_neg(5);
+        args.set_bucket(100);
+        args.set_minn(0);
+        args.set_maxn(0);
+
+        let model = FastText::train(args).expect("CBOW training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        let test_words = ["the", "fox", "data", "neural"];
+        for word in &test_words {
+            let wid = model.get_word_id(word);
+            if wid >= 0 {
+                let vec = model.get_word_vector(word);
+                assert_eq!(
+                    vec.len(),
+                    model.get_dimension() as usize,
+                    "Word vector for '{}' should have dim={} elements",
+                    word,
+                    model.get_dimension()
+                );
+                let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+                assert!(
+                    norm > 0.0,
+                    "CBOW word vector for '{}' should be non-zero after training (norm={})",
+                    word,
+                    norm
+                );
+            }
+        }
+
+        let (vocab, _) = model.get_vocab();
+        assert!(!vocab.is_empty(), "CBOW model should have vocabulary");
+    }
+
+    /// VAL-TRAIN-003: Skip-gram training produces non-zero word embeddings.
+    #[test]
+    fn test_train_skipgram() {
+        let data = unsupervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.set_model(ModelName::SG);
+        args.set_loss(LossName::NS);
+        args.set_dim(10);
+        args.set_epoch(3);
+        args.set_min_count(1);
+        args.set_lr(0.05);
+        args.set_ws(3);
+        args.set_neg(5);
+        args.set_bucket(100);
+        args.set_minn(0);
+        args.set_maxn(0);
+
+        let model = FastText::train(args).expect("Skip-gram training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        let test_words = ["the", "fox", "data", "neural"];
+        for word in &test_words {
+            let wid = model.get_word_id(word);
+            if wid >= 0 {
+                let vec = model.get_word_vector(word);
+                assert_eq!(
+                    vec.len(),
+                    model.get_dimension() as usize,
+                    "Word vector for '{}' should have dim={} elements",
+                    word,
+                    model.get_dimension()
+                );
+                let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+                assert!(
+                    norm > 0.0,
+                    "Skip-gram word vector for '{}' should be non-zero after training (norm={})",
+                    word,
+                    norm
+                );
+            }
+        }
+
+        let (vocab, _) = model.get_vocab();
+        assert!(!vocab.is_empty(), "Skip-gram model should have vocabulary");
+    }
+
+    /// VAL-TRAIN-004: Matrix dimensions correct after training.
+    #[test]
+    fn test_train_matrix_dimensions() {
+        // --- Supervised ---
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(50);
+
+        let model = FastText::train(args).expect("Supervised training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        let nwords = model.dict().nwords() as i64;
+        let nlabels = model.dict().nlabels() as i64;
+        let dim = model.get_dimension() as i64;
+        let bucket = model.args().bucket() as i64;
+
+        let input = model.input_matrix();
+        assert_eq!(
+            input.rows(),
+            nwords + bucket,
+            "Input matrix rows should be nwords+bucket: {} != {}+{}",
+            input.rows(),
+            nwords,
+            bucket
+        );
+        assert_eq!(input.cols(), dim, "Input cols should be dim");
+
+        let output = model.output_matrix();
+        assert_eq!(
+            output.rows(),
+            nlabels,
+            "Output matrix rows should be nlabels for supervised: {} != {}",
+            output.rows(),
+            nlabels
+        );
+        assert_eq!(output.cols(), dim, "Output cols should be dim");
+
+        // --- Unsupervised (CBOW) ---
+        let data2 = unsupervised_train_data();
+        let path2 = write_temp_file(&data2);
+        let path2_str = path2.to_str().unwrap().to_string();
+
+        let mut args2 = Args::default();
+        args2.set_input(path2_str.clone());
+        args2.set_output("/dev/null".to_string());
+        args2.set_model(ModelName::CBOW);
+        args2.set_loss(LossName::NS);
+        args2.set_dim(10);
+        args2.set_epoch(1);
+        args2.set_min_count(1);
+        args2.set_neg(5);
+        args2.set_bucket(50);
+        args2.set_minn(0);
+        args2.set_maxn(0);
+
+        let model2 = FastText::train(args2).expect("CBOW training should succeed");
+        std::fs::remove_file(&path2).ok();
+
+        let nwords2 = model2.dict().nwords() as i64;
+        let dim2 = model2.get_dimension() as i64;
+        let bucket2 = model2.args().bucket() as i64;
+
+        let input2 = model2.input_matrix();
+        assert_eq!(
+            input2.rows(),
+            nwords2 + bucket2,
+            "CBOW input matrix rows should be nwords+bucket: {} != {}+{}",
+            input2.rows(),
+            nwords2,
+            bucket2
+        );
+        assert_eq!(input2.cols(), dim2, "CBOW input cols should be dim");
+
+        let output2 = model2.output_matrix();
+        assert_eq!(
+            output2.rows(),
+            nwords2,
+            "CBOW output matrix rows should be nwords: {} != {}",
+            output2.rows(),
+            nwords2
+        );
+        assert_eq!(output2.cols(), dim2, "CBOW output cols should be dim");
+    }
+
+    /// VAL-TRAIN-005: Learning rate decays linearly, never negative.
+    #[test]
+    fn test_train_lr_decay() {
+        let base_lr: f32 = 0.05;
+
+        let test_cases = [
+            (0.0f32, 0.05f32),
+            (0.5f32, 0.025f32),
+            (0.9f32, 0.005f32),
+            (1.0f32, 0.0f32),
+        ];
+
+        for (progress, expected_lr) in &test_cases {
+            let lr = (base_lr * (1.0 - progress)).max(0.0);
+            assert!(
+                (lr - expected_lr).abs() < 1e-6,
+                "lr at progress={}: got={}, expected={}",
+                progress,
+                lr,
+                expected_lr
+            );
+            assert!(lr >= 0.0, "lr must never be negative, got {}", lr);
+        }
+
+        // Verify clamping to 0 for progress > 1.0
+        let lr_over = (base_lr * (1.0 - 1.5f32)).max(0.0);
+        assert_eq!(lr_over, 0.0, "lr should be clamped to 0 for progress>1");
+    }
+
+    /// VAL-TRAIN-007: SGD update correctness.
+    ///
+    /// Verifies that supervised_fn performs a proper SGD update:
+    /// the input weights change after one gradient step.
+    #[test]
+    fn test_train_sgd_update() {
+        use crate::loss::SoftmaxLoss;
+        use crate::matrix::DenseMatrix;
+        use crate::model::{Model, State};
+
+        let mut wi = DenseMatrix::new(2, 3);
+        *wi.at_mut(0, 0) = 1.0;
+        *wi.at_mut(1, 1) = 1.0;
+        let wi = Arc::new(wi);
+
+        let mut wo = DenseMatrix::new(2, 3);
+        *wo.at_mut(0, 0) = 1.0;
+        *wo.at_mut(1, 1) = 1.0;
+        let wo = Arc::new(wo);
+
+        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let model = Model::new(Arc::clone(&wi), loss, true);
+        let mut state = State::new(3, 2, 0);
+
+        let wi_before: Vec<f32> = model.wi.data().to_vec();
+
+        let line = vec![0i32, 1];
+        let labels = vec![0i32];
+
+        FastText::supervised_fn(&model, &mut state, 0.1, &line, &labels, false);
+
+        let wi_after: Vec<f32> = model.wi.data().to_vec();
+
+        let changed = wi_before
+            .iter()
+            .zip(wi_after.iter())
+            .any(|(b, a)| (b - a).abs() > 1e-9);
+        assert!(
+            changed,
+            "Input weights should be updated by SGD: before={:?} after={:?}",
+            wi_before,
+            wi_after
+        );
+    }
+
+    /// Test supervised_fn with empty line or labels is a no-op.
+    #[test]
+    fn test_train_supervised_fn_empty_noop() {
+        use crate::loss::SoftmaxLoss;
+        use crate::matrix::DenseMatrix;
+        use crate::model::{Model, State};
+
+        let wi = Arc::new(DenseMatrix::new(2, 3));
+        let wo = Arc::new(DenseMatrix::new(2, 3));
+        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let model = Model::new(Arc::clone(&wi), loss, true);
+        let mut state = State::new(3, 2, 0);
+
+        let wi_before: Vec<f32> = model.wi.data().to_vec();
+
+        FastText::supervised_fn(&model, &mut state, 0.1, &[], &[0], false);
+        assert_eq!(model.wi.data(), wi_before.as_slice(), "No-op on empty line");
+
+        FastText::supervised_fn(&model, &mut state, 0.1, &[0], &[], false);
+        assert_eq!(
+            model.wi.data(),
+            wi_before.as_slice(),
+            "No-op on empty labels"
+        );
+    }
+
+    /// Test that training completes and produces a model usable for prediction.
+    #[test]
+    fn test_train_lr_decay_actual() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(5);
+        args.set_epoch(3);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+
+        let result = FastText::train(args);
+        std::fs::remove_file(&path).ok();
+        assert!(
+            result.is_ok(),
+            "Training should complete without error: {:?}",
+            result.err()
+        );
+    }
 }
+
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::args::{Args, ModelName};
 use crate::error::{FastTextError, Result};
+use crate::model::MinstdRng;
 use crate::utils::{self, hash};
 
 /// EOS (end-of-sentence) token string.
@@ -807,6 +808,64 @@ impl Dictionary {
             return false;
         }
         rand > self.pdiscard[id as usize]
+    }
+
+    // -------------------------------------------------------------------------
+    // Unsupervised getLine (for CBOW / skip-gram training)
+    // -------------------------------------------------------------------------
+
+    /// Read one line from a reader for unsupervised (CBOW / skip-gram) training.
+    ///
+    /// This mirrors C++ `Dictionary::getLine(istream&, vector<int32_t>&, minstd_rand&)`.
+    ///
+    /// Key differences from the supervised `get_line`:
+    /// - Only **word IDs** are added to `words` (no subwords, no labels).
+    /// - **Subsampling** is applied: a word is discarded with probability
+    ///   controlled by the discard table (`pdiscard`), using a random float
+    ///   drawn from `rng`.
+    /// - Out-of-vocabulary tokens are skipped (do not count toward `ntokens`).
+    ///
+    /// Returns the number of in-vocabulary tokens encountered (counting EOS
+    /// as a token when it appears).
+    pub fn get_line_unsupervised<R: Read>(
+        &self,
+        reader: &mut R,
+        words: &mut Vec<i32>,
+        pending_newline: &mut bool,
+        rng: &mut MinstdRng,
+    ) -> i32 {
+        words.clear();
+        let mut ntokens: i32 = 0;
+        let mut token = String::new();
+
+        loop {
+            if !Self::read_word_from_reader(reader, pending_newline, &mut token) {
+                break;
+            }
+
+            let h = utils::hash(token.as_bytes());
+            let wid = self.get_id_with_hash(&token, h);
+
+            if wid < 0 {
+                // OOV token: skip entirely (does not count toward ntokens)
+                continue;
+            }
+
+            ntokens += 1;
+            if self.get_type_by_id(wid) == EntryType::Word {
+                // Generate uniform random float in (0, 1) using minstd_rand
+                let rand_val = rng.generate() as f32 / MinstdRng::M as f32;
+                if !self.discard(wid, rand_val) {
+                    words.push(wid); // word ID only, subwords retrieved later
+                }
+            }
+
+            if ntokens as usize > MAX_LINE_SIZE || token == EOS {
+                break;
+            }
+        }
+
+        ntokens
     }
 
     // -------------------------------------------------------------------------
