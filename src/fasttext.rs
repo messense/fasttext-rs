@@ -2073,6 +2073,109 @@ mod tests {
         );
     }
 
+    /// VAL-INF-013: Unknown word with maxn>0 returns non-zero vector via subword aggregation.
+    ///
+    /// Creates a small skip-gram model with minn=2, maxn=3, bucket=100 where all
+    /// subword bucket rows in the input matrix are set to 1.0.  An OOV word must
+    /// return a non-zero vector because its character n-grams map to those non-zero rows.
+    #[test]
+    fn test_get_word_vector_unknown_with_subwords() {
+        let dim = 4usize;
+        let bucket = 100i32;
+        let minn = 2i32;
+        let maxn = 3i32;
+        let nwords = 1i32; // just </s>
+
+        let mut buf = Vec::<u8>::new();
+
+        // Magic + Version
+        utils::write_i32(&mut buf, FASTTEXT_FILEFORMAT_MAGIC_INT32).unwrap();
+        utils::write_i32(&mut buf, FASTTEXT_VERSION).unwrap();
+
+        // Args: SG model with subwords enabled
+        let mut args = Args::default();
+        args.set_dim(dim as i32);
+        args.set_ws(1);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_neg(1);
+        args.set_word_ngrams(1);
+        args.set_loss(LossName::NS);
+        args.set_model(ModelName::SG);
+        args.set_bucket(bucket);
+        args.set_minn(minn);
+        args.set_maxn(maxn);
+        args.set_lr_update_rate(100);
+        args.set_t(0.0001);
+        args.save(&mut buf).unwrap();
+
+        // Dictionary: 1 word (</s>), 0 labels
+        utils::write_i32(&mut buf, nwords).unwrap(); // size
+        utils::write_i32(&mut buf, nwords).unwrap(); // nwords
+        utils::write_i32(&mut buf, 0i32).unwrap(); // nlabels
+        utils::write_i64(&mut buf, 10i64).unwrap(); // ntokens
+        utils::write_i64(&mut buf, -1i64).unwrap(); // pruneidx_size = -1 (not pruned)
+        // Word 0: </s>
+        buf.extend_from_slice(b"</s>\0");
+        utils::write_i64(&mut buf, 10i64).unwrap(); // count
+        buf.push(0u8); // EntryType::Word
+
+        // quant_input = false
+        buf.push(0u8);
+
+        // Input matrix: (nwords + bucket) × dim = (1 + 100) × 4 = 101 × 4
+        // Row 0 (</s>): zeros; rows 1..101 (subword buckets): all 1.0f32
+        let n_rows = (nwords + bucket) as i64;
+        let n_cols = dim as i64;
+        utils::write_i64(&mut buf, n_rows).unwrap();
+        utils::write_i64(&mut buf, n_cols).unwrap();
+        for row in 0..n_rows {
+            for _ in 0..n_cols {
+                // Row 0 is the </s> word row (zero); rows 1+ are subword buckets (non-zero)
+                let val = if row >= nwords as i64 { 1.0f32 } else { 0.0f32 };
+                utils::write_f32(&mut buf, val).unwrap();
+            }
+        }
+
+        // qout = false
+        buf.push(0u8);
+
+        // Output matrix: nwords × dim = 1 × 4
+        utils::write_i64(&mut buf, nwords as i64).unwrap();
+        utils::write_i64(&mut buf, n_cols).unwrap();
+        for _ in 0..(nwords as i64 * n_cols) {
+            utils::write_f32(&mut buf, 0.0f32).unwrap();
+        }
+
+        let mut cursor = Cursor::new(buf);
+        let model = FastText::load(&mut cursor).expect("Subword model should load");
+
+        // Verify model has subwords enabled
+        assert_eq!(model.args().maxn(), maxn, "Model should have maxn={}", maxn);
+        assert_eq!(model.args().minn(), minn, "Model should have minn={}", minn);
+
+        // Test: OOV word "zyx" → character n-grams map to bucket rows [1..101]
+        // which are all 1.0 → averaged result is non-zero
+        let vec = model.get_word_vector("zyx");
+        assert_eq!(vec.len(), dim, "Word vector should have {} dimensions", dim);
+        let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(
+            norm > 0.0,
+            "OOV word 'zyx' with maxn={} should return non-zero vector \
+             (subword aggregation from character n-grams), got norm={}",
+            maxn,
+            norm
+        );
+
+        // Also verify: for maxn=0 (the cooking model), an OOV word returns zero
+        // (already tested in test_get_word_vector_unknown_zero, but confirmed here
+        // by checking that our model DOES have maxn>0 and returns non-zero)
+        assert!(
+            model.args().maxn() > 0,
+            "Test model should have maxn>0 to exercise subword path"
+        );
+    }
+
     // =========================================================================
     // VAL-INF-014: get_sentence_vector() behavior
     // =========================================================================
@@ -2156,6 +2259,149 @@ mod tests {
                 i, got, exp, (got - exp).abs()
             );
         }
+    }
+
+    // =========================================================================
+    // VAL-INF-014 (supplementary): unsupervised model sentence vector normalization
+    // =========================================================================
+
+    /// VAL-INF-014: Unsupervised (SG) model sentence vector is L2-normalized per word.
+    ///
+    /// For a model where model != SUP, get_sentence_vector normalizes each word
+    /// vector by its L2 norm before adding to the running sum.  This means a
+    /// single-word sentence returns a unit vector (norm ≈ 1.0).
+    ///
+    /// Creates a minimal SG model with one in-vocab word "hello" whose input
+    /// vector is [2, 0, 0, 0] (norm=2, not a unit vector).  After normalization
+    /// the sentence vector should be [1, 0, 0, 0] (norm=1.0).
+    #[test]
+    fn test_sentence_vector_unsupervised_normalization() {
+        let dim = 4usize;
+        let nwords = 2i32; // </s> and "hello"
+
+        let mut buf = Vec::<u8>::new();
+
+        // Magic + Version
+        utils::write_i32(&mut buf, FASTTEXT_FILEFORMAT_MAGIC_INT32).unwrap();
+        utils::write_i32(&mut buf, FASTTEXT_VERSION).unwrap();
+
+        // Args: skip-gram model, no subwords (maxn=0), no buckets
+        let mut args = Args::default();
+        args.set_dim(dim as i32);
+        args.set_ws(1);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_neg(1);
+        args.set_word_ngrams(1);
+        args.set_loss(LossName::NS);
+        args.set_model(ModelName::SG);
+        args.set_bucket(0);
+        args.set_minn(0);
+        args.set_maxn(0);
+        args.set_lr_update_rate(100);
+        args.set_t(0.0001);
+        args.save(&mut buf).unwrap();
+
+        // Dictionary: 2 words (</s> at index 0, "hello" at index 1), 0 labels
+        utils::write_i32(&mut buf, nwords).unwrap(); // size
+        utils::write_i32(&mut buf, nwords).unwrap(); // nwords
+        utils::write_i32(&mut buf, 0i32).unwrap(); // nlabels
+        utils::write_i64(&mut buf, 10i64).unwrap(); // ntokens
+        utils::write_i64(&mut buf, -1i64).unwrap(); // pruneidx_size
+        // Word 0: </s>
+        buf.extend_from_slice(b"</s>\0");
+        utils::write_i64(&mut buf, 5i64).unwrap();
+        buf.push(0u8); // EntryType::Word
+        // Word 1: "hello"
+        buf.extend_from_slice(b"hello\0");
+        utils::write_i64(&mut buf, 5i64).unwrap();
+        buf.push(0u8); // EntryType::Word
+
+        // quant_input = false
+        buf.push(0u8);
+
+        // Input matrix: 2 × 4 (nwords=2, bucket=0 → no extra rows)
+        // Row 0 (</s>):  [0, 0, 0, 0]
+        // Row 1 ("hello"): [2, 0, 0, 0]  ← non-unit vector (norm=2)
+        utils::write_i64(&mut buf, 2i64).unwrap(); // m = 2
+        utils::write_i64(&mut buf, 4i64).unwrap(); // n = 4
+        for _ in 0..4 {
+            utils::write_f32(&mut buf, 0.0f32).unwrap(); // row 0 (</s>)
+        }
+        utils::write_f32(&mut buf, 2.0f32).unwrap(); // row 1 [0]
+        utils::write_f32(&mut buf, 0.0f32).unwrap(); // row 1 [1]
+        utils::write_f32(&mut buf, 0.0f32).unwrap(); // row 1 [2]
+        utils::write_f32(&mut buf, 0.0f32).unwrap(); // row 1 [3]
+
+        // qout = false
+        buf.push(0u8);
+
+        // Output matrix: 2 × 4 (zeros)
+        utils::write_i64(&mut buf, 2i64).unwrap();
+        utils::write_i64(&mut buf, 4i64).unwrap();
+        for _ in 0..8 {
+            utils::write_f32(&mut buf, 0.0f32).unwrap();
+        }
+
+        let mut cursor = Cursor::new(buf);
+        let model = FastText::load(&mut cursor).expect("SG model should load");
+
+        // Confirm model type is unsupervised
+        assert_eq!(
+            model.args().model(),
+            ModelName::SG,
+            "Model should be SG (unsupervised)"
+        );
+
+        // Verify the word vector of "hello" is [2, 0, 0, 0] (norm=2, not unit)
+        let wv = model.get_word_vector("hello");
+        assert_eq!(wv.len(), dim, "Word vector should have {} dims", dim);
+        let wv_norm: f32 = wv.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (wv_norm - 2.0).abs() < 1e-4,
+            "Word vector norm should be 2.0 (not normalized), got {}",
+            wv_norm
+        );
+
+        // get_sentence_vector("hello") on unsupervised model:
+        //   normalizes each word vector before averaging
+        //   vec = [2,0,0,0] → normalized = [1,0,0,0]
+        //   count = 1 → result = [1,0,0,0] * (1/1) = [1,0,0,0]
+        //   norm = 1.0
+        let sv = model.get_sentence_vector("hello");
+        assert_eq!(sv.len(), dim, "Sentence vector should have {} dims", dim);
+
+        let sv_norm: f32 = sv.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (sv_norm - 1.0).abs() < 1e-4,
+            "Unsupervised model sentence vector for single-word input should be \
+             L2-normalized (norm≈1.0), got norm={}",
+            sv_norm
+        );
+
+        // Direction should be [1, 0, 0, 0]
+        assert!(
+            (sv[0] - 1.0).abs() < 1e-4,
+            "sv[0] should be ≈1.0 (normalized direction), got {}",
+            sv[0]
+        );
+        for i in 1..dim {
+            assert!(
+                sv[i].abs() < 1e-4,
+                "sv[{}] should be ≈0.0, got {}",
+                i,
+                sv[i]
+            );
+        }
+
+        // Contrast: the raw word vector has norm=2, proving normalization happened
+        assert!(
+            (wv_norm - sv_norm).abs() > 0.5,
+            "Word vector norm ({}) should differ from sentence vector norm ({}) \
+             confirming normalization was applied",
+            wv_norm,
+            sv_norm
+        );
     }
 
     // =========================================================================

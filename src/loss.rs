@@ -1021,6 +1021,107 @@ mod tests {
         );
     }
 
+    /// VAL-INF-003: HierarchicalSoftmaxLoss DFS prediction returns correct top label
+    ///
+    /// Tree for counts=[100, 80, 40, 20] (osz=4):
+    ///   leaf 0 (count=100): depth=1 (shortest code, left child of root)
+    ///   leaf 1 (count=80):  depth=2 (right of internal node 5, which is right of root)
+    ///   leaves 2,3 (count=40,20): depth=3
+    ///
+    /// By setting wo[2][0]=-10 (the root's output-matrix row) with hidden=[1,0,0,0]:
+    ///   sigmoid(-10) ≈ 0 → left branch (to leaf 0) gets score ≈ std_log(1) ≈ 0
+    ///   right branch gets score ≈ std_log(0) ≈ -11.5 (very negative)
+    /// So label 0 should be the top-1 prediction.
+    #[test]
+    fn test_hs_dfs_prediction() {
+        let osz = 4usize;
+        let dim = 4usize;
+        // internal nodes = osz - 1 = 3 rows in wo
+        let mut wo = DenseMatrix::new((osz - 1) as i64, dim as i64);
+        // counts sorted DESCENDING: most frequent first
+        let counts = vec![100i64, 80, 40, 20];
+
+        // wo[2][0] = -10 → at root (node 6=2*4-2) matrix_row=6-4=2
+        // sigmoid(wo[2]·hidden) = sigmoid(-10*1) ≈ 0
+        // Left child (leaf 0): score ≈ std_log(1-0) ≈ 0 (high)
+        // Right child (node 5): score ≈ std_log(0) ≈ -11.5 (low)
+        *wo.at_mut(2, 0) = -10.0;
+        let wo = Arc::new(wo);
+        let loss = HierarchicalSoftmaxLoss::new(wo, &counts);
+
+        let mut state = State::new(dim, osz, 0);
+        state.hidden[0] = 1.0; // unit vector along dim 0
+
+        // --- Test 1: k=1 should return label 0 as top prediction ---
+        let mut heap = Predictions::new();
+        loss.predict(1, 0.0, &mut heap, &mut state);
+
+        assert_eq!(heap.len(), 1, "HS DFS predict(k=1) should return 1 result");
+        assert_eq!(
+            heap[0].1,
+            0,
+            "Most frequent label (index 0, depth=1) should be top-1 prediction, got {}",
+            heap[0].1
+        );
+        assert!(
+            heap[0].0.is_finite(),
+            "Log-prob should be finite, got {}",
+            heap[0].0
+        );
+
+        // --- Test 2: DFS pruning with high threshold ---
+        // threshold=0.01 → log_threshold = std_log(0.01) = ln(0.01+1e-5) ≈ -4.6
+        // Right branch score ≈ -11.5 < -4.6 → pruned
+        // Left branch (label 0) score ≈ 0 > -4.6 → survives
+        let mut heap2 = Predictions::new();
+        loss.predict(4, 0.01, &mut heap2, &mut state);
+
+        // With pruning, only label 0 should survive
+        assert!(
+            !heap2.is_empty(),
+            "At least one prediction should survive threshold=0.01"
+        );
+        let has_label_0 = heap2.iter().any(|&(_, idx)| idx == 0);
+        assert!(has_label_0, "Label 0 should be in pruned predictions");
+        for &(log_prob, label_idx) in &heap2 {
+            assert!(
+                label_idx >= 0 && label_idx < osz as i32,
+                "Label index {} out of range [0, {})",
+                label_idx,
+                osz
+            );
+            assert!(log_prob.is_finite(), "Log-prob should be finite");
+        }
+
+        // --- Test 3: k=4 (all labels), no threshold ---
+        let mut heap3 = Predictions::new();
+        loss.predict(4, 0.0, &mut heap3, &mut state);
+
+        assert!(
+            !heap3.is_empty(),
+            "k=4 predict should return at least one result"
+        );
+        assert!(heap3.len() <= osz, "k=4 should return at most {} labels", osz);
+
+        // Results should be sorted descending by log-prob
+        for i in 1..heap3.len() {
+            assert!(
+                heap3[i - 1].0 >= heap3[i].0,
+                "Results should be sorted descending: heap3[{}].0={} < heap3[{}].0={}",
+                i - 1,
+                heap3[i - 1].0,
+                i,
+                heap3[i].0
+            );
+        }
+        // Label 0 should be first (highest score)
+        assert_eq!(
+            heap3[0].1,
+            0,
+            "Label 0 should have highest score in k=4 prediction"
+        );
+    }
+
     // ── SoftmaxLoss ────────────────────────────────────────────────────────
 
     /// VAL-INF-004: Softmax output sums to 1.0 within 1e-5
@@ -1189,6 +1290,94 @@ mod tests {
             "OVA outputs should NOT sum to 1.0 (got {}), proving independence",
             sum
         );
+    }
+
+    /// VAL-INF-005: OVA gradient matches binary cross-entropy per class (independence property)
+    ///
+    /// Verifies that state.grad after forward+backprop equals the expected sum
+    /// of per-class binary cross-entropy gradients:
+    ///   state.grad = Σ_i  alpha_i * wo_original[i]
+    /// where alpha_i = lr * (label_i - sigmoid(wo_original[i] · hidden))
+    ///
+    /// This proves gradient independence: class i's contribution depends only on
+    /// wo[i] and is not affected by wo[j] for j≠i.
+    #[test]
+    fn test_ova_loss_gradient() {
+        let nlabels = 3usize;
+        let dim = 2usize;
+        let mut wo = DenseMatrix::new(nlabels as i64, dim as i64);
+        // wo[0] = [1, 0], wo[1] = [0, 1], wo[2] = [0.5, 0.5]
+        *wo.at_mut(0, 0) = 1.0;
+        *wo.at_mut(1, 1) = 1.0;
+        *wo.at_mut(2, 0) = 0.5;
+        *wo.at_mut(2, 1) = 0.5;
+        let wo = Arc::new(wo);
+        let loss = OneVsAllLoss::new(wo);
+
+        let lr = 0.1f32;
+        let mut state = State::new(dim, nlabels, 0);
+        state.hidden[0] = 1.0;
+        state.hidden[1] = 0.5;
+
+        // class 1 is the positive target
+        let targets = vec![1i32];
+        loss.forward(&targets, 0, &mut state, lr, true);
+
+        // Compute expected gradient using original wo values.
+        // The binary_logistic method uses the current wo BEFORE it applies its own
+        // Hogwild! update, so state.grad is computed with the original weights.
+        let tables = LossTables::new();
+
+        // class 0 (negative): dot = wo[0]·h = 1*1 + 0*0.5 = 1.0
+        let alpha0 = lr * (0.0 - tables.sigmoid(1.0));
+        // class 1 (positive): dot = wo[1]·h = 0*1 + 1*0.5 = 0.5
+        let alpha1 = lr * (1.0 - tables.sigmoid(0.5));
+        // class 2 (negative): dot = wo[2]·h = 0.5*1 + 0.5*0.5 = 0.75
+        let alpha2 = lr * (0.0 - tables.sigmoid(0.75));
+
+        // state.grad[0] = alpha0*wo[0][0] + alpha1*wo[1][0] + alpha2*wo[2][0]
+        //               = alpha0*1 + alpha1*0 + alpha2*0.5
+        let expected_g0 = alpha0 * 1.0 + alpha1 * 0.0 + alpha2 * 0.5;
+        // state.grad[1] = alpha0*wo[0][1] + alpha1*wo[1][1] + alpha2*wo[2][1]
+        //               = alpha0*0 + alpha1*1 + alpha2*0.5
+        let expected_g1 = alpha0 * 0.0 + alpha1 * 1.0 + alpha2 * 0.5;
+
+        assert!(
+            (state.grad[0] - expected_g0).abs() < 1e-4,
+            "OVA grad[0]: expected {:.6}, got {:.6}",
+            expected_g0,
+            state.grad[0]
+        );
+        assert!(
+            (state.grad[1] - expected_g1).abs() < 1e-4,
+            "OVA grad[1]: expected {:.6}, got {:.6}",
+            expected_g1,
+            state.grad[1]
+        );
+
+        // Verify independence: class 1's contribution to grad[1] is alpha1 * wo[1][1] = alpha1 * 1
+        // class 2's contribution to grad[1] is alpha2 * wo[2][1] = alpha2 * 0.5
+        // These are computed independently of wo[0]
+        let class1_contrib_g1 = alpha1 * 1.0; // alpha1 * wo[1][1]
+        let class2_contrib_g1 = alpha2 * 0.5; // alpha2 * wo[2][1]
+        assert!(
+            (state.grad[1] - (class1_contrib_g1 + class2_contrib_g1)).abs() < 1e-4,
+            "Gradient independence: grad[1] should decompose as class1 ({:.6}) + class2 ({:.6}) = {:.6}, got {:.6}",
+            class1_contrib_g1,
+            class2_contrib_g1,
+            class1_contrib_g1 + class2_contrib_g1,
+            state.grad[1]
+        );
+
+        // All gradients must be finite
+        for i in 0..dim {
+            assert!(
+                state.grad[i].is_finite(),
+                "grad[{}] should be finite, got {}",
+                i,
+                state.grad[i]
+            );
+        }
     }
 
     // ── find_k_best ────────────────────────────────────────────────────────
