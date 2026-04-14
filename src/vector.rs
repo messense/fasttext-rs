@@ -33,7 +33,8 @@ impl Vector {
                 len: 0,
             };
         }
-        let layout = Layout::from_size_align(size * std::mem::size_of::<f32>(), ALIGNMENT)
+        let layout = Layout::array::<f32>(size)
+            .and_then(|l| l.align_to(ALIGNMENT))
             .expect("Invalid layout");
         // SAFETY: layout has non-zero size (checked above) and valid alignment.
         let ptr = unsafe { alloc::alloc_zeroed(layout) as *mut f32 };
@@ -163,11 +164,9 @@ impl Clone for Vector {
 impl Drop for Vector {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.len > 0 {
-            let layout = Layout::from_size_align(
-                self.len * std::mem::size_of::<f32>(),
-                ALIGNMENT,
-            )
-            .expect("Invalid layout in Drop");
+            let layout = Layout::array::<f32>(self.len)
+                .and_then(|l| l.align_to(ALIGNMENT))
+                .expect("Invalid layout in Drop");
             // SAFETY: ptr was allocated with this layout in new().
             unsafe {
                 alloc::dealloc(self.ptr as *mut u8, layout);
@@ -903,6 +902,31 @@ mod tests {
     fn test_vector_index_out_of_bounds() {
         let v = Vector::new(3);
         let _ = v[3];
+    }
+
+    // --- Allocation safety ---
+
+    #[test]
+    fn test_vector_alloc_safety_zero_size() {
+        // Allocation with size 0 must not panic and produce an empty vector.
+        let v = Vector::new(0);
+        assert_eq!(v.len(), 0);
+        assert!(v.is_empty());
+        assert_eq!(v.data().len(), 0);
+        // Clone of zero-size vector must also work without panic.
+        let v2 = v.clone();
+        assert_eq!(v2.len(), 0);
+    }
+
+    #[test]
+    fn test_vector_layout_overflow_check() {
+        // Layout::array::<f32>(usize::MAX) must fail (checked arithmetic).
+        // This verifies that the new Layout::array approach would catch overflow,
+        // whereas the old unchecked multiplication would silently produce a wrong size.
+        assert!(Layout::array::<f32>(usize::MAX).is_err());
+        // A very large size just under isize::MAX / 4 should also fail if it overflows isize.
+        let large = (isize::MAX as usize / std::mem::size_of::<f32>()) + 1;
+        assert!(Layout::array::<f32>(large).is_err());
     }
 
     // --- Edge cases ---

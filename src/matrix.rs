@@ -82,9 +82,9 @@ impl DenseMatrix {
                 n,
             };
         }
-        let layout =
-            Layout::from_size_align(size * std::mem::size_of::<f32>(), ALIGNMENT)
-                .expect("Invalid layout");
+        let layout = Layout::array::<f32>(size)
+            .and_then(|l| l.align_to(ALIGNMENT))
+            .expect("Invalid layout");
         // SAFETY: layout has non-zero size and valid alignment.
         let ptr = unsafe { alloc::alloc_zeroed(layout) as *mut f32 };
         if ptr.is_null() {
@@ -253,9 +253,9 @@ impl Drop for DenseMatrix {
     fn drop(&mut self) {
         let size = (self.m * self.n) as usize;
         if !self.ptr.is_null() && size > 0 {
-            let layout =
-                Layout::from_size_align(size * std::mem::size_of::<f32>(), ALIGNMENT)
-                    .expect("Invalid layout in Drop");
+            let layout = Layout::array::<f32>(size)
+                .and_then(|l| l.align_to(ALIGNMENT))
+                .expect("Invalid layout in Drop");
             // SAFETY: ptr was allocated with this layout in new().
             unsafe {
                 alloc::dealloc(self.ptr as *mut u8, layout);
@@ -744,6 +744,41 @@ fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    // --- Allocation safety ---
+
+    #[test]
+    fn test_dense_matrix_alloc_safety_zero_size() {
+        // Allocation with zero rows/cols must not panic.
+        let m1 = DenseMatrix::new(0, 0);
+        assert_eq!(m1.rows(), 0);
+        assert_eq!(m1.cols(), 0);
+        assert!(m1.data().is_empty());
+
+        let m2 = DenseMatrix::new(0, 100);
+        assert_eq!(m2.rows(), 0);
+        assert_eq!(m2.cols(), 100);
+        assert!(m2.data().is_empty());
+
+        let m3 = DenseMatrix::new(100, 0);
+        assert_eq!(m3.rows(), 100);
+        assert_eq!(m3.cols(), 0);
+        assert!(m3.data().is_empty());
+
+        // Clone of zero-size matrix must also work without panic.
+        let m4 = m1.clone();
+        assert_eq!(m4.rows(), 0);
+        assert_eq!(m4.cols(), 0);
+    }
+
+    #[test]
+    fn test_dense_matrix_layout_overflow_check() {
+        // Layout::array::<f32>(usize::MAX) must fail (checked arithmetic).
+        assert!(Layout::array::<f32>(usize::MAX).is_err());
+        // A very large size just over isize::MAX / 4 should also fail.
+        let large = (isize::MAX as usize / std::mem::size_of::<f32>()) + 1;
+        assert!(Layout::array::<f32>(large).is_err());
+    }
 
     // --- Construction ---
 
