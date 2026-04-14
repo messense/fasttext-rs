@@ -81,10 +81,16 @@ impl Meter {
     /// - `predictions`: slice of `(probability, label_id)` pairs returned by the model,
     ///   sorted by descending probability.
     /// - `gold_labels`: slice of true label IDs for this example.
-    pub fn add(&mut self, predictions: &[(f32, i32)], gold_labels: &[i32]) {
+    /// - `k`: the number of predictions that were *requested* (not the number actually
+    ///   returned after threshold filtering).  This is used as the denominator for
+    ///   precision, matching the C++ fastText convention:
+    ///   `precision(k) = correct_in_top_k / (k * n_examples)`.
+    pub fn add(&mut self, predictions: &[(f32, i32)], gold_labels: &[i32], k: usize) {
         self.n_examples += 1;
         self.gold += gold_labels.len() as u64;
-        self.predicted += predictions.len() as u64;
+        // Use k (not predictions.len()) so the denominator is always k * n_examples,
+        // matching the C++ fastText precision(k) convention.
+        self.predicted += k as u64;
 
         for &(prob, label_id) in predictions {
             let lm = self.label_metrics.entry(label_id).or_default();
@@ -315,14 +321,14 @@ mod tests {
         // Example 3: gold=[0], pred=[(0.5, 1)]   → wrong (predicts 1 but gold is 0)
 
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0]);
-        meter.add(&[(0.7, 1)], &[1]);
-        meter.add(&[(0.5, 1)], &[0]);
+        meter.add(&[(0.9, 0)], &[0], 1);
+        meter.add(&[(0.7, 1)], &[1], 1);
+        meter.add(&[(0.5, 1)], &[0], 1);
 
         assert_eq!(meter.n_examples(), 3);
 
         // predicted_gold = 2 (examples 1 and 2)
-        // predicted = 3, gold = 3
+        // k=1, n_examples=3 → predicted = k * n_examples = 1 * 3 = 3
         // precision = 2/3, recall = 2/3
         let p = meter.precision();
         let r = meter.recall();
@@ -360,8 +366,8 @@ mod tests {
         // recall = 3 / 3 = 1.0
 
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0), (0.6, 1)], &[0]);
-        meter.add(&[(0.8, 1), (0.7, 2)], &[1, 2]);
+        meter.add(&[(0.9, 0), (0.6, 1)], &[0], 2);
+        meter.add(&[(0.8, 1), (0.7, 2)], &[1, 2], 2);
 
         let p = meter.precision();
         let r = meter.recall();
@@ -388,9 +394,9 @@ mod tests {
         // Example 3: gold=[3, 4], pred=[(0.7, 0)]  → 0 correct
 
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0, 1]);
-        meter.add(&[(0.8, 2)], &[2]);
-        meter.add(&[(0.7, 0)], &[3, 4]);
+        meter.add(&[(0.9, 0)], &[0, 1], 1);
+        meter.add(&[(0.8, 2)], &[2], 1);
+        meter.add(&[(0.7, 0)], &[3, 4], 1);
 
         // predicted_gold = 2, predicted = 3, gold = 5
         assert!(
@@ -422,7 +428,7 @@ mod tests {
         // F1 must be 0.0, NOT NaN.
         let mut meter = Meter::new();
         // Predict label 1, but gold is label 0.
-        meter.add(&[(0.9, 1)], &[0]);
+        meter.add(&[(0.9, 1)], &[0], 1);
 
         assert_eq!(
             meter.precision(),
@@ -448,7 +454,7 @@ mod tests {
         // Per-label F1 should also be 0.0, not NaN, when no TP.
         let mut meter = Meter::new();
         // Predict label 0 (wrong), gold is label 1.
-        meter.add(&[(0.9, 0)], &[1]);
+        meter.add(&[(0.9, 0)], &[1], 1);
 
         // For label 0: predicted=1, predictedGold=0, gold=0 → p=0.0, r=0.0
         let f0 = meter.f1_for_label(0);
@@ -478,7 +484,7 @@ mod tests {
         // If there are no gold labels, recall should be 0.0.
         let mut meter = Meter::new();
         // Example with empty gold set.
-        meter.add(&[(0.9, 0)], &[]);
+        meter.add(&[(0.9, 0)], &[], 1);
 
         assert_eq!(meter.n_examples(), 1);
         assert_eq!(meter.gold, 0);
@@ -498,11 +504,11 @@ mod tests {
         let mut meter = Meter::new();
 
         // Example 1: gold=[0], preds=[(0.9, 0)]     → label 0 TP
-        meter.add(&[(0.9, 0)], &[0]);
+        meter.add(&[(0.9, 0)], &[0], 1);
         // Example 2: gold=[0, 1], preds=[(0.8, 0), (0.7, 1)]  → label 0 TP, label 1 TP
-        meter.add(&[(0.8, 0), (0.7, 1)], &[0, 1]);
+        meter.add(&[(0.8, 0), (0.7, 1)], &[0, 1], 2);
         // Example 3: gold=[1], preds=[(0.6, 0)]     → label 0 FP, label 1 FN (not predicted)
-        meter.add(&[(0.6, 0)], &[1]);
+        meter.add(&[(0.6, 0)], &[1], 1);
 
         // Label 0: gold=2, predicted=3, predicted_gold=2
         let p0 = meter.precision_for_label(0);
@@ -572,9 +578,9 @@ mod tests {
         // Example 3: gold=[1], pred=[(0.5, 1)]  (different label)
 
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0]);
-        meter.add(&[(0.7, 0)], &[0]);
-        meter.add(&[(0.5, 1)], &[1]);
+        meter.add(&[(0.9, 0)], &[0], 1);
+        meter.add(&[(0.7, 0)], &[0], 1);
+        meter.add(&[(0.5, 1)], &[1], 1);
 
         let curve = meter.precision_recall_curve_for_label(0);
 
@@ -673,9 +679,9 @@ mod tests {
         // Example 3: gold=[0], pred=[(0.5, 0)]   → TP@0.5 for label 0
 
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0]);
-        meter.add(&[(0.7, 0)], &[1]);
-        meter.add(&[(0.5, 0)], &[0]);
+        meter.add(&[(0.9, 0)], &[0], 1);
+        meter.add(&[(0.7, 0)], &[1], 1);
+        meter.add(&[(0.5, 0)], &[0], 1);
 
         let curve = meter.precision_recall_curve_for_label(0);
 
@@ -738,7 +744,7 @@ mod tests {
     fn test_meter_pr_curve_no_gold() {
         // Label predicted but never in gold set.
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[1]); // predict 0, gold is 1
+        meter.add(&[(0.9, 0)], &[1], 1); // predict 0, gold is 1
 
         let curve = meter.precision_recall_curve_for_label(0);
         assert!(
@@ -755,9 +761,9 @@ mod tests {
     fn test_meter_n_examples() {
         let mut meter = Meter::new();
         assert_eq!(meter.n_examples(), 0);
-        meter.add(&[], &[]);
+        meter.add(&[], &[], 0);
         assert_eq!(meter.n_examples(), 1);
-        meter.add(&[(0.5, 0)], &[0]);
+        meter.add(&[(0.5, 0)], &[0], 1);
         assert_eq!(meter.n_examples(), 2);
     }
 
@@ -765,10 +771,10 @@ mod tests {
     fn test_meter_all_correct() {
         // 4 examples, all correct.
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0]);
-        meter.add(&[(0.8, 1)], &[1]);
-        meter.add(&[(0.7, 2)], &[2]);
-        meter.add(&[(0.6, 0)], &[0]);
+        meter.add(&[(0.9, 0)], &[0], 1);
+        meter.add(&[(0.8, 1)], &[1], 1);
+        meter.add(&[(0.7, 2)], &[2], 1);
+        meter.add(&[(0.6, 0)], &[0], 1);
 
         assert!(
             (meter.precision() - 1.0).abs() < 1e-9,
@@ -788,8 +794,8 @@ mod tests {
     fn test_meter_all_wrong() {
         // All predictions wrong.
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 1)], &[0]);
-        meter.add(&[(0.8, 0)], &[1]);
+        meter.add(&[(0.9, 1)], &[0], 1);
+        meter.add(&[(0.8, 0)], &[1], 1);
 
         assert_eq!(meter.precision(), 0.0, "All wrong, precision should be 0.0");
         assert_eq!(meter.recall(), 0.0, "All wrong, recall should be 0.0");
@@ -800,9 +806,70 @@ mod tests {
     fn test_meter_write_general_metrics() {
         // Smoke test that write_general_metrics doesn't panic.
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0]);
-        meter.add(&[(0.7, 1)], &[1]);
+        meter.add(&[(0.9, 0)], &[0], 1);
+        meter.add(&[(0.7, 1)], &[1], 1);
         // Just verify it runs without panicking.
         meter.write_general_metrics(1);
+    }
+
+    // -------------------------------------------------------------------------
+    // Precision(k) denominator: k * n_examples (matching fastText convention)
+    // -------------------------------------------------------------------------
+
+    /// Verify precision(k) uses k * n_examples as denominator, not actual predictions.
+    ///
+    /// When threshold filtering reduces the number of returned predictions below k,
+    /// the denominator must still be k * n_examples, not the actual prediction count.
+    /// This matches the C++ fastText convention:
+    ///   precision(k) = correct_in_top_k / (k * n_examples)
+    #[test]
+    fn test_meter_precision_k_denominator_threshold_filtering() {
+        // Simulate: k=5 requested, but only 1 prediction returned per example
+        // (as if threshold filtering reduced predictions below k).
+        // Example 1: correct (pred label 0, gold label 0)
+        // Example 2: wrong   (pred label 1, gold label 0)
+        let mut meter = Meter::new();
+        meter.add(&[(0.9, 0)], &[0], 5);  // k=5 requested, 1 returned
+        meter.add(&[(0.8, 1)], &[0], 5);  // k=5 requested, 1 returned
+
+        assert_eq!(meter.n_examples(), 2);
+
+        // predicted_gold = 1 (only example 1 is correct)
+        // denominator = k * n_examples = 5 * 2 = 10
+        let p = meter.precision();
+        assert!(
+            (p - 0.1).abs() < 1e-9,
+            "Precision should be 1/(k*n) = 1/(5*2) = 0.1 (not 1/2 = 0.5), got {:.6}",
+            p
+        );
+
+        // recall is unaffected: predicted_gold / gold = 1 / 2
+        let r = meter.recall();
+        assert!(
+            (r - 0.5).abs() < 1e-9,
+            "Recall should be 1/2 = 0.5, got {:.6}",
+            r
+        );
+    }
+
+    /// Verify that when all k predictions are returned (no threshold filtering),
+    /// precision = predicted_gold / (k * n_examples) still matches the old formula
+    /// predicted_gold / actual_prediction_count.
+    #[test]
+    fn test_meter_precision_k_full_predictions() {
+        // k=2, all 2 predictions always returned: denominator = 2*2 = 4
+        // Example 1: gold=[0], preds=[(0.9,0),(0.7,1)] → 1 correct
+        // Example 2: gold=[1,2], preds=[(0.8,1),(0.6,2)] → 2 correct
+        let mut meter = Meter::new();
+        meter.add(&[(0.9, 0), (0.7, 1)], &[0], 2);
+        meter.add(&[(0.8, 1), (0.6, 2)], &[1, 2], 2);
+
+        // predicted_gold = 3, denominator = k*n = 2*2 = 4
+        let p = meter.precision();
+        assert!(
+            (p - 0.75).abs() < 1e-9,
+            "Precision should be 3/4 = 0.75, got {:.6}",
+            p
+        );
     }
 }

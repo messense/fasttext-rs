@@ -1,7 +1,7 @@
 // FastText: train, predict, quantize, autotune, save/load, word/sentence vectors
 
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
@@ -19,6 +19,36 @@ use crate::utils;
 pub const FASTTEXT_FILEFORMAT_MAGIC_INT32: i32 = 793712314;
 /// Current binary format version.
 pub const FASTTEXT_VERSION: i32 = 12;
+
+/// A handle to an in-flight training run spawned by [`FastText::spawn_training`].
+///
+/// Allows aborting the training from the calling thread via [`TrainingHandle::abort`],
+/// and retrieving the resulting model via [`TrainingHandle::join`].
+pub struct TrainingHandle {
+    abort_flag: Arc<AtomicBool>,
+    join_handle: std::thread::JoinHandle<Result<FastText>>,
+}
+
+impl TrainingHandle {
+    /// Signal the background training thread to stop early.
+    ///
+    /// This is idempotent: calling it multiple times has no adverse effect.
+    pub fn abort(&self) {
+        self.abort_flag.store(true, Ordering::Relaxed);
+    }
+
+    /// Wait for the background training thread to finish and return the model.
+    ///
+    /// The returned `FastText` is valid for inference even if training was
+    /// aborted early (it will be under-trained but not corrupted).
+    ///
+    /// # Errors
+    /// Returns `Err` if the training thread panicked (`std::thread::Result::Err`).
+    /// Propagates `FastTextError` from the training run as the inner `Result`.
+    pub fn join(self) -> std::thread::Result<Result<FastText>> {
+        self.join_handle.join()
+    }
+}
 
 /// A single prediction result.
 ///
@@ -59,6 +89,20 @@ fn build_loss(args: &Args, wo: Arc<DenseMatrix>, target_counts: &[i64]) -> Box<d
     }
 }
 
+/// Atomically add a f64 value to an AtomicU64 (which stores f64 bits).
+///
+/// Uses a compare-exchange (CAS) loop since there is no native atomic f64 add.
+fn atomic_f64_add(target: &AtomicU64, delta: f64) {
+    let mut current = target.load(Ordering::Relaxed);
+    loop {
+        let new_bits = (f64::from_bits(current) + delta).to_bits();
+        match target.compare_exchange_weak(current, new_bits, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// Shared context passed to each training thread.
 ///
 /// Bundles the per-run read-only state so that `train_thread_inner` stays
@@ -70,6 +114,12 @@ struct TrainThreadCtx<'a> {
     output_size: usize,
     token_count: &'a AtomicI64,
     abort_flag: &'a AtomicBool,
+    /// Shared atomic accumulator for total training loss (f64 bits) across all threads.
+    ///
+    /// Each thread atomically adds its local loss sum to this counter at the end
+    /// of training.  After all threads finish, the total loss can be read via
+    /// `f64::from_bits(shared_loss.load(Ordering::Relaxed))`.
+    shared_loss: &'a AtomicU64,
     /// Optional per-epoch loss tracker.
     ///
     /// When `Some`, records the average loss after each completed epoch.
@@ -99,6 +149,11 @@ pub struct FastText {
     ///
     /// Set via [`FastText::abort()`]; checked in the training loop.
     abort_flag: Arc<AtomicBool>,
+    /// Average training loss from the last training run.
+    ///
+    /// Set by [`FastText::train`] and related functions.  `0.0` for models
+    /// loaded from disk (no training history available).
+    last_train_loss: f64,
 }
 
 impl FastText {
@@ -204,6 +259,7 @@ impl FastText {
             quant: quant_input,
             model,
             abort_flag: Arc::new(AtomicBool::new(false)),
+            last_train_loss: 0.0,
         })
     }
 
@@ -581,7 +637,7 @@ impl FastText {
                     .map(|(log_prob, label_idx)| (log_prob.exp().min(1.0), label_idx))
                     .collect();
 
-                meter.add(&predictions, &labels);
+                meter.add(&predictions, &labels, k_eff as usize);
             }
         }
 
@@ -615,6 +671,23 @@ impl FastText {
     /// 4. Return a trained `FastText` instance.
     pub fn train_with_abort(args: Args, abort_flag: Arc<AtomicBool>) -> Result<Self> {
         Self::train_internal(args, abort_flag, None)
+    }
+
+    /// Spawn training in a background thread, returning a [`TrainingHandle`].
+    ///
+    /// The handle exposes an [`TrainingHandle::abort`] method that can be called
+    /// from the main (or any other) thread to stop the in-flight training run
+    /// early.  Use [`TrainingHandle::join`] to wait for training to finish and
+    /// obtain the (possibly under-trained) model.
+    ///
+    /// This is the canonical way to abort in-flight training via the public API —
+    /// it solves the chicken-and-egg problem of `abort(&self)` requiring an already-
+    /// built `FastText` while training entry points only return after completion.
+    pub fn spawn_training(args: Args) -> TrainingHandle {
+        let abort_flag = Arc::new(AtomicBool::new(false));
+        let abort_for_train = Arc::clone(&abort_flag);
+        let join_handle = std::thread::spawn(move || Self::train_with_abort(args, abort_for_train));
+        TrainingHandle { abort_flag, join_handle }
     }
 
     /// Internal training implementation with optional epoch loss tracking.
@@ -699,6 +772,12 @@ impl FastText {
         // Shared atomic token counter across all training threads.
         let token_count = Arc::new(AtomicI64::new(0));
 
+        // Shared atomic loss accumulator (f64 bits) across all training threads.
+        // Each thread atomically adds its local total loss at the end of training.
+        let shared_loss = Arc::new(AtomicU64::new(f64::to_bits(0.0)));
+        // Shared example count (for computing average loss).
+        let shared_loss_count = Arc::new(AtomicI64::new(0));
+
         // Run Hogwild! parallel training with rayon.
         // Each thread creates its own Model (sharing the same Arc<DenseMatrix>),
         // and updates weights concurrently without locks.
@@ -714,9 +793,10 @@ impl FastText {
                     output_size,
                     token_count: &token_count,
                     abort_flag: &abort_flag,
+                    shared_loss: &shared_loss,
                     epoch_loss_tracker: epoch_loss_tracker.clone(),
                 };
-                Self::train_thread_inner(thread_id, n_threads, &ctx)
+                Self::train_thread_inner(thread_id, n_threads, &ctx, &shared_loss_count)
             })
             .collect();
 
@@ -724,6 +804,15 @@ impl FastText {
         for result in training_results {
             result?;
         }
+
+        // Compute average training loss across all threads.
+        let total_loss = f64::from_bits(shared_loss.load(Ordering::Relaxed));
+        let total_examples = shared_loss_count.load(Ordering::Relaxed);
+        let avg_loss = if total_examples > 0 {
+            total_loss / total_examples as f64
+        } else {
+            0.0
+        };
 
         // Build the inference model from the trained matrices.
         let loss = build_loss(&args, Arc::clone(&output), &target_counts);
@@ -737,6 +826,7 @@ impl FastText {
             quant: false,
             model,
             abort_flag,
+            last_train_loss: avg_loss,
         })
     }
 
@@ -886,6 +976,17 @@ impl FastText {
         self.abort_flag.store(true, Ordering::Relaxed);
     }
 
+    /// Return the average training loss from the last training run.
+    ///
+    /// For models loaded from disk via [`FastText::load_model`], this returns `0.0`
+    /// (no training history is stored in the binary format).
+    ///
+    /// For trained models, this is the global average loss across all threads,
+    /// accumulated atomically during training.
+    pub fn last_train_loss(&self) -> f64 {
+        self.last_train_loss
+    }
+
     /// Inner training loop for one thread (Hogwild! SGD).
     ///
     /// Opens the input file, seeks to `thread_id * file_size / n_threads`,
@@ -893,7 +994,12 @@ impl FastText {
     /// `token_count >= epoch * ntokens` or `abort_flag` is set.
     ///
     /// Matches C++ `FastText::trainThread`.
-    fn train_thread_inner(thread_id: usize, n_threads: usize, ctx: &TrainThreadCtx<'_>) -> Result<()> {
+    fn train_thread_inner(
+        thread_id: usize,
+        n_threads: usize,
+        ctx: &TrainThreadCtx<'_>,
+        shared_loss_count: &AtomicI64,
+    ) -> Result<()> {
         let ntokens = ctx.dict.ntokens();
         if ntokens == 0 {
             return Ok(());
@@ -1012,6 +1118,15 @@ impl FastText {
             if state.nexamples() > 0 {
                 tracker.lock().unwrap().push(state.get_loss());
             }
+        }
+
+        // Atomically flush this thread's total loss contribution to the shared counter.
+        // Uses a CAS loop (via atomic_f64_add) since there is no native atomic f64 add.
+        let examples = state.nexamples();
+        if examples > 0 {
+            let total_loss = state.get_loss() as f64 * examples as f64;
+            atomic_f64_add(ctx.shared_loss, total_loss);
+            shared_loss_count.fetch_add(examples, Ordering::Relaxed);
         }
 
         Ok(())
@@ -3728,6 +3843,45 @@ mod tests {
         }
     }
 
+    /// Atomic loss accumulation across threads.
+    ///
+    /// Verifies that multi-threaded training atomically accumulates loss from all
+    /// threads, and that the resulting `last_train_loss()` is finite and positive.
+    #[test]
+    fn test_atomic_loss_accumulation_multithreaded() {
+        let data = supervised_train_data();
+        let path = write_unique_temp_file(&data, "atomic_loss");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(3);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(4); // Multiple threads: each contributes to shared loss
+
+        let model = FastText::train(args).expect("Multi-threaded training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        // The shared atomic loss accumulator should have received contributions
+        // from all threads, resulting in a finite, positive average loss.
+        let loss = model.last_train_loss();
+        assert!(
+            loss.is_finite(),
+            "Accumulated training loss should be finite after multi-thread training, got {}",
+            loss
+        );
+        assert!(
+            loss > 0.0,
+            "Accumulated training loss should be positive (all threads contributed), got {}",
+            loss
+        );
+    }
+
     /// VAL-TRAIN-010: Abort stops training early; model is still usable.
     ///
     /// Starts training in a separate thread with a large epoch count, sets the
@@ -3769,6 +3923,50 @@ mod tests {
 
         // Verify abort flag is accessible on the returned model.
         model.abort(); // idempotent — should not panic
+    }
+
+    /// VAL-TRAIN-010: Abort via TrainingHandle — calling abort() from main thread.
+    ///
+    /// Uses `FastText::spawn_training` to start training in a background thread,
+    /// then calls `handle.abort()` from the main thread while training is running.
+    /// This tests the public API path for in-flight abort (vs. using an external
+    /// Arc<AtomicBool> directly).
+    #[test]
+    fn test_training_abort_via_handle() {
+        let data = supervised_train_data();
+        let path = write_unique_temp_file(&data, "abort_via_handle");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(500); // Large epoch count so training won't finish naturally.
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+
+        // Spawn training in a background thread via the public API.
+        let handle = FastText::spawn_training(args);
+
+        // Give training a moment to start, then call abort() from the main thread.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        handle.abort(); // <-- abort() called from main thread!
+
+        // Training should complete early and return a (possibly under-trained) model.
+        let model = handle
+            .join()
+            .expect("Training thread should not panic")
+            .expect("Aborted training should return Ok");
+        std::fs::remove_file(&path).ok();
+
+        // The model must still be usable for prediction without panicking.
+        let _ = model.predict("basketball player sport game", 1, 0.0);
+
+        // abort() on the returned model is idempotent.
+        model.abort();
     }
 
     /// Abort is idempotent: calling abort() multiple times must not panic.
