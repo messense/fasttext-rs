@@ -316,19 +316,50 @@ impl ProductQuantizer {
     /// For each sub-quantizer, samples up to `MAX_POINTS` rows, then runs
     /// k-means for `NITER` iterations.
     ///
+    /// When `n < KSUB` (fewer data points than centroids), the available data
+    /// points are used directly as centroids, cycling through them to fill all
+    /// `KSUB` slots.  This ensures `compute_code` always returns a valid code
+    /// even for small datasets.
+    ///
     /// Matches C++ `ProductQuantizer::train(int32_t n, const real* x)`.
     pub fn train(&mut self, n: i32, x: &[f32]) {
-        if n < KSUB {
-            // Not enough data for quantization — silently skip (C++ would throw).
+        if n <= 0 {
             return;
         }
-        let n = n as usize;
-        let np = n.min(MAX_POINTS as usize);
+        let n_usize = n as usize;
+        let ksub = KSUB as usize;
         let dim = self.dim as usize;
         let dsub = self.dsub as usize;
         let nsubq = self.nsubq as usize;
 
-        let mut perm: Vec<i32> = (0..n as i32).collect();
+        if n_usize < ksub {
+            // Fewer data points than centroids.
+            // Use the available points as centroids, cycling through them to
+            // fill all KSUB slots so that compute_code works correctly.
+            // The tie-breaking in assign_centroid (strict `<`) means duplicate
+            // centroid slots (index >= n) are never preferred over their
+            // originals (index < n), so every query is assigned to a code in
+            // [0, n).
+            for m in 0..nsubq {
+                let d = if m == nsubq - 1 {
+                    self.lastdsub as usize
+                } else {
+                    dsub
+                };
+                let cstart = m * ksub * dsub;
+                for j in 0..ksub {
+                    let row = j % n_usize;
+                    let src = &x[row * dim + m * dsub..row * dim + m * dsub + d];
+                    self.centroids[cstart + j * d..cstart + (j + 1) * d]
+                        .copy_from_slice(src);
+                }
+            }
+            return;
+        }
+
+        // n >= KSUB: normal k-means training.
+        let np = n_usize.min(MAX_POINTS as usize);
+        let mut perm: Vec<i32> = (0..n_usize as i32).collect();
         // Allocate max possible slice size (dsub or lastdsub).
         let max_d = dsub.max(self.lastdsub as usize);
         let mut xslice = vec![0.0f32; np * max_d];
@@ -341,7 +372,7 @@ impl ProductQuantizer {
             };
 
             // Reshuffle when subsampling.
-            if np != n {
+            if np != n_usize {
                 self.rng.shuffle(&mut perm);
             }
 
@@ -353,7 +384,6 @@ impl ProductQuantizer {
             }
 
             // Centroid block for sub-quantizer m.
-            let ksub = KSUB as usize;
             let cstart = m * ksub * dsub;
             let clen = ksub * d;
 
@@ -926,12 +956,95 @@ mod tests {
 
     #[test]
     fn test_pq_train_too_few_rows() {
-        // Training with fewer than KSUB rows should not panic (silently skips).
+        // Training with fewer than KSUB rows should not panic.
+        // When data is all-zero the centroids will also be all-zero (filled
+        // from the training data, which happens to be zeros here).
         let mut pq = ProductQuantizer::new(4, 2);
-        let data = vec![0.0f32; 4 * 4]; // only 4 rows
+        let data = vec![0.0f32; 4 * 4]; // only 4 rows, all zeros
         pq.train(4, &data); // should not panic
-                            // Centroids remain zero.
+        // Centroids are filled from zero data, so all remain 0.0.
         assert!(pq.centroids.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_pq_train_small_n() {
+        // Train PQ with n=10 data points (fewer than KSUB=256).
+        // Verifies:
+        //   1. Training completes without panic.
+        //   2. Centroids are filled with training data (non-zero).
+        //   3. compute_code produces valid codes for each training point.
+        //   4. Distinct training points receive distinct codes.
+        //   5. Each training point is reconstructed from its own centroid
+        //      (code yields the point back via addcode within tolerance).
+        let dim = 4i32;
+        let dsub = 2i32;
+        let n = 10i32;
+        let mut pq = ProductQuantizer::new(dim, dsub);
+
+        // Build 10 distinct, non-zero training points.
+        // training point i: [(i+1)*1, (i+1)*2, (i+1)*3, (i+1)*4]
+        let mut data = vec![0.0f32; n as usize * dim as usize];
+        for i in 0..n as usize {
+            for j in 0..dim as usize {
+                data[i * dim as usize + j] = (i as f32 + 1.0) * (j as f32 + 1.0);
+            }
+        }
+
+        pq.train(n, &data);
+
+        // 1. Centroids should be non-zero after training with non-zero data.
+        assert!(
+            pq.centroids.iter().any(|&v| v != 0.0),
+            "centroids should be non-zero after small-n training"
+        );
+
+        // 2. compute_code must not panic and must return valid codes.
+        let nsubq = pq.nsubq as usize;
+        let mut all_codes: Vec<Vec<u8>> = Vec::new();
+        for i in 0..n as usize {
+            let xi = &data[i * dim as usize..(i + 1) * dim as usize];
+            let mut code = vec![0u8; nsubq];
+            pq.compute_code(xi, &mut code); // must not panic
+            all_codes.push(code);
+        }
+        assert_eq!(all_codes.len(), n as usize);
+
+        // 3. Distinct training points should receive distinct codes.
+        // (Each point is its own centroid in the small-n case.)
+        assert_ne!(
+            all_codes[0], all_codes[1],
+            "distinct training points should get distinct codes"
+        );
+
+        // 4. Each training point should be assigned code i for both sub-quantizers,
+        //    since its sub-vector is the exact centroid at slot i.
+        for i in 0..n as usize {
+            for (m, &code_val) in all_codes[i].iter().enumerate() {
+                assert_eq!(
+                    code_val as usize, i,
+                    "training point {} sub-quantizer {} should map to code {}",
+                    i, m, i
+                );
+            }
+        }
+
+        // 5. addcode on the code for point i should reconstruct the sub-vectors
+        //    of that training point exactly.
+        for i in 0..n as usize {
+            let mut reconstructed = Vector::new(dim as usize);
+            pq.addcode(&mut reconstructed, &all_codes[i], 0, 1.0);
+            let xi = &data[i * dim as usize..(i + 1) * dim as usize];
+            for j in 0..dim as usize {
+                assert!(
+                    (reconstructed[j] - xi[j]).abs() < 1e-6,
+                    "reconstruction mismatch at point {} dim {}: got {} expected {}",
+                    i,
+                    j,
+                    reconstructed[j],
+                    xi[j]
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
