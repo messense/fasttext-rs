@@ -1,12 +1,12 @@
 // Dictionary: tokenization, vocabulary, subwords, word n-grams, hash table
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use crate::args::{Args, ModelName};
 use crate::error::{FastTextError, Result};
-use crate::utils::hash;
+use crate::utils::{self, hash};
 
 /// EOS (end-of-sentence) token string.
 pub const EOS: &str = "</s>";
@@ -880,6 +880,152 @@ impl Dictionary {
             let slot = self.find_slot_with_hash(&w, h);
             self.word2int[slot] = i as i32;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Binary I/O
+    // -------------------------------------------------------------------------
+
+    /// Save the dictionary to binary format.
+    ///
+    /// Format:
+    /// - size: i32
+    /// - nwords: i32
+    /// - nlabels: i32
+    /// - ntokens: i64
+    /// - pruneidx_size: i64
+    /// - For each entry: null-terminated word string + count(i64) + type(i8)
+    /// - If pruneidx_size > 0: that many (i32, i32) pairs
+    pub fn save<W: Write>(&self, writer: &mut W) -> Result<()> {
+        utils::write_i32(writer, self.size)?;
+        utils::write_i32(writer, self.nwords)?;
+        utils::write_i32(writer, self.nlabels)?;
+        utils::write_i64(writer, self.ntokens)?;
+        utils::write_i64(writer, self.pruneidx_size)?;
+
+        for entry in &self.words {
+            // Write null-terminated word string
+            writer.write_all(entry.word.as_bytes())?;
+            writer.write_all(&[0u8])?; // null terminator
+            utils::write_i64(writer, entry.count)?;
+            // Write entry type as i8 (1 byte)
+            writer.write_all(&[entry.entry_type as i8 as u8])?;
+        }
+
+        // Write pruneidx pairs if pruneidx_size > 0
+        if self.pruneidx_size > 0 {
+            // Sort by key for deterministic output (C++ iterates unordered_map arbitrarily)
+            let mut pairs: Vec<(i32, i32)> =
+                self.pruneidx.iter().map(|(&k, &v)| (k, v)).collect();
+            pairs.sort_unstable_by_key(|&(k, _)| k);
+            for (first, second) in pairs {
+                utils::write_i32(writer, first)?;
+                utils::write_i32(writer, second)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load a Dictionary from binary format (matching C++ Dictionary::load).
+    ///
+    /// Format:
+    /// - size: i32
+    /// - nwords: i32
+    /// - nlabels: i32
+    /// - ntokens: i64
+    /// - pruneidx_size: i64
+    /// - For each entry: null-terminated word string + count(i64) + type(i8)
+    /// - If pruneidx_size > 0: that many (i32, i32) pairs
+    ///
+    /// After loading, initializes discard table, n-grams, and rebuilds word2int.
+    pub fn load_from_reader<R: Read>(reader: &mut R, args: Arc<Args>) -> Result<Self> {
+        let size = utils::read_i32(reader)?;
+        let nwords = utils::read_i32(reader)?;
+        let nlabels = utils::read_i32(reader)?;
+        let ntokens = utils::read_i64(reader)?;
+        let pruneidx_size = utils::read_i64(reader)?;
+
+        // Validate dimensions
+        if size < 0 || nwords < 0 || nlabels < 0 {
+            return Err(FastTextError::InvalidModel(format!(
+                "Invalid dictionary dimensions: size={}, nwords={}, nlabels={}",
+                size, nwords, nlabels
+            )));
+        }
+
+        // Read vocabulary entries
+        let mut words = Vec::with_capacity(size as usize);
+        for _ in 0..size {
+            // Read null-terminated string
+            let mut word_bytes: Vec<u8> = Vec::new();
+            let mut buf = [0u8; 1];
+            loop {
+                reader.read_exact(&mut buf)?;
+                if buf[0] == 0 {
+                    break;
+                }
+                word_bytes.push(buf[0]);
+            }
+            let word = String::from_utf8(word_bytes).map_err(|_| {
+                FastTextError::InvalidModel(
+                    "Invalid UTF-8 in dictionary word".to_string(),
+                )
+            })?;
+            let count = utils::read_i64(reader)?;
+            let mut type_buf = [0u8; 1];
+            reader.read_exact(&mut type_buf)?;
+            let entry_type = match type_buf[0] as i8 {
+                0 => EntryType::Word,
+                1 => EntryType::Label,
+                v => {
+                    return Err(FastTextError::InvalidModel(format!(
+                        "Invalid entry type: {}",
+                        v
+                    )))
+                }
+            };
+            words.push(Entry {
+                word,
+                count,
+                entry_type,
+                subwords: Vec::new(),
+            });
+        }
+
+        // Read pruneidx pairs
+        let mut pruneidx = HashMap::new();
+        if pruneidx_size > 0 {
+            for _ in 0..pruneidx_size {
+                let first = utils::read_i32(reader)?;
+                let second = utils::read_i32(reader)?;
+                pruneidx.insert(first, second);
+            }
+        }
+
+        // Build the dictionary with a tiny placeholder (will be resized by rebuild)
+        let mut dict = Dictionary::new_with_capacity(args, 1);
+        dict.words = words;
+        dict.size = size;
+        dict.nwords = nwords;
+        dict.nlabels = nlabels;
+        dict.ntokens = ntokens;
+        dict.pruneidx_size = pruneidx_size;
+        dict.pruneidx = pruneidx;
+
+        // Initialize discard table and n-grams (matching C++ Dictionary::load order)
+        dict.init_table_discard();
+        dict.init_ngrams();
+
+        // Rebuild word2int hash table with size = ceil(size / 0.7)
+        dict.rebuild_word2int_after_load();
+
+        Ok(dict)
+    }
+
+    /// Check whether the dictionary is pruned (pruneidx_size >= 0).
+    pub fn is_pruned(&self) -> bool {
+        self.pruneidx_size >= 0
     }
 }
 
