@@ -259,9 +259,27 @@ impl BinaryLogisticBase {
             let alpha = lr * (label_is_positive as i32 as f32 - score);
             // state.grad += alpha * wo[target]
             self.wo.add_row_to_vector(&mut state.grad, target, alpha);
-            // wo[target] += alpha * hidden  (Hogwild!: unsynchronised write is intentional)
-            // SAFETY: Hogwild! training intentionally allows concurrent unsynchronised
-            //         weight updates without locks (matching C++ fastText behaviour).
+            // wo[target] += alpha * hidden  (Hogwild! lock-free SGD)
+            //
+            // SAFETY: This implements the Hogwild! algorithm (Recht et al., 2011),
+            // which intentionally allows concurrent, unsynchronised writes to shared
+            // weight matrices during multi-threaded training — exactly as C++ fastText
+            // does in `FastText::trainThread` / `loss.cc`.
+            //
+            // Why this is sound:
+            // 1. Each training thread operates on a distinct mini-batch.  In practice
+            //    threads write to *different rows* of `wo` (one per target label), so
+            //    races are rare.
+            // 2. When a race does occur the worst outcome is a benign, bounded
+            //    numerical noise on that row's values.  Hogwild! theory proves that
+            //    this non-determinism does not prevent convergence; it is equivalent to
+            //    stochastic gradient noise.
+            // 3. The `DenseMatrix` backing store is a plain `Vec<f32>` (heap-allocated,
+            //    valid for the lifetime of `Arc<DenseMatrix>`).  No allocations or
+            //    structural mutations happen here — only in-place `f32` field writes,
+            //    which are individually atomic on all supported platforms.
+            // 4. The `Arc` keeps `wo` alive as long as any thread holds a reference,
+            //    so the raw-pointer dereference is never dangling.
             let wo_ptr = Arc::as_ptr(&self.wo) as *mut DenseMatrix;
             unsafe {
                 (*wo_ptr).add_vector_to_row(&state.hidden, target as i64, alpha);
@@ -374,13 +392,37 @@ impl NegativeSamplingLoss {
     }
 
     /// Draw a negative sample that is different from `target`.
+    ///
+    /// Samples uniformly from the pre-built negative sampling table.  In the
+    /// normal case the table contains many distinct label indices, so a different
+    /// one is found quickly.
+    ///
+    /// # Infinite-loop protection
+    ///
+    /// In degenerate tables where every entry equals `target` (e.g., a
+    /// single-label corpus), an unbounded loop would never terminate.  To guard
+    /// against this, the method retries at most `MAX_RETRIES` (100) times and
+    /// then returns a fallback label index that is adjacent to `target` in the
+    /// output matrix (wrapping around if necessary).  This ensures the training
+    /// loop always makes progress even on pathological inputs.
     fn get_negative(&self, target: i32, rng: &mut MinstdRng) -> i32 {
-        loop {
+        const MAX_RETRIES: usize = 100;
+        for _ in 0..MAX_RETRIES {
             let idx = rng.uniform_usize(self.negatives.len());
             let candidate = self.negatives[idx];
             if candidate != target {
                 return candidate;
             }
+        }
+        // Degenerate fallback: return the label adjacent to `target` in the
+        // output matrix, wrapping around so the index stays valid.
+        let n_labels = self.base.wo.rows() as i32;
+        if n_labels <= 1 {
+            // Only one label exists; return 0 (same as target — unavoidable in
+            // this degenerate case, but prevents an infinite loop).
+            0
+        } else {
+            (target + 1) % n_labels
         }
     }
 
@@ -698,9 +740,14 @@ impl Loss for SoftmaxLoss {
                 let alpha = lr * (label - state.output[i]);
                 // state.grad += alpha * wo[i]
                 self.wo.add_row_to_vector(&mut state.grad, i as i32, alpha);
-                // wo[i] += alpha * hidden  (Hogwild!)
-                // SAFETY: Hogwild! training intentionally allows concurrent unsynchronised
-                //         weight updates without locks (matching C++ fastText behaviour).
+                // wo[i] += alpha * hidden  (Hogwild! lock-free SGD)
+                //
+                // SAFETY: Same Hogwild! invariants as in `BinaryLogisticBase::binary_logistic`:
+                // concurrent unsynchronised writes to `wo` rows are intentional and match
+                // C++ fastText behaviour.  The non-determinism is benign: individual f32
+                // writes are atomic on all supported platforms, and the Hogwild! algorithm
+                // guarantees convergence despite the sparse data races.  The Arc keeps the
+                // backing store alive for the duration of all writes.
                 let wo_ptr = Arc::as_ptr(&self.wo) as *mut DenseMatrix;
                 unsafe {
                     (*wo_ptr).add_vector_to_row(&state.hidden, i as i64, alpha);
@@ -1233,5 +1280,59 @@ mod tests {
         let loss = base.binary_logistic(0, &mut state, false, 0.0, false);
         assert!(loss > 0.0, "Negative label loss should be > 0 for zero weights");
         assert!(loss.is_finite(), "Loss should be finite");
+    }
+
+    // ── NegativeSamplingLoss::get_negative infinite-loop guard ─────────────
+
+    /// Validates that `get_negative` terminates even when the entire negative
+    /// sampling table is filled with a single label (degenerate table).
+    ///
+    /// With a 1-label corpus every entry in the negatives table equals 0.
+    /// The old loop-forever implementation would spin indefinitely; the guarded
+    /// version should return within MAX_RETRIES and produce a finite result.
+    #[test]
+    fn test_ns_get_negative_degenerate_single_label() {
+        // Build a NegativeSamplingLoss with 2 labels but counts = [1_000_000, 0]
+        // so that the negative sampling table is filled entirely with label 0.
+        let wo = Arc::new(DenseMatrix::new(2, 4));
+        // Give label 1 a count of 0; the table builder skips labels with
+        // zero entries, so the table ends up all-zeros (all entries == 0).
+        let counts = vec![1_000_000i64, 0];
+        let loss = NegativeSamplingLoss::new(wo, 5, &counts);
+
+        // All entries in negatives should be label 0.
+        assert!(
+            loss.negatives().iter().all(|&x| x == 0),
+            "Expected all-zero negatives table for degenerate counts"
+        );
+
+        // get_negative(target=0, …) should NOT loop forever; it should return
+        // the fallback value quickly (within MAX_RETRIES = 100 iterations).
+        let mut rng = MinstdRng::new(42);
+        // We call it many times to be sure it never blocks.
+        for _ in 0..1000 {
+            let neg = loss.get_negative(0, &mut rng);
+            // In the degenerate single-label case the fallback is (0+1)%2 = 1.
+            assert_eq!(neg, 1, "Fallback negative should be (target+1)%n_labels = 1");
+        }
+    }
+
+    /// Validates that `get_negative` returns a valid, different label in the
+    /// normal (non-degenerate) case.
+    #[test]
+    fn test_ns_get_negative_returns_different_label() {
+        let wo = Arc::new(DenseMatrix::new(4, 8));
+        let counts = vec![100i64, 80, 60, 40];
+        let loss = NegativeSamplingLoss::new(wo, 5, &counts);
+
+        let mut rng = MinstdRng::new(123);
+        // For target = 0, every returned negative should be != 0.
+        for _ in 0..1000 {
+            let neg = loss.get_negative(0, &mut rng);
+            assert_ne!(
+                neg, 0,
+                "get_negative should return a label different from target (0)"
+            );
+        }
     }
 }

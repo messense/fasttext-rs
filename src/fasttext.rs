@@ -444,8 +444,23 @@ impl FastText {
     /// `word_ids` must be valid input-matrix row indices (as produced by
     /// `Dictionary::get_line_from_str` or equivalent tokenization).
     ///
-    /// This is equivalent to `predict(text, k, threshold)` when `word_ids`
-    /// are the word IDs produced by tokenizing `text`.
+    /// # EOS handling
+    ///
+    /// Unlike [`predict`], this method does **not** automatically append the
+    /// EOS token (`</s>`).  If you want results identical to `predict(text, …)`,
+    /// you must append the EOS token ID yourself before calling this method:
+    ///
+    /// ```text
+    /// let eos_id = model.dict().get_id("</s>");
+    /// if eos_id >= 0 { words.push(eos_id); }
+    /// let preds = model.predict_on_words(&words, k, threshold);
+    /// ```
+    ///
+    /// This design follows C++ fastText's `FastText::predictLine`, where the
+    /// EOS token is injected by the stream tokenizer when a newline is read.
+    /// The higher-level [`predict`] method replicates that behavior automatically
+    /// (appending EOS after tokenizing the input string), while this lower-level
+    /// method gives callers full control over the token sequence.
     pub fn predict_on_words(&self, word_ids: &[i32], k: usize, threshold: f32) -> Vec<Prediction> {
         if k == 0 || word_ids.is_empty() {
             return Vec::new();
