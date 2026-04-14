@@ -11,6 +11,7 @@ use crate::dictionary::{Dictionary, EntryType, EOS};
 use crate::error::{FastTextError, Result};
 use crate::loss::{HierarchicalSoftmaxLoss, Loss, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
 use crate::matrix::{DenseMatrix, Matrix};
+use crate::meter::Meter;
 use crate::model::{Model, State};
 use crate::utils;
 
@@ -518,6 +519,68 @@ impl FastText {
                 }
             })
             .collect()
+    }
+
+    // -------------------------------------------------------------------------
+    // Evaluation (test command)
+    // -------------------------------------------------------------------------
+
+    /// Evaluate the model on labeled test data and return a `Meter` with metrics.
+    ///
+    /// Reads each line from `reader`, extracts word IDs and gold label IDs via
+    /// the dictionary, runs `k`-best prediction, and accumulates the results in
+    /// a [`Meter`].  Lines with no labels or no words are skipped (matching C++
+    /// `FastText::test`).
+    ///
+    /// # Arguments
+    /// - `reader`: source of labeled test data (one labeled example per line).
+    /// - `k`: number of top predictions to request per example.
+    /// - `threshold`: minimum probability threshold (predictions below this
+    ///   are excluded from the prediction set passed to the meter).
+    ///
+    /// Returns a [`Meter`] containing accumulated precision, recall, and F1
+    /// statistics for all examples in `reader`.
+    pub fn test_model<R: Read + Seek>(&self, reader: &mut R, k: usize, threshold: f32) -> Result<Meter> {
+        let nlabels = self.dict.nlabels() as usize;
+        let dim = self.args.dim() as usize;
+        let k_eff = if nlabels == 0 { 0i32 } else { k.min(nlabels) as i32 };
+        let effective_threshold = if threshold < 0.0 { 0.0 } else { threshold };
+
+        // Rewind to the beginning, matching C++ `in.seekg(0, beg)`.
+        reader.seek(SeekFrom::Start(0)).map_err(FastTextError::IoError)?;
+        let mut buf_reader = BufReader::new(reader);
+
+        let mut meter = Meter::new();
+        let mut words: Vec<i32> = Vec::new();
+        let mut labels: Vec<i32> = Vec::new();
+        let mut pending_newline = false;
+
+        loop {
+            words.clear();
+            labels.clear();
+            let ntokens = self.dict.get_line(&mut buf_reader, &mut words, &mut labels, &mut pending_newline);
+            if ntokens == 0 && words.is_empty() && labels.is_empty() {
+                // EOF: read_word_from_reader returned false with no tokens
+                // Check if we actually hit EOF by trying to read again.
+                // The dictionary returns 0 tokens on EOF.
+                break;
+            }
+
+            if !labels.is_empty() && !words.is_empty() && k_eff > 0 {
+                let mut state = State::new(dim, nlabels, 0);
+                let raw = self.model.predict(&words, k_eff, effective_threshold, &mut state);
+
+                // Convert log-probs to probabilities (matching C++ `min(exp(score), 1.0)`).
+                let predictions: Vec<(f32, i32)> = raw
+                    .into_iter()
+                    .map(|(log_prob, label_idx)| (log_prob.exp().min(1.0), label_idx))
+                    .collect();
+
+                meter.add(&predictions, &labels);
+            }
+        }
+
+        Ok(meter)
     }
 
     // -------------------------------------------------------------------------
@@ -3599,6 +3662,134 @@ mod tests {
             );
         }
     }
+
+    // -------------------------------------------------------------------------
+    // VAL-TRAIN-009: Meter metrics computation (test command integration)
+    // -------------------------------------------------------------------------
+
+    /// Tests the test_model integration: train a supervised model, then
+    /// evaluate it on labeled test data using Meter, and verify basic metrics.
+    #[test]
+    fn test_meter_test_command() {
+        // Train a model on the standard supervised training data.
+        let train_data = supervised_train_data();
+        let train_path = write_temp_file(&train_data);
+        let train_str = train_path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(train_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(5);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+        args.set_seed(42);
+
+        let model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&train_path).ok();
+
+        // Write test data (a few labeled examples from the training set).
+        let test_data = "\
+__label__sports basketball player sport game\n\
+__label__food apple orange banana fruit eat\n\
+__label__sports team score win play\n\
+__label__food cook recipe eat meal\n";
+        let test_path = write_temp_file(test_data);
+
+        let mut file = std::fs::File::open(&test_path).expect("Failed to open test file");
+        let meter = model
+            .test_model(&mut file, 1, 0.0)
+            .expect("test_model should succeed");
+        std::fs::remove_file(&test_path).ok();
+
+        // The model should have evaluated at least some examples.
+        assert!(
+            meter.n_examples() > 0,
+            "Meter should have at least 1 example, got {}",
+            meter.n_examples()
+        );
+
+        // Precision and recall must be in [0, 1].
+        let p = meter.precision();
+        let r = meter.recall();
+        let f = meter.f1();
+        assert!(
+            (0.0..=1.0).contains(&p),
+            "Precision {:.4} out of [0,1]",
+            p
+        );
+        assert!(
+            (0.0..=1.0).contains(&r),
+            "Recall {:.4} out of [0,1]",
+            r
+        );
+        assert!(f.is_finite(), "F1 should be finite, got {}", f);
+        assert!(
+            (0.0..=1.0).contains(&f),
+            "F1 {:.4} out of [0,1]",
+            f
+        );
+
+        // After 5 epochs on simple data, the model should predict at least
+        // SOME examples correctly (p > 0 and r > 0).
+        assert!(
+            p > 0.0,
+            "Precision should be > 0.0 after training, got {:.4}",
+            p
+        );
+        assert!(
+            r > 0.0,
+            "Recall should be > 0.0 after training, got {:.4}",
+            r
+        );
+    }
+
+    /// Verifies that test_model returns zero metrics on an empty test file.
+    #[test]
+    fn test_meter_test_command_empty_file() {
+        let train_data = supervised_train_data();
+        let train_path = write_temp_file(&train_data);
+        let train_str = train_path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(train_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(0);
+
+        let model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&train_path).ok();
+
+        // Use a file with no labeled lines (only unlabeled text).
+        let test_data = "no labels here\nsome more text\n";
+        let test_path = write_temp_file(test_data);
+        let mut file = std::fs::File::open(&test_path).expect("Failed to open test file");
+        let meter = model
+            .test_model(&mut file, 1, 0.0)
+            .expect("test_model should not error on unlabeled data");
+        std::fs::remove_file(&test_path).ok();
+
+        // No examples have labels → meter should record 0 examples.
+        assert_eq!(
+            meter.n_examples(),
+            0,
+            "No labeled examples → n_examples should be 0"
+        );
+        assert_eq!(
+            meter.precision(),
+            0.0,
+            "No examples → precision should be 0.0"
+        );
+        assert_eq!(meter.recall(), 0.0, "No examples → recall should be 0.0");
+        assert_eq!(meter.f1(), 0.0, "No examples → F1 should be 0.0");
+    }
 }
+
 
 
