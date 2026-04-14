@@ -354,11 +354,19 @@ impl Dictionary {
         }
 
         let mut buf = [0u8; 1];
+        // Accumulate raw bytes so that multi-byte UTF-8 sequences are preserved intact.
+        // Converting individual bytes via `c as char` would corrupt any byte > 127,
+        // turning multi-byte code points into garbage Latin-1 characters.
+        let mut word_bytes: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => {
-                    // EOF: trigger eofbit equivalent, return what we have.
-                    return !word.is_empty();
+                    // EOF: flush accumulated bytes if any.
+                    if !word_bytes.is_empty() {
+                        *word = String::from_utf8_lossy(&word_bytes).into_owned();
+                        return true;
+                    }
+                    return false;
                 }
                 Ok(_) => {
                     let c = buf[0];
@@ -366,13 +374,15 @@ impl Dictionary {
                         matches!(c, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0');
 
                     if is_ws {
-                        if word.is_empty() {
+                        if word_bytes.is_empty() {
                             if c == b'\n' {
                                 word.push_str(EOS);
                                 return true;
                             }
                             // Skip non-newline whitespace when buffer is empty.
                         } else {
+                            // Token complete: convert accumulated bytes to String.
+                            *word = String::from_utf8_lossy(&word_bytes).into_owned();
                             if c == b'\n' {
                                 // Put back the newline via the pending flag.
                                 *pending_newline = true;
@@ -380,11 +390,16 @@ impl Dictionary {
                             return true;
                         }
                     } else {
-                        // SAFETY: pushing raw bytes; caller should pass valid UTF-8.
-                        word.push(c as char);
+                        word_bytes.push(c);
                     }
                 }
-                Err(_) => return !word.is_empty(),
+                Err(_) => {
+                    if !word_bytes.is_empty() {
+                        *word = String::from_utf8_lossy(&word_bytes).into_owned();
+                        return true;
+                    }
+                    return false;
+                }
             }
         }
     }
@@ -1509,6 +1524,103 @@ mod tests {
             &mut pending,
             &mut word
         ));
+    }
+
+    #[test]
+    fn test_read_word_from_reader_utf8() {
+        // Multi-byte UTF-8 sequences must be preserved intact.
+        // '日' = 0xE6 0x97 0xA5, 'é' in café = 0xC3 0xA9
+        let text = "日本語 café\nhello";
+        let mut reader = text.as_bytes();
+        let mut pending = false;
+        let mut word = String::new();
+
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
+        assert_eq!(
+            word, "日本語",
+            "Multi-byte UTF-8 token '日本語' should be preserved intact"
+        );
+
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
+        assert_eq!(
+            word, "café",
+            "UTF-8 token 'café' with accented character should be preserved intact"
+        );
+
+        // Newline was pending → EOS
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
+        assert_eq!(word, EOS);
+
+        assert!(Dictionary::read_word_from_reader(
+            &mut reader,
+            &mut pending,
+            &mut word
+        ));
+        assert_eq!(word, "hello");
+    }
+
+    #[test]
+    fn test_read_from_file_utf8_tokens() {
+        // Verify that read_from_file (which uses read_word_from_reader) correctly
+        // preserves multi-byte UTF-8 tokens in the vocabulary.
+        let mut args = Args::default();
+        args.set_min_count(1);
+        let args = Arc::new(args);
+        let mut dict = Dictionary::new_with_capacity(args, 1024);
+
+        // Use an in-memory buffer simulating a training text file with UTF-8 tokens.
+        let content = "日本語 café hello\n日本語 world\ncafé test\n";
+        let mut reader = content.as_bytes();
+        dict.read_from_file(&mut reader).unwrap();
+
+        // All tokens should appear correctly in the vocabulary.
+        let id_jp = dict.get_id("日本語");
+        let id_cafe = dict.get_id("café");
+        let id_hello = dict.get_id("hello");
+        let id_world = dict.get_id("world");
+        let id_test = dict.get_id("test");
+
+        assert!(id_jp >= 0, "'日本語' should be in vocabulary (got -1)");
+        assert!(id_cafe >= 0, "'café' should be in vocabulary (got -1)");
+        assert!(id_hello >= 0, "'hello' should be in vocabulary (got -1)");
+        assert!(id_world >= 0, "'world' should be in vocabulary (got -1)");
+        assert!(id_test >= 0, "'test' should be in vocabulary (got -1)");
+
+        // Verify the word strings are stored correctly (not corrupted).
+        assert_eq!(
+            dict.get_word(id_jp),
+            "日本語",
+            "Stored word for id_jp should be '日本語'"
+        );
+        assert_eq!(
+            dict.get_word(id_cafe),
+            "café",
+            "Stored word for id_café should be 'café'"
+        );
+
+        // Verify frequencies (日本語 appears twice, café appears twice).
+        assert_eq!(
+            dict.words()[id_jp as usize].count,
+            2,
+            "'日本語' should have count 2"
+        );
+        assert_eq!(
+            dict.words()[id_cafe as usize].count,
+            2,
+            "'café' should have count 2"
+        );
     }
 
     #[test]
