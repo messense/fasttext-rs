@@ -279,9 +279,36 @@ impl Matrix for QuantMatrix {
 
         let pq = ProductQuantizer::load(reader)?;
 
+        // Validate structural invariant: codesize must equal m * pq.nsubq.
+        let expected_codesize = m
+            .checked_mul(pq.nsubq as i64)
+            .ok_or_else(|| {
+                FastTextError::InvalidModel(
+                    "QuantMatrix codesize overflow: m * pq.nsubq overflows i64".to_string(),
+                )
+            })?;
+        if codesize as i64 != expected_codesize {
+            return Err(FastTextError::InvalidModel(format!(
+                "QuantMatrix codesize mismatch: stored codesize={} but expected {} \
+                 (m={} * pq.nsubq={})",
+                codesize, expected_codesize, m, pq.nsubq
+            )));
+        }
+
         let (norm_codes, npq) = if qnorm {
             let mut nc = vec![0u8; m as usize];
             reader.read_exact(&mut nc)?;
+
+            // Validate norm_codes length matches m.
+            if nc.len() != m as usize {
+                return Err(FastTextError::InvalidModel(format!(
+                    "QuantMatrix norm_codes length mismatch: got {} but expected {} (m={})",
+                    nc.len(),
+                    m,
+                    m
+                )));
+            }
+
             let npq = ProductQuantizer::load(reader)?;
             (Some(nc), Some(npq))
         } else {
@@ -780,5 +807,100 @@ mod tests {
         let mut cursor = Cursor::new(&buf);
         let result = QuantMatrix::load(&mut cursor);
         assert!(result.is_err(), "Expected error for negative codesize");
+    }
+
+    // -----------------------------------------------------------------------
+    // Structural invariant checks added at load time
+    // -----------------------------------------------------------------------
+
+    /// Verify that load() rejects a binary where codesize != m * pq.nsubq.
+    ///
+    /// We serialize a valid PQ with nsubq=2 (dim=4, dsub=2), then construct
+    /// a binary where the codesize field says 10 instead of the expected 8
+    /// (= m=4 × nsubq=2).  The loader must detect this mismatch and return
+    /// an InvalidModel error.
+    #[test]
+    fn test_qm_load_codesize_mismatch_rejected() {
+        // Save a valid PQ with known nsubq.
+        let qm = make_test_qm();
+        let mut pq_bytes = Vec::new();
+        qm.pq.save(&mut pq_bytes).unwrap();
+
+        // Build a binary that claims codesize=10 (wrong; should be m*nsubq = 4*2 = 8).
+        let mut buf = Vec::new();
+        write_bool(&mut buf, false).unwrap(); // qnorm=false
+        utils::write_i64(&mut buf, 4).unwrap(); // m=4
+        utils::write_i64(&mut buf, 4).unwrap(); // n=4
+        utils::write_i32(&mut buf, 10).unwrap(); // codesize=10 (WRONG)
+        buf.extend_from_slice(&[0u8; 10]); // 10 code bytes to match claimed codesize
+        buf.extend_from_slice(&pq_bytes); // valid PQ (nsubq=2 → expected 4*2=8)
+
+        let mut cursor = Cursor::new(&buf);
+        let result = QuantMatrix::load(&mut cursor);
+        assert!(
+            result.is_err(),
+            "codesize mismatch (10 != 4*2=8) should return an error"
+        );
+        match result.unwrap_err() {
+            FastTextError::InvalidModel(msg) => {
+                assert!(
+                    msg.contains("codesize"),
+                    "Error message should mention codesize: {}",
+                    msg
+                );
+            }
+            e => panic!("Expected InvalidModel, got: {:?}", e),
+        }
+    }
+
+    /// Verify that load() accepts a binary where codesize == m * pq.nsubq (8 == 4*2).
+    #[test]
+    fn test_qm_load_codesize_valid_accepted() {
+        let qm = make_test_qm();
+        // Save normally → codesize should equal m * pq.nsubq = 8.
+        let mut buf = Vec::new();
+        qm.save(&mut buf).unwrap();
+
+        let mut cursor = Cursor::new(&buf);
+        let result = QuantMatrix::load(&mut cursor);
+        assert!(
+            result.is_ok(),
+            "Valid codesize (8 == 4*2) should be accepted: {:?}",
+            result.err()
+        );
+        let qm2 = result.unwrap();
+        // Confirm the invariant holds in the loaded struct.
+        assert_eq!(
+            qm2.codesize as i64,
+            qm2.m * qm2.pq.nsubq as i64,
+            "codesize must equal m * pq.nsubq after load"
+        );
+    }
+
+    /// Verify that a qnorm=true QuantMatrix loads correctly and that
+    /// norm_codes length equals m after loading.
+    #[test]
+    fn test_qm_load_qnorm_norm_codes_length_matches_m() {
+        let qm = make_qnorm_qm();
+
+        let mut buf = Vec::new();
+        qm.save(&mut buf).unwrap();
+
+        let mut cursor = Cursor::new(&buf);
+        let qm2 = QuantMatrix::load(&mut cursor)
+            .expect("Valid qnorm QuantMatrix should load successfully");
+
+        assert!(qm2.qnorm, "qnorm should be true after load");
+        let norm_codes = qm2
+            .norm_codes
+            .as_ref()
+            .expect("norm_codes should be present when qnorm=true");
+        assert_eq!(
+            norm_codes.len(),
+            qm2.m as usize,
+            "norm_codes length ({}) must equal m ({})",
+            norm_codes.len(),
+            qm2.m
+        );
     }
 }

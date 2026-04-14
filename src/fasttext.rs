@@ -178,6 +178,8 @@ impl FastText {
         let file = std::fs::File::create(path).map_err(FastTextError::IoError)?;
         let mut writer = BufWriter::new(file);
         self.save(&mut writer)?;
+        // Explicitly flush before dropping so buffered-write errors are caught.
+        writer.flush().map_err(FastTextError::IoError)?;
         Ok(())
     }
 
@@ -233,15 +235,12 @@ impl FastText {
         result
     }
 
-    /// Predict the top-`k` labels for `text` using a softmax supervised model.
+    /// Predict the top-`k` labels for `text`.
     ///
     /// Returns a list of `(label, probability)` pairs sorted by descending
     /// probability.  Only predictions whose probability is ≥ `threshold` are
     /// returned.  Returns an empty vec for empty input, `k = 0`, or models
     /// with no labels.
-    ///
-    /// # Panics
-    /// Panics if the model is not a supervised (label) model.
     pub fn predict(&self, text: &str, k: usize, threshold: f32) -> Vec<(String, f32)> {
         if k == 0 {
             return Vec::new();
@@ -1248,6 +1247,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    // =========================================================================
+    // Fix: save_model explicitly flushes BufWriter
+    // =========================================================================
+
+    /// Verify that save_model flushes the writer before returning, so all
+    /// buffered data is written to disk.
+    #[test]
+    fn test_save_model_flushes_bufwriter() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+
+        let tmp_path = std::env::temp_dir().join("fasttext_flush_test.bin");
+        let tmp_str = tmp_path.to_str().unwrap();
+
+        // save_model must succeed (implicit flush).
+        model.save_model(tmp_str).expect("save_model should succeed");
+
+        // Reload and verify the model is fully intact — proves the flush worked.
+        let model2 = FastText::load_model(tmp_str).expect("Reloaded model should be valid");
+        std::fs::remove_file(tmp_str).ok();
+
+        // Sanity-check that predictions from reloaded model are valid.
+        let preds = model2.predict("How to bake a banana bread?", 1, 0.0);
+        assert!(!preds.is_empty(), "Reloaded model should produce predictions");
+    }
+
+    // =========================================================================
+    // Fix: predict() does not panic for non-supervised models
+    // =========================================================================
+
+    /// Verify that predict() returns an empty vec (not a panic) on a model
+    /// with no labels, confirming the doc comment is no longer misleading.
+    #[test]
+    fn test_predict_non_supervised_model_no_panic() {
+        // Build a minimal model with no labels (SG model).
+        let mut buf = Vec::new();
+        utils::write_i32(&mut buf, FASTTEXT_FILEFORMAT_MAGIC_INT32).unwrap();
+        utils::write_i32(&mut buf, FASTTEXT_VERSION).unwrap();
+
+        let mut args = Args::default();
+        args.set_dim(2);
+        args.set_ws(1);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_neg(5);
+        args.set_word_ngrams(1);
+        args.set_loss(LossName::NS);
+        args.set_model(ModelName::SG);
+        args.set_bucket(0);
+        args.set_minn(0);
+        args.set_maxn(0);
+        args.set_lr_update_rate(100);
+        args.set_t(0.0001);
+        args.save(&mut buf).unwrap();
+
+        // Dictionary: 1 word entry (</s>), 0 labels.
+        utils::write_i32(&mut buf, 1).unwrap(); // size
+        utils::write_i32(&mut buf, 1).unwrap(); // nwords
+        utils::write_i32(&mut buf, 0).unwrap(); // nlabels
+        utils::write_i64(&mut buf, 5).unwrap(); // ntokens
+        utils::write_i64(&mut buf, -1i64).unwrap(); // pruneidx_size
+        buf.extend_from_slice(b"hello\0");
+        utils::write_i64(&mut buf, 5).unwrap();
+        buf.push(0u8); // EntryType::Word
+
+        // quant_input = false
+        buf.push(0u8);
+
+        // Input matrix: 1 row × 2 cols
+        utils::write_i64(&mut buf, 1).unwrap();
+        utils::write_i64(&mut buf, 2).unwrap();
+        utils::write_f32(&mut buf, 0.5).unwrap();
+        utils::write_f32(&mut buf, 0.5).unwrap();
+
+        // qout = false
+        buf.push(0u8);
+
+        // Output matrix: 1 row × 2 cols
+        utils::write_i64(&mut buf, 1).unwrap();
+        utils::write_i64(&mut buf, 2).unwrap();
+        utils::write_f32(&mut buf, 0.3).unwrap();
+        utils::write_f32(&mut buf, 0.3).unwrap();
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let model = FastText::load(&mut cursor).expect("Model should load");
+
+        // predict() should return empty (no labels) without panicking.
+        let preds = model.predict("hello", 5, 0.0);
+        assert!(
+            preds.is_empty(),
+            "Model with no labels should return empty predictions, not panic"
+        );
     }
 
     /// Verify that predictions are deterministic across multiple calls after round-trip.
