@@ -280,6 +280,126 @@ impl FastText {
         result
     }
 
+    /// Compute the sentence vector for the given text.
+    ///
+    /// For supervised models: tokenizes with the dictionary (including subword IDs),
+    /// sums all input rows, and averages (raw, no L2 normalization).
+    ///
+    /// For unsupervised models (CBOW/SG): splits on whitespace, gets word vector
+    /// for each word, L2-normalizes each (if norm > 0), sums and averages.
+    ///
+    /// Empty input returns a zero vector.
+    pub fn get_sentence_vector(&self, sentence: &str) -> Vec<f32> {
+        let dim = self.args.dim() as usize;
+        let mut result = vec![0.0f32; dim];
+
+        if self.args.model() == ModelName::SUP {
+            // Supervised: use dictionary tokenization (subwords included).
+            // Append EOS to match C++ getSentenceVector behavior: the C++
+            // stream-based getLine includes an EOS token produced by the
+            // trailing newline, so we explicitly append it here.
+            let mut words: Vec<i32> = Vec::new();
+            let mut labels: Vec<i32> = Vec::new();
+            self.dict.get_line_from_str(sentence, &mut words, &mut labels);
+
+            // Return zero vector for empty/whitespace-only input.
+            if words.is_empty() {
+                return result;
+            }
+
+            // Append EOS to match C++ stream-based getLine behavior (trailing newline → EOS).
+            let eos_id = self.dict.get_id(EOS);
+            if eos_id >= 0 {
+                words.push(eos_id);
+            }
+
+            let count = words.len() as f32;
+            for &id in &words {
+                let row = self.input.row(id as i64);
+                for (r, &v) in result.iter_mut().zip(row.iter()) {
+                    *r += v;
+                }
+            }
+            for r in &mut result {
+                *r /= count;
+            }
+        } else {
+            // Unsupervised: split whitespace, get word vector, L2-normalize, average
+            let mut count = 0i32;
+            for word in sentence.split_whitespace() {
+                let vec = self.get_word_vector(word);
+                let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+                if norm > 0.0 {
+                    for (r, &v) in result.iter_mut().zip(vec.iter()) {
+                        *r += v / norm;
+                    }
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let scale = 1.0 / count as f32;
+                for r in &mut result {
+                    *r *= scale;
+                }
+            }
+        }
+        result
+    }
+
+    /// Tokenize text by splitting on whitespace.
+    ///
+    /// Returns an empty vec for empty/whitespace-only input.
+    /// Unicode tokens are preserved intact.
+    /// Multiple consecutive whitespace characters are collapsed.
+    /// Leading/trailing whitespace is ignored.
+    pub fn tokenize(text: &str) -> Vec<String> {
+        text.split_whitespace().map(|s| s.to_string()).collect()
+    }
+
+    /// Return the vocabulary words and their frequencies.
+    ///
+    /// Returns all word entries (not labels) in dictionary order (by frequency rank).
+    /// The cooking model returns 14543 words with the first entry being `</s>` with freq 12404.
+    pub fn get_vocab(&self) -> (Vec<String>, Vec<i64>) {
+        let nwords = self.dict.nwords() as usize;
+        let words = self.dict.words();
+        let mut vocab_words = Vec::with_capacity(nwords);
+        let mut vocab_freqs = Vec::with_capacity(nwords);
+        for entry in &words[..nwords] {
+            vocab_words.push(entry.word.clone());
+            vocab_freqs.push(entry.count);
+        }
+        (vocab_words, vocab_freqs)
+    }
+
+    /// Return the labels and their frequencies.
+    ///
+    /// Returns all label entries in dictionary order (by frequency rank).
+    /// The cooking model returns 735 labels with the first label being
+    /// `__label__baking` with freq 1156.
+    pub fn get_labels(&self) -> (Vec<String>, Vec<i64>) {
+        let nwords = self.dict.nwords() as usize;
+        let nlabels = self.dict.nlabels() as usize;
+        let words = self.dict.words();
+        let mut label_words = Vec::with_capacity(nlabels);
+        let mut label_freqs = Vec::with_capacity(nlabels);
+        for entry in &words[nwords..nwords + nlabels] {
+            label_words.push(entry.word.clone());
+            label_freqs.push(entry.count);
+        }
+        (label_words, label_freqs)
+    }
+
+    /// Return the model dimensionality (the `dim` hyperparameter).
+    pub fn get_dimension(&self) -> i32 {
+        self.args.dim()
+    }
+
+    /// Return the word ID for the given word, or `-1` if not in vocabulary.
+    pub fn get_word_id(&self, word: &str) -> i32 {
+        self.dict.get_id(word)
+    }
+
     /// Predict the top-`k` labels for `text`.
     ///
     /// Tokenizes `text` via the dictionary, appends the EOS token (matching
@@ -1847,6 +1967,401 @@ mod tests {
                     input, preds[i-1].prob, preds[i].prob
                 );
             }
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-012: get_word_vector() banana reference
+    // =========================================================================
+
+    /// Verify get_word_vector("banana") matches C++ reference within 1e-3.
+    ///
+    /// C++ reference (print-word-vectors cooking.model.bin):
+    /// banana 0.48844 -0.14683 0.3119 -0.36661 0.22843 -0.07035 ...
+    #[test]
+    fn test_get_word_vector_banana() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let vec = model.get_word_vector("banana");
+
+        // Check dimension
+        assert_eq!(vec.len(), 100, "Word vector should have 100 dimensions");
+
+        // C++ reference values for all 100 dimensions
+        let expected: [f32; 100] = [
+            0.48844, -0.14683, 0.3119, -0.36661, 0.22843, -0.07035, -0.26473, -0.35418,
+            -0.19428, -0.10533, 0.22645, 0.13888, -0.40894, 0.17568, -0.31359, 0.38722,
+            0.12278, -0.1001, 0.04358, -0.23915, 0.24731, 0.43714, -0.14672, 0.26647,
+            0.4463, 0.4347, 0.034649, 0.064306, -0.6327, 0.17736, -0.26013, -0.25258,
+            -0.03388, -0.27005, -0.12958, 0.44716, -0.32228, 0.24188, -0.31526, 0.33497,
+            -0.20352, -0.21103, 0.50374, 0.077682, 0.66139, -0.5584, 0.10622, -0.07879,
+            -0.17618, -0.21429, -0.31943, -0.026991, -0.32334, 0.44703, 0.19859, 0.17837,
+            0.37342, -0.19418, -0.3752, -0.19296, -0.18952, 0.34282, -0.33506, 0.27638,
+            -0.065614, 0.28327, 0.0028778, -0.11029, -0.24301, 0.50804, -0.14128, 0.44562,
+            -0.15644, -0.49472, 0.074092, -0.61279, 0.029795, -0.26603, -0.51902, 0.11931,
+            0.25819, 0.15659, 0.18606, 0.080266, 0.099765, 0.056123, -0.46964, 0.11671,
+            0.32503, 0.10737, 0.086726, -0.13546, 0.10999, -0.22411, -0.26554, -0.010061,
+            -0.37875, -0.083359, 0.57227, -0.69741,
+        ];
+
+        let tolerance = 1e-3_f32;
+        for (i, (&got, &exp)) in vec.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < tolerance,
+                "banana vector[{}]: got={}, expected={}, diff={}",
+                i, got, exp, (got - exp).abs()
+            );
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-013: get_word_vector() unknown word behavior
+    // =========================================================================
+
+    /// Unknown word with maxn=0 returns zero vector.
+    #[test]
+    fn test_get_word_vector_unknown_zero() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        // cooking model has maxn=0 (no subword computation)
+        assert_eq!(model.args().maxn(), 0, "cooking model should have maxn=0");
+
+        let vec = model.get_word_vector("xyzzy_definitely_not_in_vocabulary_42");
+        assert_eq!(vec.len(), 100, "Vector should have 100 dimensions");
+
+        for &v in &vec {
+            assert_eq!(v, 0.0, "Unknown word with maxn=0 should return zero vector, got {}", v);
+        }
+    }
+
+    /// Known word returns non-zero vector.
+    #[test]
+    fn test_get_word_vector_known_nonzero() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let vec = model.get_word_vector("banana");
+        assert_eq!(vec.len(), 100, "Vector should have 100 dimensions");
+
+        let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(
+            norm > 0.0,
+            "Known word 'banana' should have non-zero vector, norm={}", norm
+        );
+    }
+
+    /// get_word_vector returns correct dimension.
+    #[test]
+    fn test_get_word_vector_dimension() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let vec = model.get_word_vector("baking");
+        assert_eq!(
+            vec.len(),
+            model.get_dimension() as usize,
+            "Word vector length should equal model dimension"
+        );
+    }
+
+    // =========================================================================
+    // VAL-INF-014: get_sentence_vector() behavior
+    // =========================================================================
+
+    /// Supervised model sentence vector: no L2 normalization, raw average.
+    #[test]
+    fn test_get_sentence_vector_supervised() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let sentence = "How to bake a banana bread";
+        let svec = model.get_sentence_vector(sentence);
+        assert_eq!(svec.len(), 100, "Sentence vector should have 100 dims");
+
+        // Should be non-zero for a sentence with known words
+        let norm: f32 = svec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(norm > 0.0, "Sentence vector should be non-zero for known words");
+    }
+
+    /// Empty input returns zero vector.
+    #[test]
+    fn test_get_sentence_vector_empty() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let svec = model.get_sentence_vector("");
+        assert_eq!(svec.len(), 100, "Sentence vector should have 100 dims");
+        for &v in &svec {
+            assert_eq!(v, 0.0, "Empty sentence should return zero vector, got {}", v);
+        }
+    }
+
+    /// Whitespace-only input returns zero vector.
+    #[test]
+    fn test_get_sentence_vector_whitespace_only() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let svec = model.get_sentence_vector("   \t  ");
+        assert_eq!(svec.len(), 100, "Sentence vector should have 100 dims");
+        for &v in &svec {
+            assert_eq!(v, 0.0, "Whitespace-only should return zero vector, got {}", v);
+        }
+    }
+
+    /// Sentence vector averaging is correct: multi-word sentence differs from single-word.
+    /// The sentence vector is NOT just the word vector - it includes EOS in the average.
+    #[test]
+    fn test_get_sentence_vector_averaging() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+
+        // Single-word sentence vector should be non-zero (baking is in vocab)
+        let sent_vec = model.get_sentence_vector("baking");
+        assert_eq!(sent_vec.len(), 100, "Sentence vector should have 100 dims");
+        let norm: f32 = sent_vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(norm > 0.0, "Sentence vector for 'baking' should be non-zero");
+
+        // Two-word sentence should be different from single-word sentence
+        let sent_vec2 = model.get_sentence_vector("baking bread");
+        let norm2: f32 = sent_vec2.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        assert!(norm2 > 0.0, "Sentence vector for 'baking bread' should be non-zero");
+
+        // Longer sentence should produce different result than shorter
+        let sent_vec3 = model.get_sentence_vector("baking banana bread cake");
+        assert_ne!(
+            sent_vec, sent_vec3,
+            "Different sentences should produce different vectors"
+        );
+    }
+
+    /// Sentence vector matches C++ reference output.
+    /// C++ print-sentence-vectors reference for "How to bake a banana bread"
+    /// starts with: 0.073472 -0.027573 0.10399 -0.47752 0.031626 ...
+    #[test]
+    fn test_get_sentence_vector_reference() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let svec = model.get_sentence_vector("How to bake a banana bread");
+        assert_eq!(svec.len(), 100, "Should have 100 dims");
+
+        // First few C++ reference values
+        let expected_first_5 = [0.073472_f32, -0.027573, 0.10399, -0.47752, 0.031626];
+        let tolerance = 1e-3_f32;
+        for (i, (&got, &exp)) in svec.iter().zip(expected_first_5.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < tolerance,
+                "sentence_vector[{}]: got={}, expected={}, diff={}",
+                i, got, exp, (got - exp).abs()
+            );
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-015: tokenize() correctness
+    // =========================================================================
+
+    /// Basic whitespace splitting.
+    #[test]
+    fn test_tokenize_basic() {
+        let tokens = FastText::tokenize("hello world foo");
+        assert_eq!(tokens, vec!["hello", "world", "foo"]);
+    }
+
+    /// Unicode tokens preserved intact.
+    #[test]
+    fn test_tokenize_unicode() {
+        let tokens = FastText::tokenize("日本語 café résumé");
+        assert_eq!(tokens, vec!["日本語", "café", "résumé"]);
+    }
+
+    /// Empty string returns empty vec.
+    #[test]
+    fn test_tokenize_empty() {
+        let tokens = FastText::tokenize("");
+        assert!(tokens.is_empty(), "Empty string should return empty vec");
+    }
+
+    /// Multiple consecutive whitespace characters collapsed.
+    #[test]
+    fn test_tokenize_multi_whitespace() {
+        let tokens = FastText::tokenize("hello   world\t\tfoo");
+        assert_eq!(tokens, vec!["hello", "world", "foo"]);
+    }
+
+    /// Leading/trailing whitespace ignored.
+    #[test]
+    fn test_tokenize_leading_trailing_whitespace() {
+        let tokens = FastText::tokenize("  hello world  ");
+        assert_eq!(tokens, vec!["hello", "world"]);
+    }
+
+    /// Whitespace-only input returns empty vec.
+    #[test]
+    fn test_tokenize_whitespace_only() {
+        let tokens = FastText::tokenize("   \t  \n  ");
+        assert!(tokens.is_empty(), "Whitespace-only should return empty vec");
+    }
+
+    /// Single word returns single-element vec.
+    #[test]
+    fn test_tokenize_single_word() {
+        let tokens = FastText::tokenize("hello");
+        assert_eq!(tokens, vec!["hello"]);
+    }
+
+    // =========================================================================
+    // VAL-INF-016: get_vocab() and get_labels() cooking model reference
+    // =========================================================================
+
+    /// get_vocab() returns 14543 words, first entry is </s> with freq 12404.
+    #[test]
+    fn test_get_vocab_cooking() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let (words, freqs) = model.get_vocab();
+
+        assert_eq!(
+            words.len(), 14543,
+            "Should have 14543 words, got {}", words.len()
+        );
+        assert_eq!(
+            freqs.len(), 14543,
+            "Freqs length should match words length"
+        );
+
+        // First word should be </s> with freq 12404
+        assert_eq!(
+            words[0], "</s>",
+            "First word should be </s>, got '{}'", words[0]
+        );
+        assert_eq!(
+            freqs[0], 12404,
+            "First word freq should be 12404, got {}", freqs[0]
+        );
+
+        // All words should be non-empty
+        for (i, word) in words.iter().enumerate() {
+            assert!(!word.is_empty(), "Word[{}] should not be empty", i);
+        }
+
+        // All freqs should be positive
+        for (i, &freq) in freqs.iter().enumerate() {
+            assert!(freq > 0, "Freq[{}] should be positive, got {}", i, freq);
+        }
+    }
+
+    /// get_labels() returns 735 labels, first label is __label__baking with freq 1156.
+    #[test]
+    fn test_get_labels_cooking() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let (labels, freqs) = model.get_labels();
+
+        assert_eq!(
+            labels.len(), 735,
+            "Should have 735 labels, got {}", labels.len()
+        );
+        assert_eq!(
+            freqs.len(), 735,
+            "Freqs length should match labels length"
+        );
+
+        // First label should be __label__baking with freq 1156
+        assert_eq!(
+            labels[0], "__label__baking",
+            "First label should be __label__baking, got '{}'", labels[0]
+        );
+        assert_eq!(
+            freqs[0], 1156,
+            "First label freq should be 1156, got {}", freqs[0]
+        );
+
+        // All labels should start with __label__
+        for (i, label) in labels.iter().enumerate() {
+            assert!(
+                label.starts_with("__label__"),
+                "Label[{}] '{}' should start with '__label__'", i, label
+            );
+        }
+    }
+
+    // =========================================================================
+    // VAL-INF-017: Metadata accessors
+    // =========================================================================
+
+    /// get_dimension() returns the correct value for the cooking model.
+    #[test]
+    fn test_get_dimension() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        assert_eq!(
+            model.get_dimension(), 100,
+            "Cooking model dimension should be 100"
+        );
+    }
+
+    /// get_word_id() returns correct ID for known words and -1 for unknown.
+    #[test]
+    fn test_get_word_id_known() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+
+        // EOS should be at index 0
+        let eos_id = model.get_word_id("</s>");
+        assert_eq!(eos_id, 0, "EOS should be at index 0, got {}", eos_id);
+
+        // Known words should be in vocabulary
+        let banana_id = model.get_word_id("banana");
+        assert!(
+            banana_id >= 0,
+            "'banana' should be in vocabulary, got id={}", banana_id
+        );
+
+        let baking_id = model.get_word_id("baking");
+        assert!(
+            baking_id >= 0,
+            "'baking' should be in vocabulary, got id={}", baking_id
+        );
+    }
+
+    /// get_word_id() returns -1 for unknown words.
+    #[test]
+    fn test_get_word_id_unknown() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let id = model.get_word_id("xyzzy_definitely_not_in_vocabulary_42");
+        assert_eq!(id, -1, "Unknown word should return -1, got {}", id);
+    }
+
+    /// is_quant() returns false for .bin models.
+    #[test]
+    fn test_is_quant_false_for_bin_model() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        assert!(!model.is_quant(), "cooking.model.bin should not be quantized");
+    }
+
+    /// get_dimension() matches args.dim().
+    #[test]
+    fn test_get_dimension_matches_args() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        assert_eq!(
+            model.get_dimension(),
+            model.args().dim(),
+            "get_dimension() should equal args().dim()"
+        );
+    }
+
+    /// get_vocab() words are not labels (none should start with __label__).
+    #[test]
+    fn test_get_vocab_not_labels() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let (words, _) = model.get_vocab();
+        for (i, word) in words.iter().enumerate() {
+            assert!(
+                !word.starts_with("__label__"),
+                "Vocab word[{}] '{}' should not be a label", i, word
+            );
+        }
+    }
+
+    /// get_labels() returns proper label format.
+    #[test]
+    fn test_get_labels_format() {
+        let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
+        let (labels, freqs) = model.get_labels();
+
+        assert_eq!(labels.len(), freqs.len(), "Labels and freqs should have same length");
+
+        // All labels should be non-empty
+        for (i, label) in labels.iter().enumerate() {
+            assert!(!label.is_empty(), "Label[{}] should not be empty", i);
+        }
+
+        // Frequencies should be positive
+        for (i, &freq) in freqs.iter().enumerate() {
+            assert!(freq > 0, "Label freq[{}] should be > 0, got {}", i, freq);
         }
     }
 }
