@@ -1,7 +1,10 @@
 // FastText: train, predict, quantize, autotune, save/load, word/sentence vectors
 
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+
+use rayon::prelude::*;
 
 use crate::args::{Args, LossName, ModelName};
 use crate::dictionary::{Dictionary, EntryType, EOS};
@@ -55,6 +58,19 @@ fn build_loss(args: &Args, wo: Arc<DenseMatrix>, target_counts: &[i64]) -> Box<d
     }
 }
 
+/// Shared context passed to each training thread.
+///
+/// Bundles the per-run read-only state so that `train_thread_inner` stays
+/// within clippy's argument-count limit.
+struct TrainThreadCtx<'a> {
+    args: &'a Args,
+    dict: &'a Dictionary,
+    model: &'a Model,
+    output_size: usize,
+    token_count: &'a AtomicI64,
+    abort_flag: &'a AtomicBool,
+}
+
 /// A loaded fastText model.
 ///
 /// Contains the model arguments, dictionary, input matrix, output matrix,
@@ -73,6 +89,10 @@ pub struct FastText {
     quant: bool,
     /// Pre-built inference model.
     model: Model,
+    /// Atomic flag for aborting an in-progress training run.
+    ///
+    /// Set via [`FastText::abort()`]; checked in the training loop.
+    abort_flag: Arc<AtomicBool>,
 }
 
 impl FastText {
@@ -177,6 +197,7 @@ impl FastText {
             output: output_arc,
             quant: quant_input,
             model,
+            abort_flag: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -505,15 +526,26 @@ impl FastText {
 
     /// Train a new fastText model from the given `Args`.
     ///
-    /// Steps:
-    /// 1. Read input file and build vocabulary (dictionary with subsampling table and subwords).
-    /// 2. Initialize input matrix `(nwords + bucket) × dim` with uniform values in `[-1/dim, 1/dim]`.
-    /// 3. Initialize output matrix `(nlabels or nwords) × dim` zeroed.
-    /// 4. Build the loss function and model.
-    /// 5. Run single-threaded training (thread 0).
+    /// Delegates to [`FastText::train_with_abort`] with a fresh abort flag.
     ///
     /// Returns a trained `FastText` instance ready for prediction.
     pub fn train(args: Args) -> Result<Self> {
+        Self::train_with_abort(args, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Train a new fastText model, using the supplied `abort_flag` for early
+    /// termination.
+    ///
+    /// Setting `abort_flag` to `true` from another thread while this function
+    /// is running will cause the training loop to exit early.  The returned
+    /// model is still valid for inference (possibly under-trained).
+    ///
+    /// Steps:
+    /// 1. Read input file and build vocabulary.
+    /// 2. Initialize matrices.
+    /// 3. Run training in parallel using rayon (Hogwild! SGD).
+    /// 4. Return a trained `FastText` instance.
+    pub fn train_with_abort(args: Args, abort_flag: Arc<AtomicBool>) -> Result<Self> {
         let input_path = args.input().to_string();
         if input_path.is_empty() {
             return Err(FastTextError::InvalidArgument(
@@ -550,86 +582,136 @@ impl FastText {
         };
         // DenseMatrix::new zeroes all values by default.
         let output = Arc::new(DenseMatrix::new(out_rows, dim));
+        let output_size = output.rows() as usize;
 
-        // Build loss and model.
+        // Build target counts for loss construction.
         let target_counts = if args.model() == ModelName::SUP {
             dict.get_counts(EntryType::Label)
         } else {
             dict.get_counts(EntryType::Word)
         };
-        let loss = build_loss(&args, Arc::clone(&output), &target_counts);
         let normalize_gradient = args.model() == ModelName::SUP;
+
+        // Number of threads (at least 1).
+        let n_threads = (args.thread() as usize).max(1);
+
+        // Shared atomic token counter across all training threads.
+        let token_count = Arc::new(AtomicI64::new(0));
+
+        // Run Hogwild! parallel training with rayon.
+        // Each thread creates its own Model (sharing the same Arc<DenseMatrix>),
+        // and updates weights concurrently without locks.
+        let training_results: Vec<Result<()>> = (0..n_threads)
+            .into_par_iter()
+            .map(|thread_id| {
+                let loss = build_loss(&args, Arc::clone(&output), &target_counts);
+                let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
+                let ctx = TrainThreadCtx {
+                    args: &args,
+                    dict: &dict,
+                    model: &model,
+                    output_size,
+                    token_count: &token_count,
+                    abort_flag: &abort_flag,
+                };
+                Self::train_thread_inner(thread_id, n_threads, &ctx)
+            })
+            .collect();
+
+        // Propagate the first training error, if any.
+        for result in training_results {
+            result?;
+        }
+
+        // Build the inference model from the trained matrices.
+        let loss = build_loss(&args, Arc::clone(&output), &target_counts);
         let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
 
-        let mut ft = FastText {
-            args: Arc::clone(&args_arc),
+        Ok(FastText {
+            args: args_arc,
             dict,
             input,
             output,
             quant: false,
             model,
-        };
-
-        // Run single-threaded training (thread 0).
-        // Rayon multi-threading is handled in the next feature (training-parallel).
-        ft.train_thread(0)?;
-
-        Ok(ft)
+            abort_flag,
+        })
     }
 
-    /// Inner training loop for one thread.
+    /// Signal an in-progress training run to stop early.
+    ///
+    /// Sets the internal atomic abort flag.  The training loop checks this flag
+    /// periodically and exits if it is set.  The model returned from
+    /// [`FastText::train_with_abort`] will still be valid for inference.
+    ///
+    /// This method is **idempotent**: calling it multiple times is safe and has
+    /// no adverse effect.
+    pub fn abort(&self) {
+        self.abort_flag.store(true, Ordering::Relaxed);
+    }
+
+    /// Inner training loop for one thread (Hogwild! SGD).
     ///
     /// Opens the input file, seeks to `thread_id * file_size / n_threads`,
     /// then loops reading lines and performing SGD updates until
-    /// `token_count >= epoch * ntokens`.
+    /// `token_count >= epoch * ntokens` or `abort_flag` is set.
     ///
     /// Matches C++ `FastText::trainThread`.
-    fn train_thread(&mut self, thread_id: usize) -> Result<()> {
-        let ntokens = self.dict.ntokens();
+    fn train_thread_inner(thread_id: usize, n_threads: usize, ctx: &TrainThreadCtx<'_>) -> Result<()> {
+        let ntokens = ctx.dict.ntokens();
         if ntokens == 0 {
             return Ok(());
         }
 
-        let input_path = self.args.input().to_string();
-        let n_threads = self.args.thread() as u64;
+        let input_path = ctx.args.input().to_string();
 
-        // Open file and seek to thread start position.
+        // Open file and seek to this thread's starting position.
         let mut file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
         let file_size = file.seek(SeekFrom::End(0)).map_err(FastTextError::IoError)?;
-        let start_pos = thread_id as u64 * file_size / n_threads;
+        let start_pos = thread_id as u64 * file_size / n_threads as u64;
         file.seek(SeekFrom::Start(start_pos))
             .map_err(FastTextError::IoError)?;
         let mut reader = BufReader::new(file);
 
-        let output_size = self.output.rows() as usize;
-        let seed = thread_id as u64 + self.args.seed() as u64;
-        let mut state = State::new(self.args.dim() as usize, output_size, seed);
+        let seed = thread_id as u64 + ctx.args.seed() as u64;
+        let mut state = State::new(ctx.args.dim() as usize, ctx.output_size, seed);
 
-        let model_name = self.args.model();
-        let is_ova = self.args.loss() == LossName::OVA;
-        let ws = self.args.ws();
-        let lr_update_rate = self.args.lr_update_rate() as i64;
-        let base_lr = self.args.lr() as f32;
-        let epoch = self.args.epoch() as i64;
+        let model_name = ctx.args.model();
+        let is_ova = ctx.args.loss() == LossName::OVA;
+        let ws = ctx.args.ws();
+        let lr_update_rate = ctx.args.lr_update_rate() as i64;
+        let base_lr = ctx.args.lr() as f32;
+        let epoch = ctx.args.epoch() as i64;
 
-        let mut token_count: i64 = 0;
         let mut local_token_count: i64 = 0;
         let mut line: Vec<i32> = Vec::new();
         let mut labels: Vec<i32> = Vec::new();
         let mut pending_newline = false;
 
-        while token_count < epoch * ntokens {
-            let progress = token_count as f32 / (epoch as f32 * ntokens as f32);
+        loop {
+            // Check abort flag — exit early if set.
+            if ctx.abort_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Check if training has reached the target token count.
+            let tc = ctx.token_count.load(Ordering::Relaxed);
+            if tc >= epoch * ntokens {
+                break;
+            }
+
+            // Compute current progress and learning rate.
+            let progress = tc as f32 / (epoch as f32 * ntokens as f32);
             let lr = (base_lr * (1.0 - progress)).max(0.0_f32);
 
             let ntok = match model_name {
-                ModelName::SUP => self.dict.get_line(
+                ModelName::SUP => ctx.dict.get_line(
                     &mut reader,
                     &mut line,
                     &mut labels,
                     &mut pending_newline,
                 ),
-                _ => self.dict.get_line_unsupervised(
+                _ => ctx.dict.get_line_unsupervised(
                     &mut reader,
                     &mut line,
                     &mut pending_newline,
@@ -638,7 +720,7 @@ impl FastText {
             };
 
             if ntok == 0 {
-                // EOF: reset to beginning of file for next epoch pass.
+                // EOF: wrap around to beginning for additional epoch passes.
                 if let Err(e) = reader.seek(SeekFrom::Start(0)) {
                     return Err(FastTextError::IoError(e));
                 }
@@ -648,23 +730,27 @@ impl FastText {
 
             match model_name {
                 ModelName::SUP => {
-                    Self::supervised_fn(&self.model, &mut state, lr, &line, &labels, is_ova);
+                    Self::supervised_fn(ctx.model, &mut state, lr, &line, &labels, is_ova);
                 }
                 ModelName::CBOW => {
-                    // For CBOW, line contains word IDs; subwords retrieved inside cbow_fn.
-                    Self::cbow_fn(&self.model, &self.dict, &mut state, lr, &line, ws);
+                    Self::cbow_fn(ctx.model, ctx.dict, &mut state, lr, &line, ws);
                 }
                 _ => {
                     // Skip-gram
-                    Self::skipgram_fn(&self.model, &self.dict, &mut state, lr, &line, ws);
+                    Self::skipgram_fn(ctx.model, ctx.dict, &mut state, lr, &line, ws);
                 }
             }
 
             local_token_count += ntok as i64;
             if local_token_count > lr_update_rate {
-                token_count += local_token_count;
+                ctx.token_count.fetch_add(local_token_count, Ordering::Relaxed);
                 local_token_count = 0;
             }
+        }
+
+        // Flush any remaining local token count into the shared counter.
+        if local_token_count > 0 {
+            ctx.token_count.fetch_add(local_token_count, Ordering::Relaxed);
         }
 
         Ok(())
@@ -3300,6 +3386,218 @@ mod tests {
             "Training should complete without error: {:?}",
             result.err()
         );
+    }
+
+    // =========================================================================
+    // Parallel training tests (training-parallel feature)
+    // =========================================================================
+
+    /// VAL-TRAIN-006: Multi-threaded Hogwild! training completes without panic.
+    ///
+    /// Trains with thread=4 and verifies all model weights are finite.
+    #[test]
+    fn test_parallel_hogwild_training() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(3);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(4);
+
+        let model = FastText::train(args).expect("Parallel training (thread=4) should succeed");
+        std::fs::remove_file(&path).ok();
+
+        // All input weights must be finite.
+        let input = model.input_matrix();
+        for v in input.data() {
+            assert!(
+                v.is_finite(),
+                "Input weight is not finite after Hogwild! training: {}",
+                v
+            );
+        }
+
+        // All output weights must be finite.
+        let output = model.output_matrix();
+        for v in output.data() {
+            assert!(
+                v.is_finite(),
+                "Output weight is not finite after Hogwild! training: {}",
+                v
+            );
+        }
+    }
+
+    /// VAL-TRAIN-006 (extended): All weights finite after Hogwild! training.
+    ///
+    /// Verifies that no NaN or Inf values appear after concurrent weight updates.
+    #[test]
+    fn test_hogwild_weights_finite() {
+        let data = unsupervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.set_model(crate::args::ModelName::CBOW);
+        args.set_loss(crate::args::LossName::NS);
+        args.set_dim(10);
+        args.set_epoch(3);
+        args.set_min_count(1);
+        args.set_thread(4);
+        args.set_bucket(100);
+
+        let model = FastText::train(args).expect("Multi-threaded CBOW training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        for v in model.input_matrix().data() {
+            assert!(v.is_finite(), "Input weight NaN/Inf: {}", v);
+        }
+        for v in model.output_matrix().data() {
+            assert!(v.is_finite(), "Output weight NaN/Inf: {}", v);
+        }
+    }
+
+    /// VAL-TRAIN-010: Abort stops training early; model is still usable.
+    ///
+    /// Starts training in a separate thread with a large epoch count, sets the
+    /// abort flag after a brief delay, and verifies the model is usable.
+    #[test]
+    fn test_training_abort() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        // Shared abort flag: the test thread will set it to stop training early.
+        let abort_flag = Arc::new(AtomicBool::new(false));
+        let abort_for_train = Arc::clone(&abort_flag);
+
+        let handle = std::thread::spawn(move || {
+            let mut args = Args::default();
+            args.set_input(path_str.clone());
+            args.set_output("/dev/null".to_string());
+            args.apply_supervised_defaults();
+            args.set_dim(10);
+            args.set_epoch(500); // Very large epoch count so training won't finish naturally.
+            args.set_min_count(1);
+            args.set_lr(0.1);
+            args.set_bucket(0);
+            args.set_thread(1);
+            FastText::train_with_abort(args, abort_for_train)
+        });
+
+        // Give training a moment to start, then abort it.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        abort_flag.store(true, Ordering::Relaxed);
+
+        let model = handle.join().unwrap().expect("Aborted training should return Ok");
+
+        // The model must still be usable for prediction without panicking.
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        // We just verify it doesn't panic — predictions may be poor since training was aborted.
+        let _ = preds;
+
+        // Verify abort flag is accessible on the returned model.
+        model.abort(); // idempotent — should not panic
+    }
+
+    /// Abort is idempotent: calling abort() multiple times must not panic.
+    #[test]
+    fn test_abort_idempotent() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(5);
+        args.set_epoch(2);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+
+        let model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        // Calling abort() multiple times must not panic.
+        model.abort();
+        model.abort();
+        model.abort();
+        // Success: no panic.
+    }
+
+    /// VAL-TRAIN-015: Single-thread deterministic training.
+    ///
+    /// With thread=1 and the same seed, two independent training runs on the
+    /// same data must produce bit-identical model weights.
+    #[test]
+    fn test_deterministic_training() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let make_args = |path: &str| {
+            let mut args = Args::default();
+            args.set_input(path.to_string());
+            args.set_output("/dev/null".to_string());
+            args.apply_supervised_defaults();
+            args.set_dim(10);
+            args.set_epoch(3);
+            args.set_min_count(1);
+            args.set_lr(0.1);
+            args.set_bucket(0);
+            args.set_thread(1); // Single thread for determinism.
+            args.set_seed(42); // Fixed seed.
+            args
+        };
+
+        let model1 = FastText::train(make_args(&path_str)).expect("First training run failed");
+        let model2 = FastText::train(make_args(&path_str)).expect("Second training run failed");
+        std::fs::remove_file(&path).ok();
+
+        // Both runs must produce bit-identical input weights.
+        let input1 = model1.input_matrix().data().to_vec();
+        let input2 = model2.input_matrix().data().to_vec();
+        assert_eq!(
+            input1.len(),
+            input2.len(),
+            "Input matrix sizes differ between runs"
+        );
+        for (i, (&v1, &v2)) in input1.iter().zip(input2.iter()).enumerate() {
+            assert_eq!(
+                v1, v2,
+                "Input weight at index {} differs: {} vs {} (non-deterministic with thread=1)",
+                i, v1, v2
+            );
+        }
+
+        // Both runs must produce bit-identical output weights.
+        let output1 = model1.output_matrix().data().to_vec();
+        let output2 = model2.output_matrix().data().to_vec();
+        assert_eq!(
+            output1.len(),
+            output2.len(),
+            "Output matrix sizes differ between runs"
+        );
+        for (i, (&v1, &v2)) in output1.iter().zip(output2.iter()).enumerate() {
+            assert_eq!(
+                v1, v2,
+                "Output weight at index {} differs: {} vs {} (non-deterministic with thread=1)",
+                i, v1, v2
+            );
+        }
     }
 }
 
