@@ -4,6 +4,7 @@
 // matching the C++ fastText DenseMatrix class backed by `intgemm::AlignedVector<real>`.
 
 use std::alloc::{self, Layout};
+use std::convert::TryFrom;
 use std::io::{Read, Write};
 
 use crate::error::{FastTextError, Result};
@@ -70,11 +71,32 @@ pub struct DenseMatrix {
 unsafe impl Send for DenseMatrix {}
 unsafe impl Sync for DenseMatrix {}
 
+/// Compute `m * n` as `usize` with overflow checking.
+///
+/// Converts both dimensions from `i64` to `usize` (panicking if negative) and
+/// then uses `checked_mul` to detect multiplication overflow.  This prevents
+/// silent wrap-around when very large dimension values are passed.
+///
+/// # Panics
+/// Panics with a descriptive message if either dimension is negative or if the
+/// product overflows `usize`.
+#[inline]
+fn checked_dim_size(m: i64, n: i64) -> usize {
+    let m_u = usize::try_from(m)
+        .expect("DenseMatrix row count (m) must be non-negative");
+    let n_u = usize::try_from(n)
+        .expect("DenseMatrix column count (n) must be non-negative");
+    m_u.checked_mul(n_u)
+        .expect("DenseMatrix dimensions m*n overflow usize")
+}
+
 impl DenseMatrix {
     /// Create a new dense matrix with the given dimensions. All elements are zeroed.
+    ///
+    /// # Panics
+    /// Panics if `m` or `n` is negative, or if `m * n` would overflow `usize`.
     pub fn new(m: i64, n: i64) -> Self {
-        assert!(m >= 0 && n >= 0, "Matrix dimensions must be non-negative");
-        let size = (m * n) as usize;
+        let size = checked_dim_size(m, n);
         if size == 0 {
             return DenseMatrix {
                 ptr: std::ptr::null_mut(),
@@ -96,7 +118,10 @@ impl DenseMatrix {
     /// Return a slice of the entire matrix data in row-major order.
     #[inline]
     pub fn data(&self) -> &[f32] {
-        let size = (self.m * self.n) as usize;
+        // Use checked arithmetic to compute element count.  The constructor
+        // guarantees m and n are non-negative and m*n fits in usize, so these
+        // operations will never fail for a properly constructed DenseMatrix.
+        let size = checked_dim_size(self.m, self.n);
         if size == 0 {
             return &[];
         }
@@ -107,7 +132,10 @@ impl DenseMatrix {
     /// Return a mutable slice of the entire matrix data in row-major order.
     #[inline]
     pub fn data_mut(&mut self) -> &mut [f32] {
-        let size = (self.m * self.n) as usize;
+        // Use checked arithmetic to compute element count.  The constructor
+        // guarantees m and n are non-negative and m*n fits in usize, so these
+        // operations will never fail for a properly constructed DenseMatrix.
+        let size = checked_dim_size(self.m, self.n);
         if size == 0 {
             return &mut [];
         }
@@ -118,30 +146,35 @@ impl DenseMatrix {
     /// Access element at (i, j).
     #[inline]
     pub fn at(&self, i: i64, j: i64) -> f32 {
-        let idx = (i * self.n + j) as usize;
+        // Convert to usize before multiplying to avoid i64 overflow.
+        // The constructor invariant guarantees self.n >= 0 and fits in usize.
+        let idx = (i as usize) * (self.n as usize) + (j as usize);
         self.data()[idx]
     }
 
     /// Set element at (i, j).
     #[inline]
     pub fn at_mut(&mut self, i: i64, j: i64) -> &mut f32 {
-        let idx = (i * self.n + j) as usize;
+        // Convert to usize before multiplying to avoid i64 overflow.
+        let idx = (i as usize) * (self.n as usize) + (j as usize);
         &mut self.data_mut()[idx]
     }
 
     /// Return a slice for row `i`.
     #[inline]
     pub fn row(&self, i: i64) -> &[f32] {
-        let start = (i * self.n) as usize;
-        let end = start + self.n as usize;
+        // Convert to usize before multiplying to avoid i64 overflow.
+        let start = (i as usize) * (self.n as usize);
+        let end = start + (self.n as usize);
         &self.data()[start..end]
     }
 
     /// Return a mutable slice for row `i`.
     #[inline]
     pub fn row_mut(&mut self, i: i64) -> &mut [f32] {
-        let start = (i * self.n) as usize;
-        let end = start + self.n as usize;
+        // Convert to usize before multiplying to avoid i64 overflow.
+        let start = (i as usize) * (self.n as usize);
+        let end = start + (self.n as usize);
         &mut self.data_mut()[start..end]
     }
 
@@ -158,7 +191,7 @@ impl DenseMatrix {
     /// Uses the C++ fastText approach: divide data into 10 blocks,
     /// each seeded with `block_index + seed` using minstd_rand (LCG).
     pub fn uniform(&mut self, a: f32, seed: i32) {
-        let total = (self.m * self.n) as usize;
+        let total = self.data().len(); // uses checked_dim_size internally
         if total == 0 {
             return;
         }
@@ -241,8 +274,7 @@ impl DenseMatrix {
 impl Clone for DenseMatrix {
     fn clone(&self) -> Self {
         let mut m = DenseMatrix::new(self.m, self.n);
-        let size = (self.m * self.n) as usize;
-        if size > 0 {
+        if !self.data().is_empty() {
             m.data_mut().copy_from_slice(self.data());
         }
         m
@@ -251,14 +283,22 @@ impl Clone for DenseMatrix {
 
 impl Drop for DenseMatrix {
     fn drop(&mut self) {
-        let size = (self.m * self.n) as usize;
-        if !self.ptr.is_null() && size > 0 {
-            let layout = Layout::array::<f32>(size)
-                .and_then(|l| l.align_to(ALIGNMENT))
-                .expect("Invalid layout in Drop");
-            // SAFETY: ptr was allocated with this layout in new().
-            unsafe {
-                alloc::dealloc(self.ptr as *mut u8, layout);
+        if !self.ptr.is_null() {
+            // Reconstruct the size using the same checked arithmetic as new().
+            // The constructor invariant ensures m,n >= 0 and m*n fits in usize,
+            // so these conversions cannot fail for a properly constructed DenseMatrix.
+            // Using unwrap_or to avoid a double-panic in drop.
+            let m_u = usize::try_from(self.m).unwrap_or(0);
+            let n_u = usize::try_from(self.n).unwrap_or(0);
+            let size = m_u.checked_mul(n_u).unwrap_or(0);
+            if size > 0 {
+                let layout = Layout::array::<f32>(size)
+                    .and_then(|l| l.align_to(ALIGNMENT))
+                    .expect("Invalid layout in Drop");
+                // SAFETY: ptr was allocated with this layout in new().
+                unsafe {
+                    alloc::dealloc(self.ptr as *mut u8, layout);
+                }
             }
         }
     }
@@ -382,6 +422,19 @@ impl Matrix for DenseMatrix {
                 m, n
             )));
         }
+        // Validate that m*n doesn't overflow usize before allocating.
+        let m_u = usize::try_from(m).map_err(|_| {
+            FastTextError::InvalidModel(format!("Matrix row count {} is too large", m))
+        })?;
+        let n_u = usize::try_from(n).map_err(|_| {
+            FastTextError::InvalidModel(format!("Matrix column count {} is too large", n))
+        })?;
+        m_u.checked_mul(n_u).ok_or_else(|| {
+            FastTextError::InvalidModel(format!(
+                "Matrix dimensions {}x{} would overflow usize",
+                m, n
+            ))
+        })?;
         let mut mat = DenseMatrix::new(m, n);
         let data = mat.data_mut();
         for val in data.iter_mut() {
@@ -969,6 +1022,63 @@ mod tests {
         // A very large size just over isize::MAX / 4 should also fail.
         let large = (isize::MAX as usize / std::mem::size_of::<f32>()) + 1;
         assert!(Layout::array::<f32>(large).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "must be non-negative")]
+    fn test_dense_matrix_new_negative_m_panics() {
+        // Negative row count must panic with a descriptive message.
+        let _ = DenseMatrix::new(-1, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be non-negative")]
+    fn test_dense_matrix_new_negative_n_panics() {
+        // Negative column count must panic with a descriptive message.
+        let _ = DenseMatrix::new(4, -1);
+    }
+
+    #[test]
+    fn test_dense_matrix_load_overflow_error() {
+        // A binary blob with m and n values whose product would overflow usize
+        // should be rejected with an InvalidModel error rather than panicking.
+        use std::io::Cursor;
+
+        // i64::MAX for both m and n — product (i64::MAX)^2 massively overflows usize.
+        let m_val: i64 = i64::MAX;
+        let n_val: i64 = i64::MAX;
+        // Write header bytes (little-endian i64 m, then i64 n)
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&m_val.to_le_bytes());
+        buf.extend_from_slice(&n_val.to_le_bytes());
+        // No data bytes needed — load() should fail at dimension validation.
+        let mut cursor = Cursor::new(buf);
+        let result = DenseMatrix::load(&mut cursor);
+        assert!(
+            result.is_err(),
+            "Expected error for overflow dimensions, got Ok"
+        );
+        match result {
+            Err(FastTextError::InvalidModel(_)) => {} // expected
+            other => panic!("Expected InvalidModel error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dense_matrix_load_negative_dims_error() {
+        // Negative dimensions in binary format must be rejected.
+        use std::io::Cursor;
+        let m_val: i64 = -5i64;
+        let n_val: i64 = 10i64;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&m_val.to_le_bytes());
+        buf.extend_from_slice(&n_val.to_le_bytes());
+        let mut cursor = Cursor::new(buf);
+        let result = DenseMatrix::load(&mut cursor);
+        match result {
+            Err(FastTextError::InvalidModel(_)) => {} // expected
+            other => panic!("Expected InvalidModel error, got {:?}", other),
+        }
     }
 
     // --- Construction ---
