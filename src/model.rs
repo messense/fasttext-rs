@@ -117,6 +117,11 @@ impl State {
         self.loss_value += loss;
     }
 
+    /// Return the number of examples processed so far.
+    pub fn nexamples(&self) -> i64 {
+        self.nexamples
+    }
+
     /// Reset accumulated loss and example count.
     pub fn reset(&mut self) {
         self.loss_value = 0.0;

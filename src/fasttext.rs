@@ -1,8 +1,8 @@
 // FastText: train, predict, quantize, autotune, save/load, word/sentence vectors
 
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 
@@ -70,6 +70,11 @@ struct TrainThreadCtx<'a> {
     output_size: usize,
     token_count: &'a AtomicI64,
     abort_flag: &'a AtomicBool,
+    /// Optional per-epoch loss tracker.
+    ///
+    /// When `Some`, records the average loss after each completed epoch.
+    /// Best used with `thread=1` for accurate epoch boundaries.
+    epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
 }
 
 /// A loaded fastText model.
@@ -609,6 +614,19 @@ impl FastText {
     /// 3. Run training in parallel using rayon (Hogwild! SGD).
     /// 4. Return a trained `FastText` instance.
     pub fn train_with_abort(args: Args, abort_flag: Arc<AtomicBool>) -> Result<Self> {
+        Self::train_internal(args, abort_flag, None)
+    }
+
+    /// Internal training implementation with optional epoch loss tracking.
+    ///
+    /// Called by `train`, `train_with_abort`, and `train_tracking_epoch_losses`.
+    /// When `epoch_loss_tracker` is `Some`, records the average loss after each
+    /// completed epoch (most accurate with `thread=1`).
+    fn train_internal(
+        args: Args,
+        abort_flag: Arc<AtomicBool>,
+        epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
+    ) -> Result<Self> {
         let input_path = args.input().to_string();
         if input_path.is_empty() {
             return Err(FastTextError::InvalidArgument(
@@ -626,14 +644,34 @@ impl FastText {
             dict.read_from_file(&mut reader)?;
         }
 
+        // Guard: empty training file.
+        if dict.ntokens() == 0 {
+            return Err(FastTextError::InvalidArgument(
+                "Training file is empty or contains no valid tokens".to_string(),
+            ));
+        }
+
+        // Guard: supervised mode requires at least one label.
+        if args.model() == ModelName::SUP && dict.nlabels() == 0 {
+            return Err(FastTextError::InvalidArgument(
+                "Supervised training requires at least one label, but none were found. \
+                 Labels must start with the label prefix (default: '__label__')."
+                    .to_string(),
+            ));
+        }
+
         let nwords = dict.nwords() as i64;
         let bucket = args.bucket() as i64;
         let dim = args.dim() as i64;
 
         // Initialize input matrix: (nwords + bucket) × dim, uniform in [-1/dim, 1/dim].
+        // If pretrained vectors are specified, load them after uniform initialization.
         let input = Arc::new({
             let mut m = DenseMatrix::new(nwords + bucket, dim);
             m.uniform(1.0 / args.dim() as f32, args.seed());
+            if !args.pretrained_vectors().is_empty() {
+                Self::load_pretrained_vectors(args.pretrained_vectors(), &args, &dict, &mut m)?;
+            }
             m
         });
 
@@ -676,6 +714,7 @@ impl FastText {
                     output_size,
                     token_count: &token_count,
                     abort_flag: &abort_flag,
+                    epoch_loss_tracker: epoch_loss_tracker.clone(),
                 };
                 Self::train_thread_inner(thread_id, n_threads, &ctx)
             })
@@ -699,6 +738,140 @@ impl FastText {
             model,
             abort_flag,
         })
+    }
+
+    /// Train a new fastText model and collect per-epoch average training losses.
+    ///
+    /// This is a variant of [`FastText::train`] that additionally records the
+    /// average training loss after each completed epoch.  The returned `Vec<f32>`
+    /// contains one entry per epoch (index 0 = epoch 1, etc.).
+    ///
+    /// For accurate per-epoch measurements, use `thread=1` in the `Args`
+    /// (multi-threaded training may produce more or fewer entries depending on
+    /// how token batches align with epoch boundaries).
+    pub fn train_tracking_epoch_losses(args: Args) -> Result<(Self, Vec<f32>)> {
+        let tracker = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let model = Self::train_internal(
+            args,
+            Arc::new(AtomicBool::new(false)),
+            Some(Arc::clone(&tracker)),
+        )?;
+        let losses = Arc::try_unwrap(tracker)
+            .map_err(|_| FastTextError::InvalidArgument("Epoch loss tracker still in use".to_string()))?
+            .into_inner()
+            .map_err(|_| FastTextError::InvalidArgument("Epoch loss tracker lock poisoned".to_string()))?;
+        Ok((model, losses))
+    }
+
+    /// Load pretrained word vectors from a `.vec` file into the input matrix.
+    ///
+    /// The `.vec` format (same as C++ fastText output):
+    /// - First line: `<n_words> <dim>` (header)
+    /// - Each subsequent line: `<word> <val1> <val2> ... <val_dim>`
+    ///
+    /// For each word in the `.vec` file that is also in the vocabulary, its row
+    /// in the input matrix is overwritten with the pretrained vector.  Words not
+    /// in the `.vec` file retain their uniform random initialization.
+    ///
+    /// # Errors
+    /// - `FastTextError::IoError` if the file cannot be opened.
+    /// - `FastTextError::InvalidArgument` if the `.vec` dimension doesn't match `args.dim()`.
+    /// - `FastTextError::InvalidModel` if the file is malformed.
+    fn load_pretrained_vectors(
+        path: &str,
+        args: &Args,
+        dict: &Dictionary,
+        input: &mut DenseMatrix,
+    ) -> Result<()> {
+        let file = std::fs::File::open(path).map_err(FastTextError::IoError)?;
+        let reader = std::io::BufReader::new(file);
+        let mut lines = reader.lines();
+
+        // Read header: "<n_words> <dim>"
+        let header = lines
+            .next()
+            .ok_or_else(|| FastTextError::InvalidModel("Empty pretrained vectors file".to_string()))?
+            .map_err(FastTextError::IoError)?;
+
+        let mut header_parts = header.split_whitespace();
+        let n: i64 = header_parts
+            .next()
+            .ok_or_else(|| {
+                FastTextError::InvalidModel("Missing word count in pretrained vectors header".to_string())
+            })?
+            .parse()
+            .map_err(|_| {
+                FastTextError::InvalidModel("Invalid word count in pretrained vectors header".to_string())
+            })?;
+        let vec_dim: i32 = header_parts
+            .next()
+            .ok_or_else(|| {
+                FastTextError::InvalidModel("Missing dim in pretrained vectors header".to_string())
+            })?
+            .parse()
+            .map_err(|_| {
+                FastTextError::InvalidModel("Invalid dim in pretrained vectors header".to_string())
+            })?;
+
+        // Dimension must match the model dim.
+        if vec_dim != args.dim() {
+            return Err(FastTextError::InvalidArgument(format!(
+                "Dimension of pretrained vectors ({}) does not match model dimension ({})",
+                vec_dim,
+                args.dim()
+            )));
+        }
+
+        let dim = vec_dim as usize;
+        let nwords = dict.nwords();
+
+        // For each word in the pretrained file, update the input matrix if it
+        // is also in the vocabulary.
+        for _ in 0..n {
+            let line = lines
+                .next()
+                .ok_or_else(|| {
+                    FastTextError::InvalidModel("Pretrained vectors file is truncated".to_string())
+                })?
+                .map_err(FastTextError::IoError)?;
+
+            let mut parts = line.split_whitespace();
+            let word = parts
+                .next()
+                .ok_or_else(|| {
+                    FastTextError::InvalidModel("Missing word in pretrained vectors line".to_string())
+                })?;
+
+            // Parse all dim float values.
+            let mut vec = Vec::with_capacity(dim);
+            for j in 0..dim {
+                let val: f32 = parts
+                    .next()
+                    .ok_or_else(|| {
+                        FastTextError::InvalidModel(format!(
+                            "Missing value {} in pretrained vectors for word '{}'",
+                            j, word
+                        ))
+                    })?
+                    .parse()
+                    .map_err(|_| {
+                        FastTextError::InvalidModel(format!(
+                            "Invalid float at position {} in pretrained vectors for word '{}'",
+                            j, word
+                        ))
+                    })?;
+                vec.push(val);
+            }
+
+            // If the word is in the vocabulary, overwrite its input row.
+            let idx = dict.get_id(word);
+            if idx >= 0 && idx < nwords {
+                let row = input.row_mut(idx as i64);
+                row.copy_from_slice(&vec);
+            }
+        }
+
+        Ok(())
     }
 
     /// Signal an in-progress training run to stop early.
@@ -751,14 +924,32 @@ impl FastText {
         let mut labels: Vec<i32> = Vec::new();
         let mut pending_newline = false;
 
+        // For per-epoch loss tracking: track which epoch we last recorded.
+        let mut last_recorded_epoch: i64 = 0;
+
         loop {
             // Check abort flag — exit early if set.
             if ctx.abort_flag.load(Ordering::Relaxed) {
                 break;
             }
 
-            // Check if training has reached the target token count.
+            // Load current global token count.
             let tc = ctx.token_count.load(Ordering::Relaxed);
+
+            // Per-epoch loss recording: check if we have completed a new epoch.
+            // Record the average loss for the completed epoch and reset state.
+            // Placed before the break check so the final epoch's loss is captured.
+            if let Some(ref tracker) = ctx.epoch_loss_tracker {
+                let current_epoch = if ntokens > 0 { tc / ntokens } else { 0 };
+                if current_epoch > last_recorded_epoch && state.nexamples() > 0 {
+                    let epoch_loss = state.get_loss();
+                    tracker.lock().unwrap().push(epoch_loss);
+                    state.reset();
+                    last_recorded_epoch = current_epoch;
+                }
+            }
+
+            // Check if training has reached the target token count.
             if tc >= epoch * ntokens {
                 break;
             }
@@ -814,6 +1005,13 @@ impl FastText {
         // Flush any remaining local token count into the shared counter.
         if local_token_count > 0 {
             ctx.token_count.fetch_add(local_token_count, Ordering::Relaxed);
+        }
+
+        // Record the final (partial) epoch's loss, if any examples remain unrecorded.
+        if let Some(ref tracker) = ctx.epoch_loss_tracker {
+            if state.nexamples() > 0 {
+                tracker.lock().unwrap().push(state.get_loss());
+            }
         }
 
         Ok(())
@@ -3789,7 +3987,507 @@ __label__food cook recipe eat meal\n";
         assert_eq!(meter.recall(), 0.0, "No examples → recall should be 0.0");
         assert_eq!(meter.f1(), 0.0, "No examples → F1 should be 0.0");
     }
+    // =========================================================================
+    // VAL-TRAIN-008: Training save/load round-trip
+    // =========================================================================
+
+    /// Train a model, save to disk, reload, verify predictions are bit-identical.
+    #[test]
+    fn test_train_save_load_roundtrip() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(5);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+        args.set_seed(42);
+
+        let model1 = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        let test_inputs = [
+            "basketball player sport game",
+            "apple fruit eat cook",
+            "team score win game",
+        ];
+
+        // Collect predictions before save.
+        let preds_before: Vec<Vec<Prediction>> = test_inputs
+            .iter()
+            .map(|input| model1.predict(input, 2, 0.0))
+            .collect();
+
+        for (i, preds) in preds_before.iter().enumerate() {
+            assert!(!preds.is_empty(), "Input[{}] should have predictions before save", i);
+        }
+
+        let tmp_path = std::env::temp_dir().join("fasttext_train_save_load_rt.bin");
+        let tmp_str = tmp_path.to_str().unwrap();
+        model1.save_model(tmp_str).expect("Should save trained model");
+
+        let model2 = FastText::load_model(tmp_str).expect("Should reload trained model");
+        std::fs::remove_file(tmp_str).ok();
+
+        let preds_after: Vec<Vec<Prediction>> = test_inputs
+            .iter()
+            .map(|input| model2.predict(input, 2, 0.0))
+            .collect();
+
+        for (i, (pb, pa)) in preds_before.iter().zip(preds_after.iter()).enumerate() {
+            assert_eq!(pb.len(), pa.len(),
+                "Input[{}]: prediction count should match after round-trip", i);
+            for (j, (p1, p2)) in pb.iter().zip(pa.iter()).enumerate() {
+                assert_eq!(p1.label, p2.label,
+                    "Input[{}] pred[{}]: label should match after round-trip", i, j);
+                assert_eq!(p1.prob.to_bits(), p2.prob.to_bits(),
+                    "Input[{}] pred[{}]: prob should be bit-identical: {} vs {}",
+                    i, j, p1.prob, p2.prob);
+            }
+        }
+    }
+
+    // =========================================================================
+    // VAL-TRAIN-011: Training edge cases
+    // =========================================================================
+
+    /// Empty training file returns an error (VAL-TRAIN-011).
+    #[test]
+    fn test_train_empty_file() {
+        let path = write_temp_file("");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(0);
+
+        let result = FastText::train(args);
+        std::fs::remove_file(&path).ok();
+
+        assert!(result.is_err(), "Training on empty file should return an error");
+        match result.unwrap_err() {
+            FastTextError::InvalidArgument(msg) => {
+                let msg_lower = msg.to_lowercase();
+                assert!(
+                    msg_lower.contains("empty") || msg_lower.contains("tokens")
+                        || msg_lower.contains("vocabulary"),
+                    "Error message should mention empty, tokens, or vocabulary: {}",
+                    msg
+                );
+            }
+            e => panic!("Expected InvalidArgument for empty file, got: {:?}", e),
+        }
+    }
+
+    /// Supervised training with no labels returns an error (VAL-TRAIN-011).
+    #[test]
+    fn test_train_no_labels() {
+        let data = "this is text without any labels\nno labels here either\n";
+        let path = write_temp_file(data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(0);
+
+        let result = FastText::train(args);
+        std::fs::remove_file(&path).ok();
+
+        assert!(result.is_err(), "Supervised training with no labels should return error");
+        match result.unwrap_err() {
+            FastTextError::InvalidArgument(msg) => {
+                assert!(msg.contains("label") || msg.contains("supervised"),
+                    "Error message should mention labels or supervised: {}", msg);
+            }
+            e => panic!("Expected InvalidArgument for no-labels, got: {:?}", e),
+        }
+    }
+
+    /// epoch=0 produces an untrained model, no panic (VAL-TRAIN-011).
+    #[test]
+    fn test_train_zero_epochs() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(0);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+
+        let result = FastText::train(args);
+        std::fs::remove_file(&path).ok();
+
+        match result {
+            Ok(model) => {
+                let _preds = model.predict("basketball player sport game", 1, 0.0);
+                let (vocab, _) = model.get_vocab();
+                assert!(!vocab.is_empty(), "epoch=0 model should have vocabulary");
+            }
+            Err(FastTextError::InvalidArgument(_)) => { /* also acceptable */ }
+            Err(e) => panic!("epoch=0 should not produce unexpected error: {:?}", e),
+        }
+    }
+
+    // =========================================================================
+    // VAL-TRAIN-012: min_count filtering
+    // =========================================================================
+
+    /// Words below min_count are excluded from vocabulary (VAL-TRAIN-012).
+    #[test]
+    fn test_min_count_filtering() {
+        let mut data = String::new();
+        for _ in 0..10 {
+            data.push_str("__label__sports common_word basketball game score\n");
+        }
+        for _ in 0..10 {
+            data.push_str("__label__food common_word apple banana fruit\n");
+        }
+        data.push_str("__label__sports rare_word unique_token\n");
+        data.push_str("__label__food also_rare apple\n");
+        data.push_str("__label__food also_rare banana\n");
+
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(3);
+        args.set_bucket(0);
+        args.set_thread(1);
+
+        let model = FastText::train(args).expect("Training with min_count=3 should succeed");
+        std::fs::remove_file(&path).ok();
+
+        assert!(model.get_word_id("common_word") >= 0,
+            "common_word (count=20) should be in vocabulary");
+        assert_eq!(model.get_word_id("rare_word"), -1,
+            "rare_word (count=1) should be excluded with min_count=3");
+        assert_eq!(model.get_word_id("unique_token"), -1,
+            "unique_token (count=1) should be excluded with min_count=3");
+        assert_eq!(model.get_word_id("also_rare"), -1,
+            "also_rare (count=2) should be excluded with min_count=3");
+
+        let (vocab_words, vocab_freqs) = model.get_vocab();
+        for (w, &freq) in vocab_words.iter().zip(vocab_freqs.iter()) {
+            if w != "</s>" {
+                assert!(freq >= 3,
+                    "Word '{}' with freq={} should not be in vocab (min_count=3)", w, freq);
+            }
+        }
+    }
+
+    // =========================================================================
+    // VAL-TRAIN-013: Training loss decreases over epochs
+    // =========================================================================
+
+    /// Final epoch loss < first epoch loss after sufficient training (VAL-TRAIN-013).
+    #[test]
+    fn test_training_loss_decreases() {
+        let mut data = String::new();
+        for _ in 0..30 {
+            data.push_str("__label__sports basketball player game score team win lose tournament championship\n");
+        }
+        for _ in 0..30 {
+            data.push_str("__label__food apple orange banana mango fruit eat cook recipe meal dessert\n");
+        }
+
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(10);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+        args.set_seed(42);
+        args.set_lr_update_rate(50);
+
+        let result = FastText::train_tracking_epoch_losses(args);
+        std::fs::remove_file(&path).ok();
+
+        let (_model, epoch_losses) = result.expect("Training with loss tracking should succeed");
+
+        assert!(epoch_losses.len() >= 2,
+            "Should record at least 2 epoch losses, got {}: {:?}", epoch_losses.len(), epoch_losses);
+
+        let first_loss = epoch_losses[0];
+        let last_loss = *epoch_losses.last().unwrap();
+
+        assert!(first_loss.is_finite(), "First epoch loss should be finite: {}", first_loss);
+        assert!(last_loss.is_finite(), "Final epoch loss should be finite: {}", last_loss);
+        assert!(first_loss > 0.0, "First epoch loss should be > 0: {}", first_loss);
+        assert!(last_loss < first_loss,
+            "Loss should decrease: first={}, final={}", first_loss, last_loss);
+    }
+
+    // =========================================================================
+    // VAL-TRAIN-014: Pretrained vectors loading
+    // =========================================================================
+
+    fn write_pretrained_vec_file(words_and_vecs: &[(&str, Vec<f32>)]) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static VEC_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let dim = if words_and_vecs.is_empty() { 0 } else { words_and_vecs[0].1.len() };
+        let mut content = format!("{} {}\n", words_and_vecs.len(), dim);
+        for (word, vec) in words_and_vecs {
+            content.push_str(word);
+            for &v in vec.iter() {
+                content.push(' ');
+                content.push_str(&v.to_string());
+            }
+            content.push('\n');
+        }
+        let id = VEC_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "fasttext_pretrain_{}_{}.vec",
+            std::process::id(),
+            id
+        ));
+        std::fs::write(&path, content).expect("Failed to write pretrained vec file");
+        path
+    }
+
+    /// Create a uniquely-named temp text file for tests that need isolation.
+    fn write_unique_temp_file(content: &str, tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static UNIQUE_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = UNIQUE_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "fasttext_{}_{}_{}.txt",
+            tag,
+            std::process::id(),
+            id
+        ));
+        std::fs::write(&path, content).expect("Failed to write unique temp file");
+        path
+    }
+
+    /// Pretrained vectors loaded for matching words, missing file returns IoError (VAL-TRAIN-014).
+    #[test]
+    fn test_pretrained_vectors() {
+        let dim = 4usize;
+        let mut data = String::new();
+        for _ in 0..10 { data.push_str("__label__sports basketball game score\n"); }
+        for _ in 0..10 { data.push_str("__label__food apple fruit meal\n"); }
+        let train_path = write_unique_temp_file(&data, "pretrained");
+
+        let vec_basketball = vec![1.0f32, 2.0, 3.0, 4.0];
+        let vec_apple = vec![5.0f32, 6.0, 7.0, 8.0];
+
+        let vec_path = write_pretrained_vec_file(&[
+            ("basketball", vec_basketball.clone()),
+            ("apple", vec_apple.clone()),
+            ("not_in_vocab", vec![9.0f32, 10.0, 11.0, 12.0]),
+        ]);
+
+        let mut args = Args::default();
+        args.set_input(train_path.to_str().unwrap().to_string());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(dim as i32);
+        args.set_epoch(0); // epoch=0: no training, just init + load pretrained
+        args.set_min_count(1);
+        args.set_bucket(0);
+        args.set_thread(1);
+        args.set_seed(42);
+        args.set_pretrained_vectors(vec_path.to_str().unwrap().to_string());
+
+        let model = FastText::train(args).expect("Training with pretrained vectors should succeed");
+        std::fs::remove_file(&train_path).ok();
+        std::fs::remove_file(&vec_path).ok();
+
+        let basketball_id = model.get_word_id("basketball");
+        assert!(basketball_id >= 0, "'basketball' should be in vocabulary");
+        let row = model.input_matrix().row(basketball_id as i64);
+        for (j, (&got, &exp)) in row.iter().zip(vec_basketball.iter()).enumerate() {
+            assert!((got - exp).abs() < 1e-5,
+                "basketball[{}]: expected={}, got={}", j, exp, got);
+        }
+
+        let apple_id = model.get_word_id("apple");
+        assert!(apple_id >= 0, "'apple' should be in vocabulary");
+        let row = model.input_matrix().row(apple_id as i64);
+        for (j, (&got, &exp)) in row.iter().zip(vec_apple.iter()).enumerate() {
+            assert!((got - exp).abs() < 1e-5,
+                "apple[{}]: expected={}, got={}", j, exp, got);
+        }
+
+        // Word not in pretrained file should have non-zero random init.
+        let game_id = model.get_word_id("game");
+        if game_id >= 0 {
+            let row = model.input_matrix().row(game_id as i64);
+            let norm: f32 = row.iter().map(|&v| v * v).sum::<f32>().sqrt();
+            assert!(norm.is_finite() && norm > 0.0,
+                "'game' should have non-zero random init, norm={}", norm);
+        }
+    }
+
+    /// Missing pretrained vectors file returns IoError (VAL-TRAIN-014).
+    #[test]
+    fn test_pretrained_vectors_missing_file() {
+        let data = supervised_train_data();
+        let path = write_unique_temp_file(&data, "pretrained_missing");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(0);
+        args.set_pretrained_vectors("/nonexistent/path/vectors.vec".to_string());
+
+        let result = FastText::train(args);
+        std::fs::remove_file(&path).ok();
+
+        assert!(result.is_err(), "Missing pretrained vectors file should return error");
+        match result.unwrap_err() {
+            FastTextError::IoError(_) => { /* correct */ }
+            e => panic!("Expected IoError for missing pretrained vec file, got: {:?}", e),
+        }
+    }
+
+    // =========================================================================
+    // Integration test matching the "train_integration" verification step
+    // =========================================================================
+
+    /// Full training integration test: train, predict, save, load, verify (VAL-TRAIN-008).
+    ///
+    /// Exercises the complete training pipeline end-to-end:
+    /// 1. Train a supervised model
+    /// 2. Verify predictions
+    /// 3. Save to disk
+    /// 4. Reload
+    /// 5. Verify predictions are bit-identical after round-trip
+    #[test]
+    fn test_train_integration_roundtrip() {
+        let data = supervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(10);
+        args.set_epoch(5);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+        args.set_seed(42);
+
+        let model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        // Should have labels and make predictions.
+        let (labels, _) = model.get_labels();
+        assert!(!labels.is_empty(), "Trained model should have labels");
+
+        let preds_orig = model.predict("basketball player sport game", 1, 0.0);
+        assert!(!preds_orig.is_empty(), "Trained model should predict");
+
+        // Save and reload.
+        let tmp = std::env::temp_dir().join("fasttext_train_integration_rt.bin");
+        let tmp_str = tmp.to_str().unwrap();
+        model.save_model(tmp_str).expect("Save should succeed");
+        let model2 = FastText::load_model(tmp_str).expect("Load should succeed");
+        std::fs::remove_file(tmp_str).ok();
+
+        // Predictions must be bit-identical.
+        let preds_rt = model2.predict("basketball player sport game", 1, 0.0);
+        assert_eq!(preds_orig.len(), preds_rt.len(), "Prediction count should match");
+        for (p1, p2) in preds_orig.iter().zip(preds_rt.iter()) {
+            assert_eq!(p1.label, p2.label, "Labels should match after round-trip");
+            assert_eq!(p1.prob.to_bits(), p2.prob.to_bits(),
+                "Probabilities should be bit-identical after round-trip");
+        }
+    }
+
+    /// Training integration: edge cases (empty file, no labels, zero epochs).
+    #[test]
+    fn test_train_integration_edge_cases() {
+        // 1. Empty file -> error
+        let empty_path = write_temp_file("");
+        let mut args = Args::default();
+        args.set_input(empty_path.to_str().unwrap().to_string());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(5);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(0);
+        assert!(FastText::train(args).is_err(), "Empty file should return error");
+        std::fs::remove_file(&empty_path).ok();
+
+        // 2. No labels for supervised -> error
+        let no_label_path = write_temp_file("word1 word2 word3\nmore text here\n");
+        let mut args2 = Args::default();
+        args2.set_input(no_label_path.to_str().unwrap().to_string());
+        args2.set_output("/dev/null".to_string());
+        args2.apply_supervised_defaults();
+        args2.set_dim(5);
+        args2.set_epoch(1);
+        args2.set_min_count(1);
+        args2.set_bucket(0);
+        assert!(FastText::train(args2).is_err(), "No labels should return error");
+        std::fs::remove_file(&no_label_path).ok();
+
+        // 3. epoch=0 -> untrained model (no panic)
+        let data = supervised_train_data();
+        let p = write_temp_file(&data);
+        let mut args3 = Args::default();
+        args3.set_input(p.to_str().unwrap().to_string());
+        args3.set_output("/dev/null".to_string());
+        args3.apply_supervised_defaults();
+        args3.set_dim(5);
+        args3.set_epoch(0);
+        args3.set_min_count(1);
+        args3.set_bucket(0);
+        args3.set_thread(1);
+        let result = FastText::train(args3);
+        std::fs::remove_file(&p).ok();
+        match result {
+            Ok(m) => { let _ = m.predict("test", 1, 0.0); } // no panic
+            Err(FastTextError::InvalidArgument(_)) => {} // acceptable
+            Err(e) => panic!("Unexpected error for epoch=0: {:?}", e),
+        }
+    }
+
 }
-
-
-
