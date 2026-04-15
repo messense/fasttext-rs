@@ -1570,6 +1570,8 @@ impl FastText {
         let mut local_token_count: i64 = 0;
         let mut line: Vec<i32> = Vec::new();
         let mut labels: Vec<i32> = Vec::new();
+        let mut word_hashes: Vec<i32> = Vec::new();
+        let mut token = String::new();
         let mut pending_newline = false;
 
         // For per-epoch loss tracking: track which epoch we last recorded.
@@ -1607,15 +1609,18 @@ impl FastText {
             let lr = (base_lr * (1.0 - progress)).max(0.0_f32);
 
             let ntok = match model_name {
-                ModelName::SUP => ctx.dict.get_line(
+                ModelName::SUP => ctx.dict.get_line_with_scratch(
                     &mut reader,
                     &mut line,
                     &mut labels,
+                    &mut word_hashes,
+                    &mut token,
                     &mut pending_newline,
                 ),
-                _ => ctx.dict.get_line_unsupervised(
+                _ => ctx.dict.get_line_unsupervised_with_scratch(
                     &mut reader,
                     &mut line,
+                    &mut token,
                     &mut pending_newline,
                     &mut state.rng,
                 ),

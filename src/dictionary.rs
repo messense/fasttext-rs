@@ -903,33 +903,42 @@ impl Dictionary {
         pending_newline: &mut bool,
         rng: &mut MinstdRng,
     ) -> i32 {
+        let mut token = String::new();
+        self.get_line_unsupervised_with_scratch(reader, words, &mut token, pending_newline, rng)
+    }
+
+    pub fn get_line_unsupervised_with_scratch<R: Read>(
+        &self,
+        reader: &mut R,
+        words: &mut Vec<i32>,
+        token: &mut String,
+        pending_newline: &mut bool,
+        rng: &mut MinstdRng,
+    ) -> i32 {
         words.clear();
         let mut ntokens: i32 = 0;
-        let mut token = String::new();
 
         loop {
-            if !Self::read_word_from_reader(reader, pending_newline, &mut token) {
+            if !Self::read_word_from_reader(reader, pending_newline, token) {
                 break;
             }
 
             let h = utils::hash(token.as_bytes());
-            let wid = self.get_id_with_hash(&token, h);
+            let wid = self.get_id_with_hash(token, h);
 
             if wid < 0 {
-                // OOV token: skip entirely (does not count toward ntokens)
                 continue;
             }
 
             ntokens += 1;
             if self.get_type_by_id(wid) == EntryType::Word {
-                // Generate uniform random float in (0, 1) using minstd_rand
                 let rand_val = rng.generate() as f32 / MinstdRng::M as f32;
                 if !self.discard(wid, rand_val) {
-                    words.push(wid); // word ID only, subwords retrieved later
+                    words.push(wid);
                 }
             }
 
-            if ntokens as usize > MAX_LINE_SIZE || token == EOS {
+            if ntokens as usize > MAX_LINE_SIZE || *token == EOS {
                 break;
             }
         }
