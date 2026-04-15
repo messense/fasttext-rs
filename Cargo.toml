@@ -18,6 +18,9 @@ clap = { version = "4", features = ["derive"], optional = true }
 [features]
 cli = ["clap"]
 
+[dev-dependencies]
+expect-test = "1"
+
 [[bin]]
 name = "fasttext"
 path = "src/main.rs"

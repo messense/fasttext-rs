@@ -4,6 +4,7 @@
 // and invoke it through `std::process::Command`, validating stdin/stdout
 // behaviour for each subcommand.
 
+use expect_test::expect;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -825,7 +826,7 @@ fn test_cli_print_word_vectors() {
         "Two input words should produce two output lines"
     );
 
-    let dim = 100usize; // cooking model dim=100
+    let dim = 10usize; // cooking model dim=10
     for line in &lines {
         let parts: Vec<&str> = line.split_whitespace().collect();
         assert_eq!(
@@ -866,7 +867,7 @@ fn test_cli_print_sentence_vectors() {
         "One input sentence should produce one output line"
     );
 
-    let dim = 100usize; // cooking model dim=100
+    let dim = 10usize; // cooking model dim=10
     let parts: Vec<&str> = lines[0].split_whitespace().collect();
     assert_eq!(
         parts.len(),
@@ -903,7 +904,7 @@ fn test_cli_print_ngrams() {
         "print-ngrams should produce output for word 'baking'"
     );
 
-    let dim = 100usize; // cooking model dim=100
+    let dim = 10usize; // cooking model dim=10
     let mut found_ngram_row = false;
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -1023,39 +1024,22 @@ fn test_cli_dump_args() {
         &["dump", cooking_model(), "args"],
         None,
     );
-
-    assert_eq!(
-        code, 0,
-        "dump args failed\nstdout: {}\nstderr: {}",
-        stdout, stderr
-    );
-
-    assert!(
-        !stdout.is_empty(),
-        "dump args should produce non-empty output"
-    );
-
-    // Should contain key parameter names
-    assert!(
-        stdout.contains("dim"),
-        "dump args should contain 'dim', got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("epoch"),
-        "dump args should contain 'epoch', got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("loss"),
-        "dump args should contain 'loss', got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("model"),
-        "dump args should contain 'model', got:\n{}",
-        stdout
-    );
+    assert_eq!(code, 0, "dump args failed\nstderr: {}", stderr);
+    expect![[r#"
+        dim 10
+        ws 5
+        epoch 25
+        minCount 1
+        neg 5
+        wordNgrams 1
+        loss softmax
+        model sup
+        bucket 0
+        minn 0
+        maxn 0
+        lrUpdateRate 100
+        t 0.0001
+    "#]].assert_eq(&stdout);
 }
 
 #[test]
