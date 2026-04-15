@@ -1,13 +1,20 @@
 // fastText CLI — clap derive-based command-line interface
 //
 // Subcommands:
-//   supervised   – train a supervised text classifier
-//   skipgram     – train a skip-gram word vector model
-//   cbow         – train a CBOW word vector model
-//   predict      – predict top-k labels for each line of stdin / file
-//   predict-prob – predict top-k labels + probabilities for each line
-//   test         – evaluate model and print N, P@k, R@k
-//   test-label   – evaluate model and print per-label P, R, F1
+//   supervised            – train a supervised text classifier
+//   skipgram              – train a skip-gram word vector model
+//   cbow                  – train a CBOW word vector model
+//   predict               – predict top-k labels for each line of stdin / file
+//   predict-prob          – predict top-k labels + probabilities for each line
+//   test                  – evaluate model and print N, P@k, R@k
+//   test-label            – evaluate model and print per-label P, R, F1
+//   quantize              – quantize a model to reduce memory usage
+//   print-word-vectors    – print word vectors for words read from stdin
+//   print-sentence-vectors – print sentence vectors for sentences read from stdin
+//   print-ngrams          – print n-gram vectors for a given word
+//   nn                    – query for nearest neighbors
+//   analogies             – query for analogies
+//   dump                  – dump args/dict/input/output in text format
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::process;
@@ -15,6 +22,7 @@ use std::process;
 use clap::{Args, Parser, Subcommand};
 
 use fasttext::args::{Args as FTArgs, LossName, ModelName};
+use fasttext::matrix::Matrix;
 use fasttext::meter::Meter;
 use fasttext::FastText;
 
@@ -51,6 +59,23 @@ enum Commands {
     /// Evaluate model on test data: prints per-label P, R, F1
     #[command(name = "test-label")]
     TestLabel(TestEvalArgs),
+    /// Quantize a model to reduce memory usage
+    Quantize(QuantizeArgs),
+    /// Print word vectors for words read from stdin
+    #[command(name = "print-word-vectors")]
+    PrintWordVectors(ModelPathArgs),
+    /// Print sentence vectors for sentences read from stdin
+    #[command(name = "print-sentence-vectors")]
+    PrintSentenceVectors(ModelPathArgs),
+    /// Print character n-gram vectors for a word
+    #[command(name = "print-ngrams")]
+    PrintNgrams(PrintNgramsArgs),
+    /// Query for k nearest neighbors (reads query words from stdin)
+    Nn(NnArgs),
+    /// Query for analogies: reads 3 words per line, returns nearest to A-B+C
+    Analogies(AnalogiesArgs),
+    /// Dump model information in text format
+    Dump(DumpArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +212,88 @@ struct TestEvalArgs {
     threshold: f32,
 }
 
+/// Arguments for quantize.
+#[derive(Args, Debug)]
+struct QuantizeArgs {
+    /// Path to the model base (without .bin/.ftz extension).
+    /// Loads <output>.bin, saves <output>.ftz.
+    #[arg(long)]
+    output: String,
+
+    /// Training data file path (required for --retrain)
+    #[arg(long, default_value = "")]
+    input: String,
+
+    /// Vocabulary size cutoff (0 = no cutoff)
+    #[arg(long, default_value_t = 0)]
+    cutoff: usize,
+
+    /// Retrain model after quantization (requires --input)
+    #[arg(long, default_value_t = false)]
+    retrain: bool,
+
+    /// Quantize norms of word vectors
+    #[arg(long, default_value_t = false)]
+    qnorm: bool,
+
+    /// Quantize output matrix as well
+    #[arg(long, default_value_t = false)]
+    qout: bool,
+
+    /// Size of each sub-vector for product quantization
+    #[arg(long, default_value_t = 2)]
+    dsub: usize,
+}
+
+/// Arguments for print-word-vectors and print-sentence-vectors.
+#[derive(Args, Debug)]
+struct ModelPathArgs {
+    /// Path to the trained model (.bin or .ftz file)
+    model: String,
+}
+
+/// Arguments for print-ngrams.
+#[derive(Args, Debug)]
+struct PrintNgramsArgs {
+    /// Path to the trained model (.bin or .ftz file)
+    model: String,
+
+    /// Word to print n-grams for
+    word: String,
+}
+
+/// Arguments for nn.
+#[derive(Args, Debug)]
+struct NnArgs {
+    /// Path to the trained model (.bin or .ftz file)
+    model: String,
+
+    /// Number of nearest neighbors to return
+    #[arg(default_value_t = 10)]
+    k: usize,
+}
+
+/// Arguments for analogies.
+#[derive(Args, Debug)]
+struct AnalogiesArgs {
+    /// Path to the trained model (.bin or .ftz file)
+    model: String,
+
+    /// Number of analogy results to return
+    #[arg(default_value_t = 10)]
+    k: usize,
+}
+
+/// Arguments for dump.
+#[derive(Args, Debug)]
+struct DumpArgs {
+    /// Path to the trained model (.bin or .ftz file)
+    model: String,
+
+    /// What to dump: args, dict, input, or output
+    option: String,
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -202,6 +309,13 @@ fn main() {
         Commands::PredictProb(args) => run_predict(args, true),
         Commands::Test(args) => run_test(args, false),
         Commands::TestLabel(args) => run_test(args, true),
+        Commands::Quantize(args) => run_quantize(args),
+        Commands::PrintWordVectors(args) => run_print_word_vectors(args),
+        Commands::PrintSentenceVectors(args) => run_print_sentence_vectors(args),
+        Commands::PrintNgrams(args) => run_print_ngrams(args),
+        Commands::Nn(args) => run_nn(args),
+        Commands::Analogies(args) => run_analogies(args),
+        Commands::Dump(args) => run_dump(args),
     }
 }
 
@@ -431,4 +545,285 @@ fn run_test(test_args: TestEvalArgs, per_label: bool) {
         // Print aggregate metrics: N, P@k, R@k
         meter.write_general_metrics(k as i32);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Quantize
+// ---------------------------------------------------------------------------
+
+fn run_quantize(qargs: QuantizeArgs) {
+    let model_bin = format!("{}.bin", qargs.output);
+    let model_ftz = format!("{}.ftz", qargs.output);
+
+    if !std::path::Path::new(&model_bin).exists() {
+        eprintln!("Error: model file '{}' does not exist", model_bin);
+        process::exit(1);
+    }
+
+    let mut model = match FastText::load_model(&model_bin) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error loading model '{}': {}", model_bin, e);
+            process::exit(1);
+        }
+    };
+
+    // Build quantize args from the CLI options.
+    let mut ft_qargs = model.args().clone();
+    ft_qargs.set_cutoff(qargs.cutoff);
+    ft_qargs.set_retrain(qargs.retrain);
+    ft_qargs.set_qnorm(qargs.qnorm);
+    ft_qargs.set_qout(qargs.qout);
+    ft_qargs.set_dsub(qargs.dsub);
+    if !qargs.input.is_empty() {
+        ft_qargs.set_input(qargs.input);
+    }
+
+    if let Err(e) = model.quantize(&ft_qargs) {
+        eprintln!("Error quantizing model: {}", e);
+        process::exit(1);
+    }
+
+    if let Err(e) = model.save_model(&model_ftz) {
+        eprintln!("Error saving quantized model to '{}': {}", model_ftz, e);
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Print word vectors
+// ---------------------------------------------------------------------------
+
+fn run_print_word_vectors(args: ModelPathArgs) {
+    let model = load_model_or_exit(&args.model);
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.unwrap_or_else(|e| {
+            eprintln!("Error reading stdin: {}", e);
+            process::exit(1);
+        });
+        // Read one word per line (whitespace-split, use first token)
+        for word in line.split_whitespace() {
+            let vec = model.get_word_vector(word);
+            write!(out, "{}", word).unwrap_or_else(|_| process::exit(1));
+            for &v in &vec {
+                write!(out, " {}", v).unwrap_or_else(|_| process::exit(1));
+            }
+            writeln!(out).unwrap_or_else(|_| process::exit(1));
+        }
+    }
+    out.flush().unwrap_or_else(|_| process::exit(1));
+}
+
+// ---------------------------------------------------------------------------
+// Print sentence vectors
+// ---------------------------------------------------------------------------
+
+fn run_print_sentence_vectors(args: ModelPathArgs) {
+    let model = load_model_or_exit(&args.model);
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.unwrap_or_else(|e| {
+            eprintln!("Error reading stdin: {}", e);
+            process::exit(1);
+        });
+        let vec = model.get_sentence_vector(&line);
+        let mut first = true;
+        for &v in &vec {
+            if !first {
+                write!(out, " ").unwrap_or_else(|_| process::exit(1));
+            }
+            write!(out, "{}", v).unwrap_or_else(|_| process::exit(1));
+            first = false;
+        }
+        writeln!(out).unwrap_or_else(|_| process::exit(1));
+    }
+    out.flush().unwrap_or_else(|_| process::exit(1));
+}
+
+// ---------------------------------------------------------------------------
+// Print ngrams
+// ---------------------------------------------------------------------------
+
+fn run_print_ngrams(args: PrintNgramsArgs) {
+    let model = load_model_or_exit(&args.model);
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let ngram_vecs = model.get_ngram_vectors(&args.word);
+    for (ngram_str, vec) in &ngram_vecs {
+        write!(out, "{}", ngram_str).unwrap_or_else(|_| process::exit(1));
+        for &v in vec {
+            write!(out, " {}", v).unwrap_or_else(|_| process::exit(1));
+        }
+        writeln!(out).unwrap_or_else(|_| process::exit(1));
+    }
+    out.flush().unwrap_or_else(|_| process::exit(1));
+}
+
+// ---------------------------------------------------------------------------
+// Nearest neighbors
+// ---------------------------------------------------------------------------
+
+fn run_nn(args: NnArgs) {
+    let model = load_model_or_exit(&args.model);
+    let k = args.k;
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.unwrap_or_else(|e| {
+            eprintln!("Error reading stdin: {}", e);
+            process::exit(1);
+        });
+        let query = line.trim();
+        if query.is_empty() {
+            continue;
+        }
+        let neighbors = model.get_nn(query, k);
+        for (similarity, word) in &neighbors {
+            writeln!(out, "{} {:.6}", word, similarity)
+                .unwrap_or_else(|_| process::exit(1));
+        }
+    }
+    out.flush().unwrap_or_else(|_| process::exit(1));
+}
+
+// ---------------------------------------------------------------------------
+// Analogies
+// ---------------------------------------------------------------------------
+
+fn run_analogies(args: AnalogiesArgs) {
+    let model = load_model_or_exit(&args.model);
+    let k = args.k;
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.unwrap_or_else(|e| {
+            eprintln!("Error reading stdin: {}", e);
+            process::exit(1);
+        });
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.len() < 3 {
+            // Skip lines that don't have 3 words.
+            continue;
+        }
+        let (word_a, word_b, word_c) = (words[0], words[1], words[2]);
+        let results = model.get_analogies(word_a, word_b, word_c, k);
+        for (similarity, word) in &results {
+            writeln!(out, "{} {:.6}", word, similarity)
+                .unwrap_or_else(|_| process::exit(1));
+        }
+    }
+    out.flush().unwrap_or_else(|_| process::exit(1));
+}
+
+// ---------------------------------------------------------------------------
+// Dump
+// ---------------------------------------------------------------------------
+
+fn run_dump(args: DumpArgs) {
+    let model = load_model_or_exit(&args.model);
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    match args.option.as_str() {
+        "args" => {
+            let a = model.args();
+            writeln!(out, "dim {}", a.dim()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "ws {}", a.ws()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "epoch {}", a.epoch()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "minCount {}", a.min_count()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "neg {}", a.neg()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "wordNgrams {}", a.word_ngrams())
+                .unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "loss {}", a.loss_to_string()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "model {}", a.model_to_string()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "bucket {}", a.bucket()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "minn {}", a.minn()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "maxn {}", a.maxn()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "lrUpdateRate {}", a.lr_update_rate())
+                .unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "t {}", a.t()).unwrap_or_else(|_| process::exit(1));
+        }
+        "dict" => {
+            let dict = model.dict();
+            let words = dict.words();
+            writeln!(out, "{}", words.len()).unwrap_or_else(|_| process::exit(1));
+            for entry in words {
+                let entry_type = match entry.entry_type {
+                    fasttext::dictionary::EntryType::Word => "word",
+                    fasttext::dictionary::EntryType::Label => "label",
+                };
+                writeln!(out, "{} {} {}", entry.word, entry.count, entry_type)
+                    .unwrap_or_else(|_| process::exit(1));
+            }
+        }
+        "input" => {
+            if model.is_quant() {
+                eprintln!("Not supported for quantized models.");
+                process::exit(1);
+            }
+            let m = model.input_matrix();
+            writeln!(out, "{} {}", m.rows(), m.cols())
+                .unwrap_or_else(|_| process::exit(1));
+            for i in 0..m.rows() {
+                let row = m.row(i);
+                let mut first = true;
+                for &v in row {
+                    if !first {
+                        write!(out, " ").unwrap_or_else(|_| process::exit(1));
+                    }
+                    write!(out, "{}", v).unwrap_or_else(|_| process::exit(1));
+                    first = false;
+                }
+                writeln!(out).unwrap_or_else(|_| process::exit(1));
+            }
+        }
+        "output" => {
+            if model.is_quant() {
+                eprintln!("Not supported for quantized models.");
+                process::exit(1);
+            }
+            let m = model.output_matrix();
+            writeln!(out, "{} {}", m.rows(), m.cols())
+                .unwrap_or_else(|_| process::exit(1));
+            for i in 0..m.rows() {
+                let row = m.row(i);
+                let mut first = true;
+                for &v in row {
+                    if !first {
+                        write!(out, " ").unwrap_or_else(|_| process::exit(1));
+                    }
+                    write!(out, "{}", v).unwrap_or_else(|_| process::exit(1));
+                    first = false;
+                }
+                writeln!(out).unwrap_or_else(|_| process::exit(1));
+            }
+        }
+        other => {
+            eprintln!(
+                "Error: unknown dump option '{}'. Valid options: args, dict, input, output",
+                other
+            );
+            process::exit(1);
+        }
+    }
+
+    out.flush().unwrap_or_else(|_| process::exit(1));
 }

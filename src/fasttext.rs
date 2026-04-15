@@ -746,6 +746,165 @@ impl FastText {
     }
 
     // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // N-gram vectors, nearest neighbors, and analogies
+    // -------------------------------------------------------------------------
+
+    /// Return the character n-gram vectors for a word.
+    ///
+    /// For each subword of the word (including the word itself if in vocab),
+    /// returns the n-gram string and its corresponding vector from the input matrix.
+    ///
+    /// This mirrors the C++ `FastText::getNgramVectors`.
+    pub fn get_ngram_vectors(&self, word: &str) -> Vec<(String, Vec<f32>)> {
+        let dim = self.args.dim() as usize;
+        let entries = self.dict.get_ngram_strings(word);
+        entries
+            .into_iter()
+            .map(|(id, s)| {
+                let mut vec = vec![0.0f32; dim];
+                if id >= 0 {
+                    let row = self.input.row(id as i64);
+                    vec.copy_from_slice(row);
+                }
+                (s, vec)
+            })
+            .collect()
+    }
+
+    /// Precompute L2-normalized word vectors for all vocabulary words.
+    ///
+    /// Returns a `DenseMatrix` where row `i` is the L2-normalized word vector
+    /// for word `i`. Words with zero-norm vectors have a zero row.
+    ///
+    /// Used as a precomputation step for nearest-neighbor and analogy queries.
+    pub fn precompute_word_vectors(&self) -> DenseMatrix {
+        let nwords = self.dict.nwords() as usize;
+        let dim = self.args.dim() as i64;
+        let mut word_vectors = DenseMatrix::new(nwords as i64, dim);
+        for i in 0..nwords {
+            let word = self.dict.get_word(i as i32);
+            let vec = self.get_word_vector(word);
+            let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                let row = word_vectors.row_mut(i as i64);
+                for (r, &v) in row.iter_mut().zip(vec.iter()) {
+                    *r = v / norm;
+                }
+            }
+        }
+        word_vectors
+    }
+
+    /// Find the `k` nearest neighbors to `word` by cosine similarity.
+    ///
+    /// Precomputes normalized word vectors for all vocabulary words, then
+    /// linearly scans for the top-k words (excluding the query word itself).
+    ///
+    /// Returns a vec of `(similarity, word)` pairs sorted by descending similarity.
+    ///
+    /// This mirrors the C++ `FastText::getNN`.
+    pub fn get_nn(&self, word: &str, k: usize) -> Vec<(f32, String)> {
+        let query = self.get_word_vector(word);
+        let word_vectors = self.precompute_word_vectors();
+        let ban_words = vec![word];
+        self.nn_from_word_vectors(&word_vectors, &query, k, &ban_words)
+    }
+
+    /// Find the `k` nearest neighbors to `word_a - word_b + word_c`.
+    ///
+    /// Computes the query vector as:
+    ///   `query = normalize(A) - normalize(B) + normalize(C)`
+    /// then finds the top-k nearest words (excluding A, B, C).
+    ///
+    /// Returns a vec of `(similarity, word)` pairs sorted by descending similarity.
+    ///
+    /// This mirrors the C++ `FastText::getAnalogies`.
+    pub fn get_analogies(
+        &self,
+        word_a: &str,
+        word_b: &str,
+        word_c: &str,
+        k: usize,
+    ) -> Vec<(f32, String)> {
+        let dim = self.args.dim() as usize;
+        let mut query = vec![0.0f32; dim];
+
+        let buf = self.get_word_vector(word_a);
+        let norm = buf.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        let norm = if norm < 1e-8 { 1e-8 } else { norm };
+        for (q, &v) in query.iter_mut().zip(buf.iter()) {
+            *q += v / norm;
+        }
+
+        let buf = self.get_word_vector(word_b);
+        let norm = buf.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        let norm = if norm < 1e-8 { 1e-8 } else { norm };
+        for (q, &v) in query.iter_mut().zip(buf.iter()) {
+            *q -= v / norm;
+        }
+
+        let buf = self.get_word_vector(word_c);
+        let norm = buf.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        let norm = if norm < 1e-8 { 1e-8 } else { norm };
+        for (q, &v) in query.iter_mut().zip(buf.iter()) {
+            *q += v / norm;
+        }
+
+        let word_vectors = self.precompute_word_vectors();
+        let ban_words = vec![word_a, word_b, word_c];
+        self.nn_from_word_vectors(&word_vectors, &query, k, &ban_words)
+    }
+
+    /// Internal: linear scan for top-k nearest neighbors given precomputed word vectors.
+    ///
+    /// `word_vectors` must be a matrix of L2-normalized word vectors (one per row).
+    /// `query` is the raw (unnormalized) query vector.
+    /// `ban_words` are excluded from the results.
+    ///
+    /// Returns a vec of `(similarity, word)` sorted by descending similarity.
+    fn nn_from_word_vectors(
+        &self,
+        word_vectors: &DenseMatrix,
+        query: &[f32],
+        k: usize,
+        ban_words: &[&str],
+    ) -> Vec<(f32, String)> {
+        let query_norm: f32 = query.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        let query_norm = if query_norm.abs() < 1e-8 {
+            1.0
+        } else {
+            query_norm
+        };
+
+        let nwords = self.dict.nwords() as usize;
+        let mut similarities: Vec<(f32, usize)> = Vec::with_capacity(nwords);
+
+        for i in 0..nwords {
+            let word = self.dict.get_word(i as i32);
+            if ban_words.contains(&word) {
+                continue;
+            }
+            let row = word_vectors.row(i as i64);
+            // row is already normalized; dot product = cosine similarity / query_norm
+            let dp: f32 = query.iter().zip(row.iter()).map(|(&q, &r)| q * r).sum();
+            let similarity = dp / query_norm;
+            similarities.push((similarity, i));
+        }
+
+        // Sort by descending similarity.
+        similarities.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        similarities.truncate(k);
+
+        similarities
+            .into_iter()
+            .map(|(sim, i)| (sim, self.dict.get_word(i as i32).to_string()))
+            .collect()
+    }
+
+    // -------------------------------------------------------------------------
     // Quantization
     // -------------------------------------------------------------------------
 

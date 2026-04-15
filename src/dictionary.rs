@@ -679,6 +679,87 @@ impl Dictionary {
         ngrams
     }
 
+    /// Get n-gram subwords with their string representations.
+    ///
+    /// Returns a vec of `(id, ngram_string)` pairs:
+    /// - If word is in vocab: first entry is `(word_id, word_string)`
+    /// - Remaining entries are `(bucket_id, ngram_string)` for each character n-gram
+    ///
+    /// This mirrors the C++ `Dictionary::getSubwords(word, ngrams, substrings)` behavior
+    /// and is used by the `print-ngrams` CLI command.
+    pub fn get_ngram_strings(&self, word: &str) -> Vec<(i32, String)> {
+        let mut result = Vec::new();
+        let id = self.get_id(word);
+        if id >= 0 {
+            result.push((id, self.words[id as usize].word.clone()));
+        }
+        if word != EOS {
+            let word_with_markers = format!("{}{}{}", BOW, word, EOW);
+            self.compute_subwords_with_strings(&word_with_markers, &mut result);
+        }
+        result
+    }
+
+    /// Compute character n-gram subwords with their string representations.
+    ///
+    /// Similar to `compute_subwords` but also records each n-gram string alongside its ID.
+    /// Only adds an entry when the n-gram's bucket ID is valid (not pruned).
+    fn compute_subwords_with_strings(&self, word: &str, result: &mut Vec<(i32, String)>) {
+        let minn = self.args.minn();
+        let maxn = self.args.maxn();
+        let bucket = self.args.bucket();
+
+        if maxn == 0 || bucket == 0 {
+            return;
+        }
+
+        let bytes = word.as_bytes();
+        let n_bytes = bytes.len();
+
+        let mut i = 0usize;
+        while i < n_bytes {
+            if (bytes[i] & 0xC0) == 0x80 {
+                i += 1;
+                continue;
+            }
+
+            let mut ngram: Vec<u8> = Vec::new();
+            let mut j = i;
+            let mut n: i32 = 1;
+
+            while j < n_bytes && n <= maxn {
+                ngram.push(bytes[j]);
+                j += 1;
+                while j < n_bytes && (bytes[j] & 0xC0) == 0x80 {
+                    ngram.push(bytes[j]);
+                    j += 1;
+                }
+
+                if n >= minn && !(n == 1 && (i == 0 || j == n_bytes)) {
+                    let h = (crate::utils::hash(&ngram) % bucket as u32) as i32;
+                    // Replicate push_hash logic but also capture the ngram string.
+                    if self.pruneidx_size != 0 && h >= 0 {
+                        let bucket_id = if self.pruneidx_size > 0 {
+                            self.pruneidx.get(&h).map(|&mapped| self.nwords + mapped)
+                        } else {
+                            // pruneidx_size < 0 means no pruning
+                            Some(self.nwords + h)
+                        };
+                        if let Some(id) = bucket_id {
+                            let ngram_str =
+                                String::from_utf8(ngram.clone()).unwrap_or_default();
+                            result.push((id, ngram_str));
+                        }
+                    }
+                }
+
+                n += 1;
+            }
+
+            i += 1;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // getLine: read one line from a reader, separate words and labels
     // -------------------------------------------------------------------------

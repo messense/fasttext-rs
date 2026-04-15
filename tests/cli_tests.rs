@@ -643,3 +643,503 @@ fn test_cli_flag_passthrough() {
         "dim flag should be passed through to Args"
     );
 }
+
+// ---------------------------------------------------------------------------
+// VAL-CLI-005: quantize produces .ftz file
+// ---------------------------------------------------------------------------
+
+/// Write a large labeled training corpus (10 categories, 500+ unique words).
+/// Large enough that quantization actually reduces model size.
+fn write_large_train_data(path: &Path) {
+    let mut data = String::new();
+    let labels = ["cat", "dog", "bird", "fish", "rabbit", "horse", "cow", "pig", "goat", "sheep"];
+    // Generate 1000 training lines, each with 5 unique words from a 500-word vocab.
+    for i in 0..1000usize {
+        let label = labels[i % labels.len()];
+        // 5 words per line from different parts of the vocab
+        let w0 = i % 500;
+        let w1 = (i * 7 + 1) % 500;
+        let w2 = (i * 13 + 2) % 500;
+        let w3 = (i * 17 + 3) % 500;
+        let w4 = (i * 19 + 4) % 500;
+        data.push_str(&format!(
+            "__label__{} token{} token{} token{} token{} token{}\n",
+            label, w0, w1, w2, w3, w4
+        ));
+    }
+    std::fs::write(path, data).expect("Failed to write large training data");
+}
+
+#[test]
+fn test_cli_quantize() {
+    let dir = temp_dir();
+    let train_file = dir.join("train_large.txt");
+    let model_base = dir.join("quant_model");
+    let model_bin = dir.join("quant_model.bin");
+
+    write_large_train_data(&train_file);
+
+    // Train a model with dim=100 and 500+ vocab words
+    let (stdout, stderr, code) = run_fasttext(
+        &[
+            "supervised",
+            "--input",
+            train_file.to_str().unwrap(),
+            "--output",
+            model_base.to_str().unwrap(),
+            "--epoch",
+            "1",
+            "--dim",
+            "100",
+            "--min-count",
+            "1",
+            "--thread",
+            "1",
+        ],
+        None,
+    );
+    assert_eq!(
+        code, 0,
+        "training for quantize test failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+    assert!(model_bin.exists(), "model.bin should exist after training");
+
+    // Run quantize command
+    let (stdout, stderr, code) = run_fasttext(
+        &["quantize", "--output", model_base.to_str().unwrap()],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "quantize failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    let model_ftz = dir.join("quant_model.ftz");
+    assert!(
+        model_ftz.exists(),
+        "quantize should create a .ftz file"
+    );
+
+    // .ftz file should be loadable
+    let quant_model = fasttext::FastText::load_model(model_ftz.to_str().unwrap())
+        .expect("Failed to load quantized .ftz model");
+    assert!(quant_model.is_quant(), ".ftz model should report is_quant=true");
+
+    // .ftz file should be smaller than .bin file
+    let bin_size = std::fs::metadata(&model_bin).unwrap().len();
+    let ftz_size = std::fs::metadata(&model_ftz).unwrap().len();
+    assert!(
+        ftz_size < bin_size,
+        ".ftz file ({} bytes) should be smaller than .bin file ({} bytes)",
+        ftz_size,
+        bin_size
+    );
+}
+
+// ---------------------------------------------------------------------------
+// VAL-CLI-008: print-word-vectors and print-sentence-vectors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_print_word_vectors() {
+    let input = b"baking bread\n";
+
+    let (stdout, stderr, code) = run_fasttext(
+        &["print-word-vectors", cooking_model()],
+        Some(input),
+    );
+
+    assert_eq!(
+        code, 0,
+        "print-word-vectors failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "Two input words should produce two output lines"
+    );
+
+    let dim = 100usize; // cooking model dim=100
+    for line in &lines {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(
+            parts.len(),
+            dim + 1,
+            "Each output line should have word + {} float values, got {} parts: {}",
+            dim,
+            parts.len(),
+            line
+        );
+        // First part is the word, rest are floats
+        for part in &parts[1..] {
+            part.parse::<f32>()
+                .unwrap_or_else(|_| panic!("Expected float in word vector output, got: {}", part));
+        }
+    }
+}
+
+#[test]
+fn test_cli_print_sentence_vectors() {
+    let input = b"Which baking dish is best to bake a banana bread ?\n";
+
+    let (stdout, stderr, code) = run_fasttext(
+        &["print-sentence-vectors", cooking_model()],
+        Some(input),
+    );
+
+    assert_eq!(
+        code, 0,
+        "print-sentence-vectors failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "One input sentence should produce one output line"
+    );
+
+    let dim = 100usize; // cooking model dim=100
+    let parts: Vec<&str> = lines[0].split_whitespace().collect();
+    assert_eq!(
+        parts.len(),
+        dim,
+        "Sentence vector should have {} float values, got {} parts",
+        dim,
+        parts.len()
+    );
+    for part in &parts {
+        part.parse::<f32>()
+            .unwrap_or_else(|_| panic!("Expected float in sentence vector output, got: {}", part));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VAL-CLI-009: print-ngrams outputs n-grams with vectors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_print_ngrams() {
+    let (stdout, stderr, code) = run_fasttext(
+        &["print-ngrams", cooking_model(), "baking"],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "print-ngrams failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    assert!(
+        !stdout.is_empty(),
+        "print-ngrams should produce output for word 'baking'"
+    );
+
+    let dim = 100usize; // cooking model dim=100
+    let mut found_ngram_row = false;
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Each line: ngram_string + dim float values
+        if parts.len() == dim + 1 {
+            // Verify all but first part are floats
+            let all_floats = parts[1..].iter().all(|p| p.parse::<f32>().is_ok());
+            if all_floats {
+                found_ngram_row = true;
+            }
+        }
+    }
+    assert!(
+        found_ngram_row,
+        "print-ngrams should produce lines with ngram string + {} float values",
+        dim
+    );
+}
+
+// ---------------------------------------------------------------------------
+// VAL-CLI-010: nn and analogies commands
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_nn() {
+    // Query 'baking' for 5 nearest neighbors
+    let input = b"baking\n";
+
+    let (stdout, stderr, code) = run_fasttext(
+        &["nn", cooking_model(), "5"],
+        Some(input),
+    );
+
+    assert_eq!(
+        code, 0,
+        "nn failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        5,
+        "nn with k=5 should return exactly 5 neighbors, got: {:?}",
+        lines
+    );
+
+    for line in &lines {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "Each nn output line should have 'word similarity', got: {}",
+            line
+        );
+        let similarity: f32 = parts[1]
+            .parse()
+            .unwrap_or_else(|_| panic!("Expected float similarity, got: {}", parts[1]));
+        assert!(
+            similarity.is_finite(),
+            "Similarity should be finite, got: {}",
+            similarity
+        );
+    }
+}
+
+#[test]
+fn test_cli_analogies() {
+    // Query triplet: "baking bread recipe" (baking - bread + recipe)
+    let input = b"baking bread recipe\n";
+
+    let (stdout, stderr, code) = run_fasttext(
+        &["analogies", cooking_model(), "5"],
+        Some(input),
+    );
+
+    assert_eq!(
+        code, 0,
+        "analogies failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        5,
+        "analogies with k=5 should return exactly 5 results, got: {:?}",
+        lines
+    );
+
+    for line in &lines {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "Each analogies output line should have 'word similarity', got: {}",
+            line
+        );
+        let similarity: f32 = parts[1]
+            .parse()
+            .unwrap_or_else(|_| panic!("Expected float similarity, got: {}", parts[1]));
+        assert!(
+            similarity.is_finite(),
+            "Similarity should be finite, got: {}",
+            similarity
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VAL-CLI-011: dump subcommands
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_dump_args() {
+    let (stdout, stderr, code) = run_fasttext(
+        &["dump", cooking_model(), "args"],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "dump args failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    assert!(
+        !stdout.is_empty(),
+        "dump args should produce non-empty output"
+    );
+
+    // Should contain key parameter names
+    assert!(
+        stdout.contains("dim"),
+        "dump args should contain 'dim', got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("epoch"),
+        "dump args should contain 'epoch', got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("loss"),
+        "dump args should contain 'loss', got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("model"),
+        "dump args should contain 'model', got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_cli_dump_dict() {
+    let (stdout, stderr, code) = run_fasttext(
+        &["dump", cooking_model(), "dict"],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "dump dict failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    assert!(
+        !stdout.is_empty(),
+        "dump dict should produce non-empty output"
+    );
+
+    // First line should be the vocabulary size (integer)
+    let first_line = stdout.lines().next().expect("dump dict should have at least one line");
+    let vocab_size: usize = first_line
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("First line of dump dict should be an integer, got: {}", first_line));
+    assert!(
+        vocab_size > 0,
+        "Vocabulary size should be positive, got: {}",
+        vocab_size
+    );
+
+    // Each subsequent line should have format: "word count type"
+    let mut word_count = 0;
+    for line in stdout.lines().skip(1) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert!(
+            parts.len() >= 3,
+            "Each dict entry should have at least 3 fields (word count type), got: {}",
+            line
+        );
+        parts[1].parse::<i64>().unwrap_or_else(|_| {
+            panic!("Count field should be integer, got: {} in line: {}", parts[1], line)
+        });
+        assert!(
+            parts[2] == "word" || parts[2] == "label",
+            "Type field should be 'word' or 'label', got: {} in line: {}",
+            parts[2],
+            line
+        );
+        word_count += 1;
+    }
+    assert_eq!(
+        word_count, vocab_size,
+        "Number of dict entries ({}) should match header count ({})",
+        word_count, vocab_size
+    );
+}
+
+#[test]
+fn test_cli_dump_input() {
+    let (stdout, stderr, code) = run_fasttext(
+        &["dump", cooking_model(), "input"],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "dump input failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    assert!(
+        !stdout.is_empty(),
+        "dump input should produce non-empty output"
+    );
+
+    // First line should be "rows cols"
+    let first_line = stdout.lines().next().expect("dump input should have output");
+    let dims: Vec<i64> = first_line
+        .split_whitespace()
+        .map(|s| s.parse::<i64>().expect("dimensions should be integers"))
+        .collect();
+    assert_eq!(
+        dims.len(),
+        2,
+        "First line of dump input should have 2 dimensions, got: {}",
+        first_line
+    );
+    let rows = dims[0];
+    let cols = dims[1];
+    assert!(rows > 0, "rows should be positive");
+    assert!(cols > 0, "cols should be positive");
+
+    // Count the data lines (should equal rows)
+    let data_lines = stdout.lines().skip(1).count();
+    assert_eq!(
+        data_lines as i64, rows,
+        "Number of data lines ({}) should match row count ({})",
+        data_lines, rows
+    );
+}
+
+#[test]
+fn test_cli_dump_output() {
+    let (stdout, stderr, code) = run_fasttext(
+        &["dump", cooking_model(), "output"],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "dump output failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    assert!(
+        !stdout.is_empty(),
+        "dump output should produce non-empty output"
+    );
+
+    // First line should be "rows cols"
+    let first_line = stdout.lines().next().expect("dump output should have output");
+    let dims: Vec<i64> = first_line
+        .split_whitespace()
+        .map(|s| s.parse::<i64>().expect("dimensions should be integers"))
+        .collect();
+    assert_eq!(
+        dims.len(),
+        2,
+        "First line of dump output should have 2 dimensions, got: {}",
+        first_line
+    );
+    let rows = dims[0];
+    let cols = dims[1];
+    assert!(rows > 0, "rows should be positive");
+    assert!(cols > 0, "cols should be positive");
+
+    // Count the data lines (should equal rows)
+    let data_lines = stdout.lines().skip(1).count();
+    assert_eq!(
+        data_lines as i64, rows,
+        "Number of data lines ({}) should match row count ({})",
+        data_lines, rows
+    );
+}
+
