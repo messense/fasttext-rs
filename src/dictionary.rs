@@ -1091,6 +1091,93 @@ impl Dictionary {
     pub fn is_pruned(&self) -> bool {
         self.pruneidx_size >= 0
     }
+
+    /// Prune the dictionary to keep only the embeddings specified by `idx`.
+    ///
+    /// Matches C++ `Dictionary::prune`. The `idx` slice contains mixed word-row
+    /// indices and bucket (ngram) row indices.  Word indices are `< nwords`;
+    /// ngram indices are `>= nwords`.
+    ///
+    /// After pruning:
+    /// - Only the words whose indices appear in `idx` are kept (labels are always kept).
+    /// - Bucket n-gram rows are remapped via `pruneidx` so downstream code can
+    ///   still look up their new positions in the pruned input matrix.
+    /// - `nwords`, `size`, and `word2int` are updated accordingly.
+    /// - `init_ngrams()` is called to recompute subwords with the new vocabulary.
+    pub fn prune(&mut self, idx: &[i32]) {
+        let mut words_idx: Vec<i32> = Vec::new();
+        let mut ngrams_idx: Vec<i32> = Vec::new();
+
+        for &i in idx {
+            if i < self.nwords {
+                words_idx.push(i);
+            } else {
+                ngrams_idx.push(i);
+            }
+        }
+        words_idx.sort_unstable();
+
+        // Build pruneidx: maps original bucket-relative ngram index to new position.
+        // Ngram IDs in the input matrix are stored as nwords + relative_idx.
+        // After pruning, bucket rows start after the pruned word rows.
+        // pruneidx maps (original_ngram_id - nwords) → new_position_in_ngram_block
+        self.pruneidx.clear();
+        for (j, &ngram) in ngrams_idx.iter().enumerate() {
+            self.pruneidx.insert(ngram - self.nwords, j as i32);
+        }
+        self.pruneidx_size = self.pruneidx.len() as i64;
+
+        // Compact the words array: keep only selected words + all labels.
+        // The C++ algorithm iterates words_ in order; word i is kept if its
+        // original index appears in words_idx (sorted), or if it is a label.
+        let mut new_words: Vec<Entry> = Vec::with_capacity(words_idx.len() + self.nlabels as usize);
+        let mut word_ptr = 0usize; // pointer into words_idx (sorted)
+        for i in 0..self.words.len() {
+            let entry_type = self.words[i].entry_type;
+            if entry_type == EntryType::Label {
+                // Labels are always kept.
+                new_words.push(self.words[i].clone());
+            } else if word_ptr < words_idx.len() && words_idx[word_ptr] == i as i32 {
+                // This word index was selected.
+                new_words.push(self.words[i].clone());
+                word_ptr += 1;
+            }
+        }
+
+        // Reorder so that words come first, then labels (matching C++).
+        let new_nwords = words_idx.len() as i32;
+        let new_nlabels = self.nlabels;
+        // Separate words and labels from new_words (labels were pushed after words above).
+        let mut words_part: Vec<Entry> = Vec::new();
+        let mut labels_part: Vec<Entry> = Vec::new();
+        for e in new_words {
+            if e.entry_type == EntryType::Word {
+                words_part.push(e);
+            } else {
+                labels_part.push(e);
+            }
+        }
+        // Words must be in sorted index order (already are since words_idx is sorted and we
+        // iterated words_ in order).
+        self.words = words_part;
+        self.words.extend(labels_part);
+
+        self.nwords = new_nwords;
+        self.size = self.nwords + new_nlabels;
+
+        // Rebuild word2int hash table.
+        let word2int_size = ((self.size as f64 / 0.7).ceil() as usize).max(1);
+        self.word2int = vec![-1i32; word2int_size];
+        for i in 0..self.size as usize {
+            let w = self.words[i].word.clone();
+            let h = hash(w.as_bytes());
+            let slot = self.find_slot_with_hash(&w, h);
+            self.word2int[slot] = i as i32;
+        }
+
+        // Recompute subwords for the pruned vocabulary.
+        self.init_ngrams();
+    }
 }
 
 // =============================================================================

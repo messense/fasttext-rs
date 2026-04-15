@@ -9,10 +9,11 @@ use rayon::prelude::*;
 use crate::args::{Args, LossName, ModelName};
 use crate::dictionary::{Dictionary, EntryType, EOS};
 use crate::error::{FastTextError, Result};
-use crate::loss::{HierarchicalSoftmaxLoss, Loss, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
+use crate::loss::{find_k_best, HierarchicalSoftmaxLoss, Loss, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
 use crate::matrix::{DenseMatrix, Matrix};
 use crate::meter::Meter;
-use crate::model::{Model, State};
+use crate::model::{Model, Predictions, State};
+use crate::quant_matrix::QuantMatrix;
 use crate::utils;
 
 /// Magic number identifying a valid fastText binary model file.
@@ -138,12 +139,18 @@ pub struct FastText {
     /// The vocabulary dictionary.
     dict: Dictionary,
     /// Input embedding matrix (word + subword vectors), shared via Arc for Model.
+    /// For quantized models this is a zero-size placeholder; use `quant_input` instead.
     input: Arc<DenseMatrix>,
     /// Output matrix (label/word vectors), shared via Arc for Model.
+    /// For quantized output, use `quant_output` instead.
     output: Arc<DenseMatrix>,
     /// Whether the model uses quantized (QuantMatrix) input.
     quant: bool,
-    /// Pre-built inference model.
+    /// Quantized input matrix. Present when `quant=true`.
+    quant_input: Option<QuantMatrix>,
+    /// Quantized output matrix. Present when `quant=true` and `args.qout()=true`.
+    quant_output: Option<QuantMatrix>,
+    /// Pre-built inference model (uses dense matrices; bypassed when quant=true).
     model: Model,
     /// Atomic flag for aborting an in-progress training run.
     ///
@@ -205,13 +212,13 @@ impl FastText {
         let quant_input = read_bool(reader)?;
 
         // 6. Load input matrix
-        let input = if !quant_input {
-            DenseMatrix::load(reader)?
+        let (input_dense, input_quant) = if !quant_input {
+            let dense = DenseMatrix::load(reader)?;
+            (dense, None)
         } else {
-            // QuantMatrix is deferred to a future feature.
-            return Err(FastTextError::InvalidModel(
-                "Quantized input matrix (.ftz) is not yet supported in this version".to_string(),
-            ));
+            let qm = QuantMatrix::load(reader)?;
+            // Use a zero-size placeholder for the dense input
+            (DenseMatrix::new(0, 0), Some(qm))
         };
 
         // C++ check: if not quantized but dict is pruned, reject
@@ -228,18 +235,17 @@ impl FastText {
         args.set_qout(qout);
 
         // 8. Load output matrix
-        let output = if quant_input && qout {
-            // QuantMatrix output – deferred
-            return Err(FastTextError::InvalidModel(
-                "Quantized output matrix (.ftz) is not yet supported".to_string(),
-            ));
+        let (output_dense, output_quant) = if quant_input && qout {
+            let qm = QuantMatrix::load(reader)?;
+            (DenseMatrix::new(0, 0), Some(qm))
         } else {
-            DenseMatrix::load(reader)?
+            let dense = DenseMatrix::load(reader)?;
+            (dense, None)
         };
 
         // 9. Build the inference model.
-        let input_arc = Arc::new(input);
-        let output_arc = Arc::new(output);
+        let input_arc = Arc::new(input_dense);
+        let output_arc = Arc::new(output_dense);
         let label_counts = dict.get_counts(EntryType::Label);
         let word_counts = dict.get_counts(EntryType::Word);
         let target_counts = if args.model() == ModelName::SUP {
@@ -257,6 +263,8 @@ impl FastText {
             input: input_arc,
             output: output_arc,
             quant: quant_input,
+            quant_input: input_quant,
+            quant_output: output_quant,
             model,
             abort_flag: Arc::new(AtomicBool::new(false)),
             last_train_loss: 0.0,
@@ -278,9 +286,9 @@ impl FastText {
     /// 3. Args block (56 bytes)
     /// 4. Dictionary block
     /// 5. quant_input (bool)
-    /// 6. Input matrix
+    /// 6. Input matrix (DenseMatrix or QuantMatrix)
     /// 7. qout (bool)
-    /// 8. Output matrix
+    /// 8. Output matrix (DenseMatrix or QuantMatrix)
     pub fn save<W: Write>(&self, writer: &mut W) -> Result<()> {
         // 1. Magic number
         utils::write_i32(writer, FASTTEXT_FILEFORMAT_MAGIC_INT32)?;
@@ -293,11 +301,31 @@ impl FastText {
         // 5. quant_input
         write_bool(writer, self.quant)?;
         // 6. Input matrix
-        self.input.save(writer)?;
+        if self.quant {
+            if let Some(ref qm) = self.quant_input {
+                qm.save(writer)?;
+            } else {
+                return Err(FastTextError::InvalidModel(
+                    "quant=true but quant_input is None".to_string(),
+                ));
+            }
+        } else {
+            self.input.save(writer)?;
+        }
         // 7. qout
         write_bool(writer, self.args.qout())?;
         // 8. Output matrix
-        self.output.save(writer)?;
+        if self.quant && self.args.qout() {
+            if let Some(ref qm) = self.quant_output {
+                qm.save(writer)?;
+            } else {
+                return Err(FastTextError::InvalidModel(
+                    "qout=true but quant_output is None".to_string(),
+                ));
+            }
+        } else {
+            self.output.save(writer)?;
+        }
         Ok(())
     }
 
@@ -565,7 +593,11 @@ impl FastText {
         // Clamp k to at most the number of labels.
         let k_eff = k.min(nlabels) as i32;
 
-        let raw = self.model.predict(word_ids, k_eff, threshold, &mut state);
+        let raw = if self.quant {
+            self.predict_raw_quantized(word_ids, k_eff, threshold, &mut state)
+        } else {
+            self.model.predict(word_ids, k_eff, threshold, &mut state)
+        };
 
         raw.into_iter()
             .map(|(log_prob, label_idx)| {
@@ -580,6 +612,71 @@ impl FastText {
                 }
             })
             .collect()
+    }
+
+    /// Predict using quantized matrices (quant=true path).
+    ///
+    /// Computes hidden from `quant_input`, then computes output scores using
+    /// `quant_output` (if present) or the dense `output` matrix.  Applies
+    /// softmax normalization (for supervised models) and returns top-k predictions
+    /// as (log_probability, label_index) pairs.
+    fn predict_raw_quantized(
+        &self,
+        word_ids: &[i32],
+        k: i32,
+        threshold: f32,
+        state: &mut State,
+    ) -> Predictions {
+        let quant_input = match self.quant_input.as_ref() {
+            Some(qi) => qi,
+            None => return Predictions::new(),
+        };
+        let nlabels = self.dict.nlabels() as usize;
+        if nlabels == 0 || k <= 0 {
+            return Predictions::new();
+        }
+
+        // Compute hidden representation using quantized input matrix.
+        quant_input.average_rows_to_vector(&mut state.hidden, word_ids);
+
+        // Compute raw output scores.
+        let osz = nlabels;
+        match &self.quant_output {
+            Some(qout) => {
+                for i in 0..osz {
+                    let dot = qout.dot_row(&state.hidden, i as i64).unwrap_or(0.0);
+                    state.output[i] = dot;
+                }
+            }
+            None => {
+                // Use dense output matrix (qout=false).
+                for i in 0..osz {
+                    let dot = self.output.dot_row(&state.hidden, i as i64).unwrap_or(0.0);
+                    state.output[i] = dot;
+                }
+            }
+        }
+
+        // Apply softmax normalization (standard for supervised models).
+        let max = state.output.data()[..osz]
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let mut z = 0.0f32;
+        for i in 0..osz {
+            state.output[i] = (state.output[i] - max).exp();
+            z += state.output[i];
+        }
+        if z > 0.0 {
+            for i in 0..osz {
+                state.output[i] /= z;
+            }
+        }
+
+        // Find top-k predictions above threshold.
+        let mut heap = Predictions::new();
+        find_k_best(k as usize, threshold, &mut heap, &state.output);
+        heap
     }
 
     // -------------------------------------------------------------------------
@@ -629,7 +726,11 @@ impl FastText {
 
             if !labels.is_empty() && !words.is_empty() && k_eff > 0 {
                 let mut state = State::new(dim, nlabels, 0);
-                let raw = self.model.predict(&words, k_eff, effective_threshold, &mut state);
+                let raw = if self.quant {
+                    self.predict_raw_quantized(&words, k_eff, effective_threshold, &mut state)
+                } else {
+                    self.model.predict(&words, k_eff, effective_threshold, &mut state)
+                };
 
                 // Convert log-probs to probabilities (matching C++ `min(exp(score), 1.0)`).
                 let predictions: Vec<(f32, i32)> = raw
@@ -642,6 +743,194 @@ impl FastText {
         }
 
         Ok(meter)
+    }
+
+    // -------------------------------------------------------------------------
+    // Quantization
+    // -------------------------------------------------------------------------
+
+    /// Select the top `cutoff` embedding row indices by L2 norm.
+    ///
+    /// The EOS token is always ranked first (so it is always retained).
+    /// Remaining rows are sorted by descending L2 norm, and the top `cutoff`
+    /// are returned.
+    ///
+    /// Matches C++ `FastText::selectEmbeddings`.
+    fn select_embeddings(&self, cutoff: usize) -> Vec<i32> {
+        let nrows = self.input.rows() as usize;
+        let norms: Vec<f32> = (0..nrows)
+            .map(|i| self.input.l2_norm_row(i as i64).unwrap_or(0.0))
+            .collect();
+
+        let eos_id = self.dict.get_id(EOS);
+
+        let mut idx: Vec<i32> = (0..nrows as i32).collect();
+        idx.sort_unstable_by(|&i1, &i2| {
+            // EOS always comes first.
+            if i1 == eos_id && i2 == eos_id {
+                return std::cmp::Ordering::Equal;
+            }
+            if i1 == eos_id {
+                return std::cmp::Ordering::Less;
+            }
+            if i2 == eos_id {
+                return std::cmp::Ordering::Greater;
+            }
+            norms[i2 as usize]
+                .partial_cmp(&norms[i1 as usize])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let cutoff = cutoff.min(nrows);
+        idx.truncate(cutoff);
+        idx
+    }
+
+    /// Quantize the model in-place.
+    ///
+    /// Only supervised models can be quantized; attempting to quantize a CBOW or
+    /// skip-gram model returns [`FastTextError::InvalidArgument`].
+    ///
+    /// Steps (matching C++ `FastText::quantize`):
+    /// 1. Reject non-supervised models.
+    /// 2. If `qargs.cutoff > 0` and smaller than current input rows:
+    ///    a. Select top embeddings by L2 norm.
+    ///    b. Prune the dictionary to those embeddings.
+    ///    c. Build a new pruned input `DenseMatrix`.
+    ///    d. If `qargs.retrain()`: retrain with pruned input.
+    /// 3. Create a `QuantMatrix` from the (possibly pruned) input.
+    /// 4. If `qargs.qout()`: create a `QuantMatrix` from the output.
+    /// 5. Set `quant=true`, update `args.qout`.
+    pub fn quantize(&mut self, qargs: &Args) -> Result<()> {
+        if self.args.model() != ModelName::SUP {
+            return Err(FastTextError::InvalidArgument(
+                "For now we only support quantization of supervised models".to_string(),
+            ));
+        }
+
+        // Copy input data to a mutable local buffer.
+        let mut input_m = self.input.rows();
+        let input_n = self.input.cols();
+        let mut input_data: Vec<f32> = self.input.data().to_vec();
+
+        let cutoff = qargs.cutoff();
+        if cutoff > 0 && cutoff < input_m as usize {
+            let idx = self.select_embeddings(cutoff);
+            // Prune dictionary to the selected indices.
+            self.dict.prune(&idx);
+
+            // Build pruned input matrix (rows in `idx` order).
+            let pruned_m = idx.len() as i64;
+            let mut pruned_data = vec![0f32; (pruned_m as usize) * (input_n as usize)];
+            for (i, &old_row) in idx.iter().enumerate() {
+                let src_start = old_row as usize * input_n as usize;
+                let src_end = src_start + input_n as usize;
+                let dst_start = i * input_n as usize;
+                pruned_data[dst_start..dst_start + input_n as usize]
+                    .copy_from_slice(&input_data[src_start..src_end]);
+            }
+            input_m = pruned_m;
+            input_data = pruned_data;
+
+            if qargs.retrain() {
+                // Rebuild model with pruned input and retrain.
+                let pruned_dense = DenseMatrix::from_data(pruned_m, input_n, &input_data);
+                let pruned_arc = Arc::new(pruned_dense);
+                self.retrain_after_prune(Arc::clone(&pruned_arc), qargs)?;
+                // After retrain, use the (updated) pruned input data.
+                input_data = pruned_arc.data().to_vec();
+                // Update self.input so get_word_vector still works on dense models.
+                self.input = pruned_arc;
+            }
+        }
+
+        // Quantize the input matrix.
+        let dsub = qargs.dsub() as i32;
+        let qnorm = qargs.qnorm();
+        let quant_in = QuantMatrix::from_dense(&input_data, input_m, input_n, dsub, qnorm);
+        self.quant_input = Some(quant_in);
+
+        // Optionally quantize the output matrix.
+        if qargs.qout() {
+            let output_data = self.output.data().to_vec();
+            let out_m = self.output.rows();
+            let out_n = self.output.cols();
+            // C++ uses dsub=2 and qnorm=false for the output matrix.
+            let quant_out = QuantMatrix::from_dense(&output_data, out_m, out_n, 2, false);
+            self.quant_output = Some(quant_out);
+        }
+
+        // Mark model as quantized and update args.
+        self.quant = true;
+        let mut new_args = (*self.args).clone();
+        new_args.set_qout(qargs.qout());
+        self.args = Arc::new(new_args);
+
+        Ok(())
+    }
+
+    /// Retrain the model after vocabulary pruning.
+    ///
+    /// Uses the `pruned_input` DenseMatrix (already compacted to the pruned
+    /// vocabulary) and the existing output matrix.  Training hyperparameters
+    /// (`epoch`, `lr`, `thread`) are taken from `qargs`.
+    ///
+    /// The pruned_input weights are updated in-place via Hogwild! SGD.
+    fn retrain_after_prune(
+        &self,
+        pruned_input: Arc<DenseMatrix>,
+        qargs: &Args,
+    ) -> Result<()> {
+        let input_path = qargs.input();
+        if input_path.is_empty() {
+            return Err(FastTextError::InvalidArgument(
+                "retrain=true requires qargs.input to be set to the training data path"
+                    .to_string(),
+            ));
+        }
+
+        // Build retrain args from qargs values.
+        let mut retrain_args = (*self.args).clone();
+        retrain_args.set_input(input_path.to_string());
+        retrain_args.set_epoch(qargs.epoch());
+        retrain_args.set_lr(qargs.lr());
+        retrain_args.set_thread(qargs.thread());
+
+        let n_threads = (retrain_args.thread() as usize).max(1);
+        let output_size = self.output.rows() as usize;
+        let output = Arc::clone(&self.output);
+        let target_counts = self.dict.get_counts(EntryType::Label);
+        let normalize_gradient = true; // supervised
+
+        let token_count = Arc::new(AtomicI64::new(0));
+        let shared_loss = Arc::new(AtomicU64::new(f64::to_bits(0.0)));
+        let shared_loss_count = Arc::new(AtomicI64::new(0));
+        let abort_flag = Arc::new(AtomicBool::new(false));
+
+        let training_results: Vec<Result<()>> = (0..n_threads)
+            .into_par_iter()
+            .map(|thread_id| {
+                let loss = build_loss(&retrain_args, Arc::clone(&output), &target_counts);
+                let model = Model::new(Arc::clone(&pruned_input), loss, normalize_gradient);
+                let ctx = TrainThreadCtx {
+                    args: &retrain_args,
+                    dict: &self.dict,
+                    model: &model,
+                    output_size,
+                    token_count: &token_count,
+                    abort_flag: &abort_flag,
+                    shared_loss: &shared_loss,
+                    epoch_loss_tracker: None,
+                };
+                Self::train_thread_inner(thread_id, n_threads, &ctx, &shared_loss_count)
+            })
+            .collect();
+
+        for r in training_results {
+            r?;
+        }
+
+        Ok(())
     }
 
     // -------------------------------------------------------------------------
@@ -824,6 +1113,8 @@ impl FastText {
             input,
             output,
             quant: false,
+            quant_input: None,
+            quant_output: None,
             model,
             abort_flag,
             last_train_loss: avg_loss,
@@ -4688,4 +4979,455 @@ __label__food cook recipe eat meal\n";
         }
     }
 
+    // =========================================================================
+    // VAL-QUANT-001 through VAL-QUANT-008: Quantization tests
+    // =========================================================================
+
+    /// Helper: train a small supervised model for quantization tests.
+    fn train_small_supervised(dim: i32, epoch: i32, bucket: i32) -> (FastText, std::path::PathBuf) {
+        let data = supervised_train_data();
+        let path = write_unique_temp_file(&data, "quant_train");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str);
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(dim);
+        args.set_epoch(epoch);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(bucket);
+        args.set_thread(1);
+        args.set_seed(42);
+
+        let model = FastText::train(args).expect("Training should succeed");
+        (model, path)
+    }
+
+    /// VAL-QUANT-001: Only supervised models can be quantized.
+    #[test]
+    fn test_quantize_unsupervised_rejected() {
+        let data = unsupervised_train_data();
+        let path = write_temp_file(&data);
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str);
+        args.set_output("/dev/null".to_string());
+        args.set_model(crate::args::ModelName::CBOW);
+        args.set_loss(crate::args::LossName::NS);
+        args.set_dim(10);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(100);
+
+        let mut model = FastText::train(args).expect("CBOW training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        // Quantize should fail for CBOW
+        let qargs = Args::default();
+        let result = model.quantize(&qargs);
+        assert!(result.is_err(), "CBOW model quantize should return error");
+        match result.unwrap_err() {
+            FastTextError::InvalidArgument(msg) => {
+                assert!(msg.contains("supervised") || msg.contains("supervised"),
+                    "Error should mention supervised: {}", msg);
+            }
+            e => panic!("Expected InvalidArgument, got: {:?}", e),
+        }
+    }
+
+    /// VAL-QUANT-001 (part 2): Supervised model quantize succeeds.
+    #[test]
+    fn test_quantize_supervised_ok() {
+        let (mut model, path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+
+        let result = model.quantize(&qargs);
+        assert!(result.is_ok(), "Supervised model quantize should succeed: {:?}", result.err());
+        assert!(model.is_quant(), "is_quant() should be true after quantization");
+    }
+
+    /// VAL-QUANT-002: Quantization produces valid model (is_quant=true, valid predictions).
+    #[test]
+    fn test_quantize_produces_valid_model() {
+        let (mut model, path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        model.quantize(&qargs).expect("Quantize should succeed");
+
+        assert!(model.is_quant(), "is_quant() should be true");
+
+        // Predictions should be valid
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        assert!(!preds.is_empty(), "Quantized model should produce predictions");
+        assert!(preds[0].prob > 0.0, "Prediction probability should be > 0");
+        assert!(preds[0].prob <= 1.0, "Prediction probability should be <= 1.0");
+        assert!(preds[0].prob.is_finite(), "Prediction probability should be finite");
+        assert!(!preds[0].label.is_empty(), "Prediction label should not be empty");
+    }
+
+    /// VAL-QUANT-003: .ftz file smaller than .bin file.
+    #[test]
+    fn test_quantize_smaller_file() {
+        // Generate enough unique words so quantization is beneficial.
+        // QuantMatrix PQ centroids: nsubq × ksub × dsub × 4 bytes (fixed overhead)
+        // QuantMatrix codes: nrows × nsubq bytes
+        // DenseMatrix: nrows × dim × 4 bytes
+        // .ftz < .bin when nrows is large enough to amortize the centroid overhead.
+        // With dim=50, dsub=2: nsubq=25, overhead=25×256×2×4=51200 bytes
+        // Need nrows × 50×4 > nrows × 25 + 51200 → nrows > ~3000
+        let mut data = String::new();
+        for i in 0..200 {
+            // Each line has ~10 unique words, for ~2000 total unique words
+            data.push_str(&format!("__label__sports basketball game sport player score word{} tok{} item{} entry{}\n", i*3, i*3+1, i*3+2, i));
+            data.push_str(&format!("__label__food apple banana fruit eat cook word{} tok{} item{} entry{}\n", i*3+100, i*3+101, i*3+102, i+100));
+        }
+        let path = write_unique_temp_file(&data, "quantize_smaller");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str);
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(50);
+        args.set_epoch(1);
+        args.set_min_count(1);
+        args.set_bucket(0);
+        args.set_thread(1);
+
+        let mut model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&path).ok();
+
+        let tmp_dir = std::env::temp_dir();
+        let bin_path = tmp_dir.join("test_quant_smaller.bin");
+        let ftz_path = tmp_dir.join("test_quant_smaller.ftz");
+
+        // Save unquantized .bin
+        model.save_model(bin_path.to_str().unwrap()).expect("Save .bin should succeed");
+        let bin_size = std::fs::metadata(&bin_path).unwrap().len();
+
+        // Quantize and save .ftz
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        model.quantize(&qargs).expect("Quantize should succeed");
+        model.save_model(ftz_path.to_str().unwrap()).expect("Save .ftz should succeed");
+        let ftz_size = std::fs::metadata(&ftz_path).unwrap().len();
+
+        std::fs::remove_file(&bin_path).ok();
+        std::fs::remove_file(&ftz_path).ok();
+
+        assert!(ftz_size < bin_size,
+            ".ftz ({} bytes) should be smaller than .bin ({} bytes), nwords={}",
+            ftz_size, bin_size, model.dict().nwords());
+    }
+
+    /// VAL-QUANT-004: Quantized predictions have >=90% top-1 agreement with unquantized.
+    #[test]
+    fn test_quantize_prediction_agreement() {
+        let (mut model, train_path) = train_small_supervised(16, 10, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        // Collect pre-quantization predictions
+        let test_inputs = [
+            "basketball player sport game score",
+            "apple orange banana fruit eat",
+            "team win lose tournament",
+            "cook recipe meal dessert",
+            "basketball game team score",
+            "fruit eat recipe food",
+            "sport player win",
+            "meal cook eat banana",
+            "game score win team",
+            "food fruit apple banana",
+        ];
+
+        let preds_before: Vec<String> = test_inputs.iter()
+            .map(|s| {
+                let p = model.predict(s, 1, 0.0);
+                if p.is_empty() { String::new() } else { p[0].label.clone() }
+            })
+            .collect();
+
+        // Quantize the model
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        model.quantize(&qargs).expect("Quantize should succeed");
+
+        // Collect post-quantization predictions
+        let preds_after: Vec<String> = test_inputs.iter()
+            .map(|s| {
+                let p = model.predict(s, 1, 0.0);
+                if p.is_empty() { String::new() } else { p[0].label.clone() }
+            })
+            .collect();
+
+        // Check agreement
+        let agreement = preds_before.iter().zip(preds_after.iter())
+            .filter(|(b, a)| !b.is_empty() && b == a)
+            .count();
+        let total = preds_before.iter().filter(|l| !l.is_empty()).count();
+        assert!(total > 0, "Should have some predictions");
+        let rate = agreement as f32 / total as f32;
+        assert!(rate >= 0.9,
+            "Quantized predictions should agree with unquantized >= 90%, got {:.1}% ({}/{})",
+            rate * 100.0, agreement, total);
+    }
+
+    /// VAL-QUANT-005: cutoff > 0 prunes vocabulary; cutoff = 0 preserves it.
+    #[test]
+    fn test_quantize_cutoff() {
+        let (mut model_cutoff, train_path) = train_small_supervised(16, 5, 0);
+        let nwords_before = model_cutoff.dict().nwords();
+        std::fs::remove_file(&train_path).ok();
+
+        // cutoff = 0: zero cutoff skips pruning
+        let mut model_zero = model_cutoff.clone_for_test();
+        {
+            let mut qargs = Args::default();
+            qargs.set_dsub(2);
+            qargs.set_cutoff(0);
+            model_zero.quantize(&qargs).expect("zero cutoff quantize should succeed");
+        }
+        // Zero cutoff: vocabulary size should be unchanged
+        assert_eq!(model_zero.dict().nwords(), nwords_before,
+            "cutoff=0 should not prune vocabulary");
+
+        // cutoff = positive smaller than nwords: vocabulary should be pruned
+        let cutoff = (nwords_before as usize / 2).max(1);
+        {
+            let mut qargs = Args::default();
+            qargs.set_dsub(2);
+            qargs.set_cutoff(cutoff);
+            model_cutoff.quantize(&qargs).expect("positive cutoff quantize should succeed");
+        }
+        let nwords_after = model_cutoff.dict().nwords();
+        assert!(nwords_after < nwords_before,
+            "cutoff={} should prune vocabulary: before={}, after={}",
+            cutoff, nwords_before, nwords_after);
+    }
+
+    /// VAL-QUANT-006 (part 1): qnorm flag works correctly.
+    #[test]
+    fn test_quantize_qnorm() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_qnorm(true);
+
+        model.quantize(&qargs).expect("qnorm quantize should succeed");
+        assert!(model.is_quant(), "is_quant() should be true with qnorm=true");
+
+        // quant_input should have qnorm=true
+        assert!(model.quant_input.as_ref().unwrap().qnorm,
+            "quant_input should have qnorm=true");
+
+        // Should still produce valid predictions
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        assert!(!preds.is_empty(), "qnorm model should produce predictions");
+        assert!(preds[0].prob.is_finite() && preds[0].prob > 0.0,
+            "qnorm prediction prob should be valid");
+    }
+
+    /// VAL-QUANT-006 (part 2): qout flag works correctly.
+    #[test]
+    fn test_quantize_qout() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_qout(true);
+
+        model.quantize(&qargs).expect("qout quantize should succeed");
+        assert!(model.is_quant(), "is_quant() should be true with qout=true");
+        assert!(model.args().qout(), "args.qout() should be true");
+
+        // quant_output should be set
+        assert!(model.quant_output.is_some(), "quant_output should be set when qout=true");
+
+        // Should still produce valid predictions
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        assert!(!preds.is_empty(), "qout model should produce predictions");
+        assert!(preds[0].prob.is_finite() && preds[0].prob > 0.0,
+            "qout prediction prob should be valid");
+    }
+
+    /// VAL-QUANT-007: retrain after quantization works.
+    #[test]
+    fn test_quantize_retrain() {
+        let mut data = String::new();
+        for _ in 0..20 {
+            data.push_str("__label__sports basketball player sport game team score win\n");
+            data.push_str("__label__food apple orange banana fruit eat cook recipe\n");
+        }
+        let path = write_unique_temp_file(&data, "quantize_retrain");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let mut args = Args::default();
+        args.set_input(path_str.clone());
+        args.set_output("/dev/null".to_string());
+        args.apply_supervised_defaults();
+        args.set_dim(16);
+        args.set_epoch(5);
+        args.set_min_count(1);
+        args.set_lr(0.1);
+        args.set_bucket(0);
+        args.set_thread(1);
+        args.set_seed(42);
+
+        let mut model = FastText::train(args).expect("Training should succeed");
+        let nwords_before = model.dict().nwords();
+
+        let cutoff = (nwords_before as usize / 2).max(2);
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_cutoff(cutoff);
+        qargs.set_retrain(true);
+        qargs.set_input(path_str.clone());
+        qargs.set_epoch(1);
+        qargs.set_lr(0.05);
+        qargs.set_thread(1);
+
+        let result = model.quantize(&qargs);
+        std::fs::remove_file(&path).ok();
+
+        assert!(result.is_ok(), "retrain quantize should succeed: {:?}", result.err());
+        assert!(model.is_quant(), "is_quant() should be true after retrain quantize");
+
+        // Should produce valid predictions
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        assert!(!preds.is_empty(), "Retrained quantized model should produce predictions");
+        assert!(preds[0].prob.is_finite() && preds[0].prob > 0.0,
+            "Retrained quantized model prediction prob should be valid");
+    }
+
+    /// VAL-QUANT-008: .ftz save/load round-trip.
+    #[test]
+    fn test_quantize_save_load_roundtrip() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        model.quantize(&qargs).expect("Quantize should succeed");
+
+        // Get pre-save predictions
+        let test_input = "basketball player sport game score";
+        let preds_before = model.predict(test_input, 2, 0.0);
+        assert!(!preds_before.is_empty(), "Quantized model should have predictions before save");
+
+        // Save to .ftz file
+        let ftz_path = std::env::temp_dir().join("test_quant_roundtrip.ftz");
+        model.save_model(ftz_path.to_str().unwrap()).expect("Save .ftz should succeed");
+
+        // Load back
+        let model2 = FastText::load_model(ftz_path.to_str().unwrap())
+            .expect("Load .ftz should succeed");
+        std::fs::remove_file(&ftz_path).ok();
+
+        assert!(model2.is_quant(), "Loaded .ftz model should have is_quant()=true");
+
+        // Get post-load predictions
+        let preds_after = model2.predict(test_input, 2, 0.0);
+        assert_eq!(preds_before.len(), preds_after.len(),
+            "Prediction count should match after .ftz round-trip");
+
+        // Labels and probabilities should match
+        for (i, (pb, pa)) in preds_before.iter().zip(preds_after.iter()).enumerate() {
+            assert_eq!(pb.label, pa.label,
+                "Prediction[{}] label should match after .ftz round-trip: '{}' vs '{}'",
+                i, pb.label, pa.label);
+            assert!((pb.prob - pa.prob).abs() < 1e-5,
+                "Prediction[{}] prob should be close after .ftz round-trip: {} vs {}",
+                i, pb.prob, pa.prob);
+        }
+    }
+
+    /// Cross-validation: train → quantize → predict ≥90% agreement (VAL-CROSS-002).
+    #[test]
+    fn test_cross_train_quantize_predict() {
+        let (mut model, train_path) = train_small_supervised(16, 10, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let test_inputs: Vec<&str> = vec![
+            "basketball player sport game score",
+            "apple orange banana fruit eat",
+            "team win lose tournament championship",
+            "cook recipe meal dessert kitchen",
+            "basketball game team score win",
+        ];
+
+        let preds_dense: Vec<String> = test_inputs.iter()
+            .map(|s| {
+                let p = model.predict(s, 1, 0.0);
+                if p.is_empty() { String::new() } else { p[0].label.clone() }
+            })
+            .collect();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        model.quantize(&qargs).expect("Quantize should succeed");
+
+        let preds_quant: Vec<String> = test_inputs.iter()
+            .map(|s| {
+                let p = model.predict(s, 1, 0.0);
+                if p.is_empty() { String::new() } else { p[0].label.clone() }
+            })
+            .collect();
+
+        let agreement = preds_dense.iter().zip(preds_quant.iter())
+            .filter(|(d, q)| !d.is_empty() && d == q)
+            .count();
+        let total = preds_dense.iter().filter(|l| !l.is_empty()).count();
+        let rate = if total > 0 { agreement as f32 / total as f32 } else { 0.0 };
+        assert!(rate >= 0.9,
+            "Cross train→quantize→predict: >=90% agreement needed, got {:.1}% ({}/{})",
+            rate * 100.0, agreement, total);
+    }
+
+    /// Test that is_quant() returns true for .ftz models (VAL-INF-017).
+    #[test]
+    fn test_is_quant_true_for_ftz() {
+        let (mut model, train_path) = train_small_supervised(16, 3, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        assert!(!model.is_quant(), "Before quantization: is_quant() should be false");
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        model.quantize(&qargs).expect("Quantize should succeed");
+
+        assert!(model.is_quant(), "After quantization: is_quant() should be true");
+
+        // Save and reload
+        let ftz_path = std::env::temp_dir().join("test_is_quant_ftz.ftz");
+        model.save_model(ftz_path.to_str().unwrap()).expect("Save should succeed");
+        let loaded = FastText::load_model(ftz_path.to_str().unwrap())
+            .expect("Load .ftz should succeed");
+        std::fs::remove_file(&ftz_path).ok();
+
+        assert!(loaded.is_quant(), "Loaded .ftz: is_quant() should be true");
+    }
+
+}
+
+// Helper trait for tests: clone-like for FastText (creates a copy via save/load)
+impl FastText {
+    #[cfg(test)]
+    fn clone_for_test(&self) -> Self {
+        let mut buf = Vec::new();
+        self.save(&mut buf).expect("save for clone");
+        let mut cursor = std::io::Cursor::new(buf);
+        FastText::load(&mut cursor).expect("load for clone")
+    }
 }

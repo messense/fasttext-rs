@@ -113,6 +113,19 @@ impl DenseMatrix {
         DenseMatrix { ptr, m, n }
     }
 
+    /// Create a `DenseMatrix` from existing data.
+    ///
+    /// Allocates a new aligned buffer and copies `data` into it.
+    /// `data.len()` must equal `m * n`.
+    pub fn from_data(m: i64, n: i64, data: &[f32]) -> Self {
+        let mut dm = DenseMatrix::new(m, n);
+        let size = (m as usize) * (n as usize);
+        if size > 0 {
+            dm.data_mut().copy_from_slice(&data[..size]);
+        }
+        dm
+    }
+
     /// Return a slice of the entire matrix data in row-major order.
     #[inline]
     pub fn data(&self) -> &[f32] {
