@@ -15,9 +15,7 @@ use crate::vector::Vector;
 /// Alignment in bytes for SIMD-friendly memory layout.
 const ALIGNMENT: usize = 64;
 
-// ============================================================================
 // Matrix trait
-// ============================================================================
 
 /// Trait for matrix types, matching the C++ fastText abstract `Matrix` class.
 pub trait Matrix {
@@ -50,9 +48,7 @@ pub trait Matrix {
         Self: Sized;
 }
 
-// ============================================================================
 // DenseMatrix
-// ============================================================================
 
 /// A dense matrix of `f32` values with 64-byte aligned row-major storage.
 ///
@@ -335,9 +331,7 @@ impl Drop for DenseMatrix {
     }
 }
 
-// ============================================================================
 // Matrix trait implementation for DenseMatrix
-// ============================================================================
 
 impl Matrix for DenseMatrix {
     #[inline]
@@ -478,9 +472,7 @@ impl Matrix for DenseMatrix {
     }
 }
 
-// ============================================================================
 // Scalar fallback implementations
-// ============================================================================
 
 /// Scalar fallback for dot product of two slices.
 #[allow(dead_code)]
@@ -514,11 +506,8 @@ fn average_rows_scalar(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
     }
 }
 
-// ============================================================================
 // SIMD implementations
-// ============================================================================
 
-// ---------- aarch64 NEON ----------
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
@@ -652,7 +641,6 @@ fn average_rows_fast_neon(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
     }
 }
 
-// ---------- x86_64 SSE2 ----------
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
@@ -792,7 +780,6 @@ fn average_rows_fast_sse2(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
     }
 }
 
-// ---------- x86_64 AVX2 ----------
 
 /// AVX2-accelerated dot product of two slices.
 ///
@@ -968,7 +955,6 @@ unsafe fn average_rows_fast_avx2(x: &mut Vector, rows: &[i32], mat: &DenseMatrix
     }
 }
 
-// ---------- dispatch functions ----------
 
 /// Dispatch dot product to best available implementation.
 #[inline]
@@ -1014,16 +1000,13 @@ fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    // --- Allocation safety ---
 
     #[test]
     fn test_dense_matrix_alloc_safety_zero_size() {
@@ -1115,7 +1098,6 @@ mod tests {
         }
     }
 
-    // --- Construction ---
 
     #[test]
     fn test_dense_matrix_new() {
@@ -1146,7 +1128,6 @@ mod tests {
         assert!(m.data().is_empty());
     }
 
-    // --- Zero ---
 
     #[test]
     fn test_dense_matrix_zero() {
@@ -1167,7 +1148,6 @@ mod tests {
         }
     }
 
-    // --- Row-major layout verification ---
 
     #[test]
     fn test_dense_matrix_row_major_layout() {
@@ -1192,7 +1172,6 @@ mod tests {
         assert_eq!(data[5], 6.0);
     }
 
-    // --- dot_row ---
 
     #[test]
     fn test_dense_matrix_dot_row() {
@@ -1264,7 +1243,6 @@ mod tests {
         }
     }
 
-    // --- add_vector_to_row ---
 
     #[test]
     fn test_dense_matrix_add_vector_to_row() {
@@ -1310,7 +1288,6 @@ mod tests {
         assert!((m.at(0, 2) - 18.0).abs() < 1e-6);
     }
 
-    // --- add_row_to_vector ---
 
     #[test]
     fn test_dense_matrix_add_row_to_vector() {
@@ -1351,7 +1328,6 @@ mod tests {
         assert!((v[2] - 4.0).abs() < 1e-6);
     }
 
-    // --- average_rows ---
 
     #[test]
     fn test_dense_matrix_average_rows_single() {
@@ -1427,7 +1403,6 @@ mod tests {
         assert_eq!(v[2], 0.0);
     }
 
-    // --- l2_norm_row ---
 
     #[test]
     fn test_dense_matrix_l2_norm_row() {
@@ -1454,7 +1429,6 @@ mod tests {
         }
     }
 
-    // --- multiply_row ---
 
     #[test]
     fn test_dense_matrix_multiply_row() {
@@ -1516,7 +1490,6 @@ mod tests {
         assert!((m.at(1, 1) - 12.0).abs() < 1e-6);
     }
 
-    // --- divide_row ---
 
     #[test]
     fn test_dense_matrix_divide_row() {
@@ -1570,7 +1543,6 @@ mod tests {
         assert!((m.at(1, 1) - 2.5).abs() < 1e-6);
     }
 
-    // --- SIMD consistency ---
 
     #[test]
     fn test_dense_matrix_simd_consistency() {
@@ -1686,7 +1658,6 @@ mod tests {
         }
     }
 
-    // --- Alignment ---
 
     #[test]
     fn test_dense_matrix_alignment() {
@@ -1704,7 +1675,6 @@ mod tests {
         }
     }
 
-    // --- Bounds checking ---
 
     #[test]
     #[should_panic(expected = "Row index out of bounds")]
@@ -1745,7 +1715,6 @@ mod tests {
         let _ = m.l2_norm_row(2);
     }
 
-    // --- Binary save/load round-trip ---
 
     #[test]
     fn test_dense_matrix_save_load_roundtrip() {
@@ -1826,7 +1795,6 @@ mod tests {
         assert!(DenseMatrix::load(&mut cursor).is_err());
     }
 
-    // --- uniform ---
 
     #[test]
     fn test_dense_matrix_uniform() {
@@ -1872,7 +1840,6 @@ mod tests {
         );
     }
 
-    // --- Clone ---
 
     #[test]
     fn test_dense_matrix_clone() {
@@ -1891,7 +1858,6 @@ mod tests {
         assert_eq!(m2.at(0, 0), 1.0);
     }
 
-    // --- Row access ---
 
     #[test]
     fn test_dense_matrix_row_access() {
@@ -1910,7 +1876,6 @@ mod tests {
         assert_eq!(row1, &[4.0, 5.0, 6.0]);
     }
 
-    // --- multiply_row with ib offset ---
 
     #[test]
     fn test_dense_matrix_multiply_row_with_offset() {
@@ -1938,7 +1903,6 @@ mod tests {
         assert_eq!(m.at(3, 1), 40.0);
     }
 
-    // --- divide_row with ib offset ---
 
     #[test]
     fn test_dense_matrix_divide_row_with_offset() {
@@ -1966,7 +1930,6 @@ mod tests {
         assert!((m.at(3, 1) - 8.0).abs() < 1e-6);
     }
 
-    // --- NaN detection in dot_row with NaN in vector ---
 
     #[test]
     fn test_dense_matrix_dot_row_nan_in_vector() {
@@ -1986,7 +1949,6 @@ mod tests {
         }
     }
 
-    // --- Large matrix operations ---
 
     #[test]
     fn test_dense_matrix_large_dot_row() {
@@ -2005,7 +1967,6 @@ mod tests {
         assert!((m.dot_row(&v, 0).unwrap() - 100.0).abs() < 0.01);
     }
 
-    // --- AVX2 consistency tests (x86_64 only) ---
 
     #[cfg(target_arch = "x86_64")]
     #[test]

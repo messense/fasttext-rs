@@ -18,9 +18,7 @@ use crate::vector::Vector;
 /// to `Loss::predict`.
 pub type Predictions = Vec<(f32, i32)>;
 
-// ============================================================================
 // MinstdRng — matches C++ `std::minstd_rand`
-// ============================================================================
 
 /// Linear congruential random number generator matching C++ `std::minstd_rand`.
 ///
@@ -119,9 +117,7 @@ impl MinstdRng {
     }
 }
 
-// ============================================================================
 // State — per-example training/inference state
-// ============================================================================
 
 /// Per-example training and inference state.
 ///
@@ -187,9 +183,7 @@ impl State {
     }
 }
 
-// ============================================================================
 // Model
-// ============================================================================
 
 /// Core fastText model: computes hidden representations, predicts top-k labels,
 /// and performs SGD updates.
@@ -242,9 +236,7 @@ impl Model {
         Model { wi, loss, normalize_gradient, dim }
     }
 
-    // -------------------------------------------------------------------------
     // compute_hidden
-    // -------------------------------------------------------------------------
 
     /// Compute the hidden representation as the average of input-matrix rows.
     ///
@@ -256,9 +248,7 @@ impl Model {
         self.wi.average_rows_to_vector(&mut state.hidden, input_ids);
     }
 
-    // -------------------------------------------------------------------------
     // predict
-    // -------------------------------------------------------------------------
 
     /// Predict the top-`k` labels for the given input token IDs.
     ///
@@ -286,9 +276,7 @@ impl Model {
         heap
     }
 
-    // -------------------------------------------------------------------------
     // update
-    // -------------------------------------------------------------------------
 
     /// Perform one SGD update step.
     ///
@@ -331,9 +319,7 @@ impl Model {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -726,4 +712,3 @@ mod tests {
         );
     }
 }
-

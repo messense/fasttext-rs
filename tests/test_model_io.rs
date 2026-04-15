@@ -1,3 +1,4 @@
+
 // Model I/O tests: load, save, round-trip, validation
 //
 // Tests extracted from src/fasttext.rs inline tests. These test the public
@@ -141,16 +142,12 @@ fn test_invalid_model_rejection() {
 /// **bit-for-bit identical** to the original.
 #[test]
 fn test_model_save_load_roundtrip() {
-    // ------------------------------------------------------------------
     // 1. Load the reference model.
-    // ------------------------------------------------------------------
     let model1 = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
     let test_input = "Which baking dish is best to bake a banana bread ?";
 
-    // ------------------------------------------------------------------
     // 2. Capture baseline: predictions and word vector BEFORE save.
-    // ------------------------------------------------------------------
     let preds_before = model1.predict(test_input, 5, 0.0);
     assert!(
         !preds_before.is_empty(),
@@ -165,23 +162,17 @@ fn test_model_save_load_roundtrip() {
         model1.args().dim
     );
 
-    // ------------------------------------------------------------------
     // 3. Save to a temp file.
-    // ------------------------------------------------------------------
     let tmp_path = std::env::temp_dir().join("fasttext_roundtrip_cooking.bin");
     let tmp_str = tmp_path.to_str().unwrap();
     model1.save_model(tmp_str).expect("Should save model");
 
-    // ------------------------------------------------------------------
     // 4. Reload from the temp file.
-    // ------------------------------------------------------------------
     let model2 = FastText::load_model(tmp_str).expect("Should reload model");
     // Clean up the temp file (ignore errors).
     std::fs::remove_file(tmp_str).ok();
 
-    // ------------------------------------------------------------------
     // 5. Verify all args match.
-    // ------------------------------------------------------------------
     assert_eq!(
         model1.args().dim,
         model2.args().dim,
@@ -249,9 +240,7 @@ fn test_model_save_load_roundtrip() {
         model2.args().t
     );
 
-    // ------------------------------------------------------------------
     // 6. Verify vocabulary and labels match (count, words, frequencies).
-    // ------------------------------------------------------------------
     assert_eq!(
         model1.dict().nwords(),
         model2.dict().nwords(),
@@ -295,9 +284,7 @@ fn test_model_save_load_roundtrip() {
         );
     }
 
-    // ------------------------------------------------------------------
     // 7. Verify word vectors are bitwise identical.
-    // ------------------------------------------------------------------
     let vec_after = model2.get_word_vector("banana");
     assert_eq!(
         vec_before.len(),
@@ -315,9 +302,7 @@ fn test_model_save_load_roundtrip() {
         );
     }
 
-    // ------------------------------------------------------------------
     // 8. Verify predictions are bitwise identical.
-    // ------------------------------------------------------------------
     let preds_after = model2.predict(test_input, 5, 0.0);
     assert_eq!(
         preds_before.len(),

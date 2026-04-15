@@ -1,3 +1,4 @@
+
 // Args tests: defaults, supervised overrides, serialization, enums
 //
 // Extracted from src/args.rs inline tests. These test the public
@@ -6,9 +7,6 @@
 use std::io::Cursor;
 
 use fasttext::args::{Args, LossName, MetricName, ModelName};
-
-// ===== VAL-CORE-001: Args default values match C++ =====
-
 #[test]
 fn test_args_defaults() {
     let args = Args::default();
@@ -52,9 +50,6 @@ fn test_args_defaults() {
     assert_eq!(args.autotune_duration, 300);
     assert_eq!(args.autotune_model_size, "");
 }
-
-// ===== VAL-CORE-002: Args supervised mode overrides =====
-
 #[test]
 fn test_args_supervised_overrides() {
     let mut args = Args::default();
@@ -95,9 +90,6 @@ fn test_args_supervised_bucket_nonzero_with_autotune() {
     // maxn is 0 and wordNgrams is 1, but autotune is enabled
     assert_eq!(args.bucket, 2_000_000);
 }
-
-// ===== has_autotune() =====
-
 #[test]
 fn test_has_autotune() {
     let args = Args::default();
@@ -107,9 +99,6 @@ fn test_has_autotune() {
     args.autotune_validation_file = "validation.txt".to_string();
     assert!(args.has_autotune());
 }
-
-// ===== VAL-CORE-004: Args binary serialization layout =====
-
 #[test]
 fn test_args_binary_serialization_layout() {
     let args = Args::default();
@@ -281,9 +270,6 @@ fn test_args_binary_load_truncated() {
     let result = args.load(&mut cursor);
     assert!(result.is_err());
 }
-
-// ===== Enum tests =====
-
 #[test]
 fn test_model_name_values() {
     assert_eq!(ModelName::CBOW as i32, 1);
@@ -319,9 +305,6 @@ fn test_loss_name_from_i32() {
     assert_eq!(LossName::from_i32(5), None);
     assert_eq!(LossName::from_i32(-1), None);
 }
-
-// ===== String conversion tests =====
-
 #[test]
 fn test_loss_to_string() {
     let mut args = Args::default();
@@ -352,9 +335,6 @@ fn test_model_to_string() {
     args.model = ModelName::SUP;
     assert_eq!(args.model_to_string(), "sup");
 }
-
-// ===== Autotune metric parsing =====
-
 #[test]
 fn test_autotune_metric_name_default() {
     let args = Args::default();
@@ -417,9 +397,6 @@ fn test_autotune_metric_name_unknown() {
     args.autotune_metric = "unknown_metric".to_string();
     assert_eq!(args.get_autotune_metric_name(), None);
 }
-
-// ===== Binary serialization: all enum values =====
-
 #[test]
 fn test_args_binary_all_loss_types() {
     for loss in &[LossName::HS, LossName::NS, LossName::SOFTMAX, LossName::OVA] {
@@ -453,9 +430,6 @@ fn test_args_binary_all_model_types() {
         assert_eq!(args2.model, *model);
     }
 }
-
-// ===== Binary serialization: fields not saved =====
-
 #[test]
 fn test_args_binary_does_not_save_non_serialized_fields() {
     // These fields are NOT part of the 56-byte binary block
@@ -479,9 +453,6 @@ fn test_args_binary_does_not_save_non_serialized_fields() {
     assert_eq!(args2.verbose, 2); // default, not 0
     assert_eq!(args2.label, "__label__"); // default, not "custom"
 }
-
-// ===== Edge cases for binary serialization =====
-
 #[test]
 fn test_args_binary_extreme_values() {
     let mut args = Args::default();

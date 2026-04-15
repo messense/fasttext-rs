@@ -11,9 +11,7 @@ use crate::product_quantizer::ProductQuantizer;
 use crate::utils;
 use crate::vector::Vector;
 
-// ============================================================================
 // QuantMatrix
-// ============================================================================
 
 /// A product-quantized matrix using codebook lookup for approximate inner products.
 ///
@@ -131,9 +129,7 @@ impl QuantMatrix {
     }
 }
 
-// ============================================================================
 // Matrix trait implementation
-// ============================================================================
 
 impl Matrix for QuantMatrix {
     #[inline]
@@ -311,18 +307,14 @@ impl Matrix for QuantMatrix {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    // -----------------------------------------------------------------------
     // Helper: build a minimal QuantMatrix with known PQ for testing
-    // -----------------------------------------------------------------------
 
     /// Build a QuantMatrix from a `make_known_pq()`-style PQ with 4-dim vectors.
     ///
@@ -375,9 +367,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // Shape and accessors
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_shape() {
@@ -386,9 +376,7 @@ mod tests {
         assert_eq!(qm.cols(), 4);
     }
 
-    // -----------------------------------------------------------------------
     // dot_row: approximate dot product via codebook lookup
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_dot_row_basic() {
@@ -441,9 +429,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // add_row_to_vector: PQ reconstruction via addcode
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_add_row_to_vector_scale_one() {
@@ -485,9 +471,7 @@ mod tests {
         assert!((x[3] - 2.0).abs() < 1e-6);
     }
 
-    // -----------------------------------------------------------------------
     // average_rows_to_vector
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_average_rows_to_vector() {
@@ -517,9 +501,7 @@ mod tests {
         assert!((x[3] - 0.0).abs() < 1e-6);
     }
 
-    // -----------------------------------------------------------------------
     // add_vector_to_row: must panic (write rejection)
-    // -----------------------------------------------------------------------
 
     #[test]
     #[should_panic(expected = "Operation not permitted on quantized matrices")]
@@ -530,9 +512,7 @@ mod tests {
         qm.add_vector_to_row(&x, 0, 1.0);
     }
 
-    // -----------------------------------------------------------------------
     // Norm quantization (qnorm)
-    // -----------------------------------------------------------------------
 
     /// Build a QuantMatrix with qnorm=true.
     ///
@@ -593,9 +573,7 @@ mod tests {
         assert!((x[3] - 0.0).abs() < 1e-6, "x[3]={}", x[3]);
     }
 
-    // -----------------------------------------------------------------------
     // Save / load round-trip
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_save_load_roundtrip() {
@@ -668,9 +646,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // Shape preservation
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_shape_preservation_after_load() {
@@ -688,9 +664,7 @@ mod tests {
         assert_eq!(qm2.pq.nsubq, 2);
     }
 
-    // -----------------------------------------------------------------------
     // dot_row vs add_row_to_vector consistency
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_dot_row_add_row_consistency() {
@@ -724,9 +698,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // from_dense smoke test
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_from_dense_smoke() {
@@ -762,9 +734,7 @@ mod tests {
         assert!(qm.npq.is_some());
     }
 
-    // -----------------------------------------------------------------------
     // load rejects invalid data
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_qm_load_negative_dims_rejected() {
@@ -792,9 +762,7 @@ mod tests {
         assert!(result.is_err(), "Expected error for negative codesize");
     }
 
-    // -----------------------------------------------------------------------
     // Structural invariant checks added at load time
-    // -----------------------------------------------------------------------
 
     /// Verify that load() rejects a binary where codesize != m * pq.nsubq.
     ///

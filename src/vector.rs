@@ -133,9 +133,7 @@ impl fmt::Display for Vector {
     }
 }
 
-// ============================================================================
 // SIMD / scalar implementations
-// ============================================================================
 
 /// Scalar fallback for dot product.
 #[allow(dead_code)]
@@ -157,7 +155,6 @@ fn add_vector_scalar(dest: &mut [f32], src: &[f32], scale: f32) {
     }
 }
 
-// ---------- aarch64 NEON ----------
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
@@ -246,7 +243,6 @@ fn add_vector_simd_neon(dest: &mut [f32], src: &[f32], scale: f32) {
     }
 }
 
-// ---------- x86_64 SSE2 ----------
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
@@ -354,7 +350,6 @@ unsafe fn vst(ptr: *mut f32, val: std::arch::x86_64::__m128) {
     std::arch::x86_64::_mm_storeu_ps(ptr, val);
 }
 
-// ---------- dispatch functions ----------
 
 /// Dispatch dot product to best available implementation.
 #[inline]
@@ -390,15 +385,12 @@ fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // --- Construction and zero ---
 
     #[test]
     fn test_vector_new() {
@@ -428,7 +420,6 @@ mod tests {
         }
     }
 
-    // --- Norm ---
 
     #[test]
     fn test_vector_norm_known() {
@@ -452,7 +443,6 @@ mod tests {
         assert!((v.norm() - 7.0).abs() < f32::EPSILON);
     }
 
-    // --- Mul ---
 
     #[test]
     fn test_vector_mul_scalar() {
@@ -490,7 +480,6 @@ mod tests {
         assert_eq!(v[2], -3.0);
     }
 
-    // --- add_vector ---
 
     #[test]
     fn test_vector_add_vector_basic() {
@@ -536,7 +525,6 @@ mod tests {
         v.add_vector(&other, 1.0);
     }
 
-    // --- dot product ---
 
     #[test]
     fn test_vector_dot_basic() {
@@ -575,7 +563,6 @@ mod tests {
         a.dot(&b);
     }
 
-    // --- argmax ---
 
     #[test]
     fn test_vector_argmax_first() {
@@ -617,7 +604,6 @@ mod tests {
         assert_eq!(v.argmax(), 0);
     }
 
-    // --- Size-1 vectors ---
 
     #[test]
     fn test_vector_size_one() {
@@ -650,7 +636,6 @@ mod tests {
         assert!((a[0] - 11.0).abs() < f32::EPSILON);
     }
 
-    // --- Large vectors ---
 
     #[test]
     fn test_vector_large() {
@@ -681,7 +666,6 @@ mod tests {
         );
     }
 
-    // --- SIMD vs scalar consistency ---
 
     #[test]
     fn test_simd_vs_scalar_dot_512() {
@@ -764,7 +748,6 @@ mod tests {
         }
     }
 
-    // --- Clone ---
 
     #[test]
     fn test_vector_clone() {
@@ -786,7 +769,6 @@ mod tests {
         assert_eq!(v2[0], 1.0);
     }
 
-    // --- Display ---
 
     #[test]
     fn test_vector_display() {
@@ -798,7 +780,6 @@ mod tests {
         assert_eq!(s, "1.00000 2.50000 -3.14000 ");
     }
 
-    // --- Index ---
 
     #[test]
     fn test_vector_index() {
@@ -818,7 +799,6 @@ mod tests {
         let _ = v[3];
     }
 
-    // --- Allocation safety ---
 
     #[test]
     fn test_vector_alloc_safety_zero_size() {
@@ -832,7 +812,6 @@ mod tests {
         assert_eq!(v2.len(), 0);
     }
 
-    // --- Edge cases ---
 
     #[test]
     fn test_vector_dot_zero_vectors() {
@@ -880,7 +859,6 @@ mod tests {
         assert_eq!(v.argmax(), 1);
     }
 
-    // --- SIMD consistency on non-aligned-to-16 sizes ---
 
     #[test]
     fn test_simd_vs_scalar_dot_non_aligned_sizes() {

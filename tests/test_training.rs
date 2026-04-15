@@ -10,9 +10,7 @@ use fasttext::args::{Args, LossName, ModelName};
 use fasttext::error::FastTextError;
 use fasttext::{FastText, Prediction};
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn write_temp_file(content: &str) -> std::path::PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -83,9 +81,7 @@ fn unsupervised_train_data() -> String {
     data
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 /// VAL-TRAIN-001: Supervised training end-to-end.
 ///
 /// Trains a supervised model on a small labeled dataset, then predicts
@@ -997,4 +993,3 @@ fn test_train_integration_edge_cases() {
         Err(e) => panic!("Unexpected error for epoch=0: {:?}", e),
     }
 }
-

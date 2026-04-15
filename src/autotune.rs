@@ -13,9 +13,7 @@ use crate::model::MinstdRng;
 /// Global counter for unique temp-file naming during model-size checks.
 static SIZE_CHECK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-// ============================================================================
 // Normal distribution sampler (Box-Muller transform)
-// ============================================================================
 
 /// Generate a standard normal sample using the Box-Muller transform.
 ///
@@ -30,9 +28,7 @@ fn normal_sample(rng: &mut MinstdRng) -> f64 {
     r * theta.cos()
 }
 
-// ============================================================================
 // Gaussian perturbation helpers
-// ============================================================================
 
 /// Gaussian-perturb `val` with decaying sigma and optional linear/multiplicative mode.
 ///
@@ -87,9 +83,7 @@ fn update_arg_gauss_i32(
     result as i32
 }
 
-// ============================================================================
 // AutotuneStrategy
-// ============================================================================
 
 /// Hyperparameter perturbation strategy for autotune.
 ///
@@ -258,9 +252,7 @@ impl AutotuneStrategy {
     }
 }
 
-// ============================================================================
 // Autotune
-// ============================================================================
 
 /// Sentinel value for "no score found yet".
 const UNKNOWN_BEST_SCORE: f64 = f64::NEG_INFINITY;
@@ -509,9 +501,7 @@ impl Autotune {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -519,9 +509,7 @@ mod tests {
     use crate::args::Args;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     /// Unique temp-file counter to avoid races between parallel tests.
     static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -579,9 +567,7 @@ mod tests {
         args
     }
 
-    // =========================================================================
     // VAL-AUTO-001: Autotune activation
-    // =========================================================================
 
     /// VAL-AUTO-001: Autotune is inactive (validation file empty) by default.
     #[test]
@@ -608,9 +594,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
     // VAL-AUTO-002: Default duration and configurability
-    // =========================================================================
 
     /// VAL-AUTO-002: Default autotune duration is 300 seconds.
     #[test]
@@ -641,9 +625,7 @@ mod tests {
         assert_eq!(args.autotune_duration, 3600, "Should accept large durations");
     }
 
-    // =========================================================================
     // VAL-AUTO-003: Respects time budget
-    // =========================================================================
 
     /// VAL-AUTO-003: Autotune completes within a bounded time.
     ///
@@ -695,9 +677,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
     // VAL-AUTO-004: Hyperparameter tuning
-    // =========================================================================
 
     /// VAL-AUTO-004: Autotune explores and potentially modifies hyperparameters.
     ///
@@ -786,9 +766,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
     // VAL-AUTO-005: Returns best parameters and usable model
-    // =========================================================================
 
     /// VAL-AUTO-005: Autotune returns a model that can be used for prediction.
     #[test]
@@ -830,9 +808,7 @@ mod tests {
         assert!(best_args.dim >= 1, "Best dim must be >= 1");
     }
 
-    // =========================================================================
     // VAL-AUTO-006: Minimal duration produces valid model
-    // =========================================================================
 
     /// VAL-AUTO-006: A 1-second autotune duration still produces a valid model.
     ///
@@ -865,9 +841,7 @@ mod tests {
         assert!(!preds[0].label.is_empty(), "Prediction label must be non-empty");
     }
 
-    // =========================================================================
     // Additional AutotuneStrategy unit tests
-    // =========================================================================
 
     /// Verify update_best tracks best_minn_index and best_dsub_exponent correctly.
     #[test]
@@ -999,9 +973,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
     // Fix tests: parse_size_to_bytes
-    // =========================================================================
 
     #[test]
     fn test_parse_size_to_bytes() {
@@ -1024,9 +996,7 @@ mod tests {
         assert_eq!(parse_size_to_bytes("1k"), Some(1_024));
     }
 
-    // =========================================================================
     // Fix tests: autotune evaluate() metric dispatch
-    // =========================================================================
 
     /// Verify autotune runs successfully with a label-specific F1 metric.
     #[test]
@@ -1078,9 +1048,7 @@ mod tests {
         assert!(!preds.is_empty(), "Model from default-F1 autotune should produce predictions");
     }
 
-    // =========================================================================
     // Fix tests: autotune model_size enforcement
-    // =========================================================================
 
     /// Verify the quantize-save-size-check mechanism works correctly.
     ///

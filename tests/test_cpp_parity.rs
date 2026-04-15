@@ -1,3 +1,4 @@
+
 // C++ parity tests: verify Rust output matches C++ fastText golden references
 //
 // The cooking.model.bin fixture was trained with C++ fastText using:
@@ -17,9 +18,7 @@ use fasttext::FastText;
 const COOKING_MODEL: &str = "tests/fixtures/cooking.model.bin";
 const COOKING_VALID: &str = "tests/fixtures/cooking.valid";
 
-// ---------------------------------------------------------------------------
 // predict / predict-prob parity
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   echo "which baking dish is best to bake a banana bread ?" | ./fasttext predict-prob model - 5
@@ -54,9 +53,7 @@ fn test_cpp_parity_predict_prob() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // test (evaluation) parity
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   ./fasttext test model cooking.valid 1
@@ -108,9 +105,7 @@ fn test_cpp_parity_test_k5() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // word vector parity
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   echo "banana" | ./fasttext print-word-vectors model
@@ -134,9 +129,7 @@ fn test_cpp_parity_word_vector() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // sentence vector parity
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   echo "how to bake a banana bread" | ./fasttext print-sentence-vectors model
@@ -160,9 +153,7 @@ fn test_cpp_parity_sentence_vector() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // nearest neighbor parity
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   echo "banana" | ./fasttext nn model 5
@@ -199,9 +190,7 @@ fn test_cpp_parity_nn() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // analogies parity
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   echo "baking bread chicken" | ./fasttext analogies model 5
@@ -235,9 +224,7 @@ fn test_cpp_parity_analogies() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // model args parity
-// ---------------------------------------------------------------------------
 
 /// Verify loaded model args match the training configuration exactly.
 #[test]
@@ -274,9 +261,7 @@ nwords 8952
 nlabels 735"#]].assert_eq(&actual);
 }
 
-// ---------------------------------------------------------------------------
 // ngram vectors parity (maxn=0: just the word vector)
-// ---------------------------------------------------------------------------
 
 /// C++ reference:
 ///   ./fasttext print-ngrams model banana

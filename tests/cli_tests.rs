@@ -9,9 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-// ---------------------------------------------------------------------------
 // Test helpers
-// ---------------------------------------------------------------------------
 
 /// Path to the compiled `fasttext` binary (set by cargo at compile time).
 fn fasttext_bin() -> &'static str {
@@ -145,9 +143,7 @@ fn train_small_supervised_model(dir: &Path) -> PathBuf {
     model_bin
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-001: Training commands produce correct model types
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_train_supervised() {
@@ -265,9 +261,7 @@ cats and dogs are both pets
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-002: predict reads stdin and outputs labels
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_predict_stdin() {
@@ -294,9 +288,7 @@ fn test_cli_predict_stdin() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-003: predict-prob outputs labels with probabilities
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_predict_prob() {
@@ -339,9 +331,7 @@ fn test_cli_predict_prob() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-004: predict with k and threshold parameters
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_predict_k() {
@@ -422,9 +412,7 @@ fn test_cli_predict_threshold() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-006: test prints metrics
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_test_metrics() {
@@ -480,9 +468,7 @@ __label__bread the bread is fresh
     }
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-007: test-label prints per-label metrics
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_test_label() {
@@ -538,9 +524,7 @@ __label__bread the bread is fresh
     assert!(found_label_row, "test-label should have at least one label row");
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-012: Help, errors, and flag pass-through
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_help() {
@@ -705,9 +689,7 @@ fn test_cli_single_dash_flags() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-005: quantize produces .ftz file
-// ---------------------------------------------------------------------------
 
 /// Write a large labeled training corpus (10 categories, 500+ unique words).
 /// Large enough that quantization actually reduces model size.
@@ -800,9 +782,7 @@ fn test_cli_quantize() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-008: print-word-vectors and print-sentence-vectors
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_print_word_vectors() {
@@ -882,9 +862,7 @@ fn test_cli_print_sentence_vectors() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-009: print-ngrams outputs n-grams with vectors
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_print_ngrams() {
@@ -924,9 +902,7 @@ fn test_cli_print_ngrams() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-010: nn and analogies commands
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_nn() {
@@ -1014,9 +990,7 @@ fn test_cli_analogies() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CLI-011: dump subcommands
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_cli_dump_args() {
@@ -1186,4 +1160,3 @@ fn test_cli_dump_output() {
         data_lines, rows
     );
 }
-

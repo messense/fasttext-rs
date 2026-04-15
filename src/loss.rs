@@ -21,9 +21,7 @@ use crate::matrix::{DenseMatrix, Matrix};
 use crate::model::{MinstdRng, Predictions, State};
 use crate::vector::Vector;
 
-// ============================================================================
 // Constants
-// ============================================================================
 
 /// Number of entries in the sigmoid lookup table (SIGMOID_TABLE_SIZE).
 pub const SIGMOID_TABLE_SIZE: i64 = 512;
@@ -35,9 +33,7 @@ pub const LOG_TABLE_SIZE: i64 = 512;
 /// Size of the negative sampling table (NEGATIVE_TABLE_SIZE).
 pub const NEGATIVE_TABLE_SIZE: i64 = 10_000_000;
 
-// ============================================================================
 // Helpers
-// ============================================================================
 
 /// `log(x + 1e-5)` — matches C++ `std_log` used in `findKBest` and HS DFS.
 ///
@@ -49,9 +45,7 @@ pub fn std_log(x: f32) -> f32 {
     (x + 1e-5_f32).ln()
 }
 
-// ============================================================================
 // Precomputed tables
-// ============================================================================
 
 /// Precomputed sigmoid and log tables, shared by all loss implementations.
 ///
@@ -126,9 +120,7 @@ impl Default for LossTables {
     }
 }
 
-// ============================================================================
 // Loss trait
-// ============================================================================
 
 /// Common interface for all fastText loss functions.
 ///
@@ -169,9 +161,7 @@ pub trait Loss: Send + Sync {
     }
 }
 
-// ============================================================================
 // find_k_best — helper for the default predict implementation
-// ============================================================================
 
 /// Find the top-`k` entries in `output` that meet `threshold`, sorted
 /// descending by log-probability.
@@ -230,9 +220,7 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
     heap.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 }
 
-// ============================================================================
 // BinaryLogisticBase — shared helper for OVA, NS, HS
-// ============================================================================
 
 /// Shared binary logistic operations used by OneVsAll, NegativeSampling,
 /// and HierarchicalSoftmax losses.
@@ -302,9 +290,7 @@ impl BinaryLogisticBase {
     }
 }
 
-// ============================================================================
 // OneVsAllLoss
-// ============================================================================
 
 /// One-vs-all (OVA) loss: independent binary logistic for every class.
 ///
@@ -347,9 +333,7 @@ impl Loss for OneVsAllLoss {
     }
 }
 
-// ============================================================================
 // NegativeSamplingLoss
-// ============================================================================
 
 /// Negative sampling loss.
 ///
@@ -461,9 +445,7 @@ impl Loss for NegativeSamplingLoss {
     }
 }
 
-// ============================================================================
 // HierarchicalSoftmaxLoss
-// ============================================================================
 
 /// A single node in the Huffman tree.
 #[derive(Debug, Clone)]
@@ -697,9 +679,7 @@ impl Loss for HierarchicalSoftmaxLoss {
     }
 }
 
-// ============================================================================
 // SoftmaxLoss
-// ============================================================================
 
 /// Full softmax loss with max-subtraction for numerical stability.
 ///
@@ -775,9 +755,7 @@ impl Loss for SoftmaxLoss {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1046,7 +1024,6 @@ mod tests {
         let mut state = State::new(dim, osz, 0);
         state.hidden[0] = 1.0; // unit vector along dim 0
 
-        // --- Test 1: k=1 should return label 0 as top prediction ---
         let mut heap = Predictions::new();
         loss.predict(1, 0.0, &mut heap, &mut state);
 
@@ -1063,7 +1040,6 @@ mod tests {
             heap[0].0
         );
 
-        // --- Test 2: DFS pruning with high threshold ---
         // threshold=0.01 → log_threshold = std_log(0.01) = ln(0.01+1e-5) ≈ -4.6
         // Right branch score ≈ -11.5 < -4.6 → pruned
         // Left branch (label 0) score ≈ 0 > -4.6 → survives
@@ -1087,7 +1063,6 @@ mod tests {
             assert!(log_prob.is_finite(), "Log-prob should be finite");
         }
 
-        // --- Test 3: k=4 (all labels), no threshold ---
         let mut heap3 = Predictions::new();
         loss.predict(4, 0.0, &mut heap3, &mut state);
 

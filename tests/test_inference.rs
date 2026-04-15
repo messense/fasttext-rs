@@ -14,9 +14,7 @@ use fasttext::FastText;
 
 const COOKING_MODEL: &str = "tests/fixtures/cooking.model.bin";
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn write_temp_file(content: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -51,9 +49,7 @@ fn unsupervised_train_data() -> String {
     data
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 #[test]
 fn test_load_cooking_model_vocab() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
@@ -855,7 +851,6 @@ fn test_get_labels_format() {
 /// VAL-TRAIN-004: Matrix dimensions correct after training.
 #[test]
 fn test_train_matrix_dimensions() {
-    // --- Supervised ---
     let data = supervised_train_data();
     let path = write_temp_file(&data);
     let path_str = path.to_str().unwrap().to_string();
@@ -898,7 +893,6 @@ fn test_train_matrix_dimensions() {
     );
     assert_eq!(output.cols(), dim, "Output cols should be dim");
 
-    // --- Unsupervised (CBOW) ---
     let data2 = unsupervised_train_data();
     let path2 = write_temp_file(&data2);
     let path2_str = path2.to_str().unwrap().to_string();
@@ -1097,9 +1091,7 @@ fn test_train_no_labels() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Missing API coverage: get_nn, get_analogies, get_ngram_vectors
-// ---------------------------------------------------------------------------
 
 /// get_nn returns k results, excludes query word, similarities are finite and sorted.
 #[test]
@@ -1266,9 +1258,7 @@ fn test_get_ngram_vectors_with_subwords() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Config matrix tests: exercise various model configurations
-// ---------------------------------------------------------------------------
 
 /// Train supervised models with various configurations and verify basic correctness.
 #[test]
@@ -1398,4 +1388,3 @@ fn test_config_matrix_unsupervised() {
         );
     }
 }
-

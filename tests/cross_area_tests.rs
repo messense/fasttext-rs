@@ -16,15 +16,11 @@ use fasttext::args::Args;
 use fasttext::autotune::Autotune;
 use fasttext::FastText;
 
-// ---------------------------------------------------------------------------
 // Shared counter for unique temp-file names
-// ---------------------------------------------------------------------------
 
 static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Create a unique temporary directory for this test invocation.
 fn temp_dir() -> PathBuf {
@@ -149,9 +145,7 @@ fn run_fasttext(args: &[&str], stdin_data: Option<&[u8]>) -> (String, String, i3
     }
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CROSS-001: Train → Predict on training data
-// ---------------------------------------------------------------------------
 
 /// VAL-CROSS-001: Train a supervised model on labeled data, then predict on
 /// the same training data. Top-1 prediction for each line must match the
@@ -199,9 +193,7 @@ fn test_cross_train_predict() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CROSS-002: Train → Quantize → Predict agreement
-// ---------------------------------------------------------------------------
 
 /// VAL-CROSS-002: Train a supervised model, quantize it, then predict on the
 /// same inputs. Top-1 label from the quantized model must agree with the
@@ -281,9 +273,7 @@ fn test_cross_train_quantize_predict() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CROSS-003: Train → Save → Load → Predict round-trip
-// ---------------------------------------------------------------------------
 
 /// VAL-CROSS-003: Train a model, save to .bin, load from .bin, predict.
 /// Loaded model predictions must be identical to original model predictions.
@@ -345,9 +335,7 @@ fn test_cross_train_save_load_predict() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CROSS-004: Autotune outperforms defaults
-// ---------------------------------------------------------------------------
 
 /// VAL-CROSS-004: Train with autotune on a validation set, also train with
 /// default parameters. Autotune model must achieve higher F1 on the validation
@@ -404,9 +392,7 @@ fn test_cross_autotune_outperforms() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // VAL-CROSS-005: CLI and library API produce same output
-// ---------------------------------------------------------------------------
 
 /// VAL-CROSS-005: Train a model via CLI, predict via CLI. Load the same model
 /// via library API, predict via API. Both must produce identical labels and
@@ -419,7 +405,6 @@ fn test_cross_cli_api_consistency() {
     let model_base = dir.join("model");
     let model_bin = dir.join("model.bin");
 
-    // --- Step 1: Train via CLI ---
     let (stdout, stderr, code) = run_fasttext(
         &[
             "supervised",
@@ -451,7 +436,6 @@ fn test_cross_cli_api_consistency() {
     );
     assert!(model_bin.exists(), "model.bin should exist after CLI training");
 
-    // --- Step 2: Predict via CLI (predict-prob) ---
     let test_inputs = [
         "basketball player game score win",
         "fruit banana eat recipe cook",
@@ -492,7 +476,6 @@ fn test_cross_cli_api_consistency() {
         "CLI should produce one prediction per input line"
     );
 
-    // --- Step 3: Predict via library API ---
     let api_model =
         FastText::load_model(model_bin.to_str().unwrap()).expect("API model load should succeed");
 
@@ -505,7 +488,6 @@ fn test_cross_cli_api_consistency() {
         })
         .collect();
 
-    // --- Step 4: Compare CLI vs API ---
     assert_eq!(
         cli_predictions.len(),
         api_predictions.len(),

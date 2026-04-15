@@ -1,3 +1,4 @@
+
 // Args: hyperparameter configuration for fastText
 
 use std::io::{Read, Write};
@@ -182,7 +183,6 @@ impl Args {
         }
     }
 
-    // ===== Binary Serialization =====
     //
     // The binary format writes exactly 12 i32 fields + 1 f64 field = 56 bytes total.
     // Fields in order (matching C++ Args::save/load):

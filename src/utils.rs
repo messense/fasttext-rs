@@ -1,3 +1,4 @@
+
 use std::io::{Read, Write};
 
 use crate::error::Result;
@@ -261,9 +262,7 @@ mod tests {
         assert_eq!(roundtrip_f64(subnormal_f64), subnormal_f64);
     }
 
-    // ========================================================================
     // FNV-1a hash tests (VAL-CORE-005, VAL-CORE-006, VAL-CORE-007)
-    // ========================================================================
 
     #[test]
     fn test_fnv1a_reference_vectors() {

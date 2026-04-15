@@ -98,9 +98,7 @@ impl Dictionary {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Hash table internals
-    // -------------------------------------------------------------------------
 
     /// Find the hash table slot for a word (computes hash internally).
     fn find_slot(&self, w: &str) -> usize {
@@ -121,9 +119,7 @@ impl Dictionary {
         id
     }
 
-    // -------------------------------------------------------------------------
     // Vocabulary management
-    // -------------------------------------------------------------------------
 
     /// Add a token to the vocabulary (or increment its count if already present).
     ///
@@ -193,9 +189,7 @@ impl Dictionary {
         Ok(&self.words[(lid + self.nwords) as usize].word)
     }
 
-    // -------------------------------------------------------------------------
     // Count accessors
-    // -------------------------------------------------------------------------
 
     /// Number of word entries (non-label).
     pub fn nwords(&self) -> i32 {
@@ -217,9 +211,7 @@ impl Dictionary {
         self.size
     }
 
-    // -------------------------------------------------------------------------
     // Sorting and thresholding
-    // -------------------------------------------------------------------------
 
     /// Filter vocabulary by minimum count and rebuild the hash table.
     ///
@@ -270,9 +262,7 @@ impl Dictionary {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Tokenization
-    // -------------------------------------------------------------------------
 
     /// Tokenize a text string into tokens, following C++ `readWord` semantics.
     ///
@@ -336,9 +326,7 @@ impl Dictionary {
         tokens
     }
 
-    // -------------------------------------------------------------------------
     // Stream-based word reader (for readFromFile)
-    // -------------------------------------------------------------------------
 
     /// Read one word from a reader, following C++ `readWord` semantics.
     ///
@@ -413,9 +401,7 @@ impl Dictionary {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Vocabulary building from file
-    // -------------------------------------------------------------------------
 
     /// Build vocabulary by reading tokens from a reader.
     ///
@@ -459,9 +445,7 @@ impl Dictionary {
         Ok(())
     }
 
-    // -------------------------------------------------------------------------
     // Discard probability table
-    // -------------------------------------------------------------------------
 
     /// Initialize the subsampling discard probability table.
     ///
@@ -479,9 +463,7 @@ impl Dictionary {
         self.init_table_discard();
     }
 
-    // -------------------------------------------------------------------------
     // Subword (n-gram) computation
-    // -------------------------------------------------------------------------
 
     /// Push a subword hash into the hashes vector.
     ///
@@ -602,9 +584,7 @@ impl Dictionary {
         self.init_ngrams();
     }
 
-    // -------------------------------------------------------------------------
     // Word n-gram hashing
-    // -------------------------------------------------------------------------
 
     /// Add word n-gram hashes to `line` using a rolling hash with multiplier 116049371.
     ///
@@ -634,9 +614,7 @@ impl Dictionary {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Subword collection for a token (for getLine)
-    // -------------------------------------------------------------------------
 
     /// Add subword IDs for a token to `line`.
     ///
@@ -768,9 +746,7 @@ impl Dictionary {
         }
     }
 
-    // -------------------------------------------------------------------------
     // getLine: read one line from a reader, separate words and labels
-    // -------------------------------------------------------------------------
 
     /// Read one "line" (terminated by EOS or EOF) from a reader.
     ///
@@ -899,9 +875,7 @@ impl Dictionary {
         rand > self.pdiscard[id as usize]
     }
 
-    // -------------------------------------------------------------------------
     // Unsupervised getLine (for CBOW / skip-gram training)
-    // -------------------------------------------------------------------------
 
     /// Read one line from a reader for unsupervised (CBOW / skip-gram) training.
     ///
@@ -957,9 +931,7 @@ impl Dictionary {
         ntokens
     }
 
-    // -------------------------------------------------------------------------
     // Accessors for external use
-    // -------------------------------------------------------------------------
 
     /// Get the entries slice (in sorted order after `threshold()`).
     pub fn words(&self) -> &[Entry] {
@@ -1038,9 +1010,7 @@ impl Dictionary {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Binary I/O
-    // -------------------------------------------------------------------------
 
     /// Save the dictionary to binary format.
     ///
@@ -1269,7 +1239,4 @@ impl Dictionary {
     }
 }
 
-// =============================================================================
 // Tests
-// =============================================================================
-

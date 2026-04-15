@@ -11,9 +11,7 @@ use fasttext::FastText;
 
 const COOKING_MODEL: &str = "tests/fixtures/cooking.model.bin";
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn write_temp_file(content: &str) -> std::path::PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -82,9 +80,7 @@ fn train_small_supervised(dim: i32, epoch: i32, bucket: i32) -> (FastText, std::
     (model, path)
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 #[test]
 fn test_model_is_quant_false_for_bin() {
     let model = FastText::load_model(COOKING_MODEL).unwrap();

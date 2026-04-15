@@ -9,9 +9,7 @@ use std::sync::Arc;
 use fasttext::args::{Args, ModelName};
 use fasttext::dictionary::{Dictionary, EntryType, EOS, BOW, EOW, MAX_LINE_SIZE};
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Create a default Args reference.
 fn make_args() -> Arc<Args> {
@@ -23,9 +21,7 @@ fn make_dict() -> Dictionary {
     Dictionary::new_with_capacity(make_args(), 1024)
 }
 
-// =========================================================================
 // VAL-DICT-001: Tokenization rules
-// =========================================================================
 
 #[test]
 fn test_tokenize_whitespace() {
@@ -146,9 +142,7 @@ fn test_tokenize_utf8() {
     assert_eq!(result, vec!["你好", "世界"]);
 }
 
-// =========================================================================
 // VAL-DICT-002: Label detection with configurable prefix
-// =========================================================================
 
 #[test]
 fn test_label_detection_default() {
@@ -228,9 +222,7 @@ fn test_label_detection_custom_prefix() {
     );
 }
 
-// =========================================================================
 // VAL-DICT-003: Vocabulary management
-// =========================================================================
 
 #[test]
 fn test_vocab_lookup() {
@@ -404,9 +396,7 @@ fn test_get_label_out_of_range() {
     assert!(dict.get_label(1).is_err());
 }
 
-// =========================================================================
 // Additional edge case tests
-// =========================================================================
 
 #[test]
 fn test_tokenize_empty_string() {
@@ -605,9 +595,7 @@ fn test_tokenize_eos_entry_type() {
     assert_eq!(dict.get_type_by_id(eos_id), EntryType::Word);
 }
 
-// =========================================================================
 // VAL-DICT-004: Subword computation
-// =========================================================================
 
 /// Build an args with specific subword settings for testing.
 fn make_subword_args(minn: i32, maxn: i32, bucket: i32) -> Arc<Args> {
@@ -886,9 +874,7 @@ fn test_subword_computation_utf8_aware() {
     );
 }
 
-// =========================================================================
 // VAL-DICT-005: Subword edge cases
-// =========================================================================
 
 #[test]
 fn test_subword_eos_no_subwords() {
@@ -978,9 +964,7 @@ fn test_subword_compute_subwords_maxn_zero() {
     );
 }
 
-// =========================================================================
 // VAL-DICT-006: Word n-gram hashing
-// =========================================================================
 
 #[test]
 fn test_word_ngram_hash_bigram() {
@@ -1138,9 +1122,7 @@ fn test_word_ngram_ids_in_range() {
     }
 }
 
-// =========================================================================
 // VAL-DICT-007: Subsampling discard probability
-// =========================================================================
 
 #[test]
 fn test_discard_table_formula() {
@@ -1291,9 +1273,7 @@ fn test_discard_unsupervised_formula() {
     );
 }
 
-// =========================================================================
 // VAL-DICT-008: getLine word/label separation and OOV handling
-// =========================================================================
 
 #[test]
 fn test_getline_word_label_split() {
@@ -1573,9 +1553,7 @@ fn test_getline_from_str() {
     assert_eq!(words.len(), 2);
 }
 
-// =========================================================================
 // Additional subword tests: get_subwords_for_string
-// =========================================================================
 
 #[test]
 fn test_get_subwords_for_string_in_vocab() {

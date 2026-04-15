@@ -10,9 +10,7 @@ use crate::model::MinstdRng;
 use crate::utils;
 use crate::vector::Vector;
 
-// ============================================================================
 // Constants
-// ============================================================================
 
 /// Number of bits per code. Each sub-quantizer assigns a code in [0, 2^NBITS).
 pub const NBITS: i32 = 8;
@@ -31,12 +29,7 @@ const SEED: u64 = 1234;
 
 /// Small perturbation applied when splitting empty clusters (matches C++ `eps_ = 1e-7`).
 const EPS: f32 = 1e-7;
-
-
-
-// ============================================================================
 // Helper: L2 squared distance
-// ============================================================================
 
 /// Compute the squared Euclidean distance between two equal-length f32 slices.
 #[inline]
@@ -51,9 +44,7 @@ fn dist_l2(x: &[f32], y: &[f32]) -> f32 {
         .sum()
 }
 
-// ============================================================================
 // E-step and M-step helpers (free functions to avoid borrow conflicts)
-// ============================================================================
 
 /// Assign the vector `x` (length `d`) to the nearest of the `ksub` centroids
 /// laid out contiguously in `centroids` (length `ksub * d`).
@@ -162,9 +153,7 @@ fn kmeans(rng: &mut MinstdRng, x: &[f32], centroids: &mut [f32], n: usize, d: us
     }
 }
 
-// ============================================================================
 // ProductQuantizer
-// ============================================================================
 
 /// Product Quantizer for approximate inner-product computation.
 ///
@@ -473,18 +462,14 @@ impl ProductQuantizer {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    // -----------------------------------------------------------------------
     // Constants
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_constants() {
@@ -495,9 +480,7 @@ mod tests {
         assert_eq!(NITER, 25);
     }
 
-    // -----------------------------------------------------------------------
     // Dimension decomposition
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_dimension_decomposition_even() {
@@ -538,9 +521,7 @@ mod tests {
         assert_eq!(pq.lastdsub, 1);
     }
 
-    // -----------------------------------------------------------------------
     // compute_code: assign to nearest centroid
-    // -----------------------------------------------------------------------
 
     /// Build a tiny PQ (dim=4, dsub=2, nsubq=2) with known centroids and
     /// return it. Used by several tests.
@@ -624,9 +605,7 @@ mod tests {
         assert_eq!(codes[3], 0);
     }
 
-    // -----------------------------------------------------------------------
     // mulcode: dot product via centroid lookup
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_mulcode_matches_naive_dot() {
@@ -700,9 +679,7 @@ mod tests {
         assert!((result - expected).abs() < 1e-6);
     }
 
-    // -----------------------------------------------------------------------
     // addcode: add reconstructed row to vector
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_addcode_result() {
@@ -749,9 +726,7 @@ mod tests {
         assert!((x[3] - 3.0).abs() < 1e-7); // 1.0 + 2.0
     }
 
-    // -----------------------------------------------------------------------
     // mulcode vs addcode consistency
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_mulcode_addcode_consistency() {
@@ -786,9 +761,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
     // save / load round-trip
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_save_load_roundtrip() {
@@ -865,9 +838,7 @@ mod tests {
         assert_eq!(code1, code2);
     }
 
-    // -----------------------------------------------------------------------
     // Training smoke test (verify k-means runs without panic)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_train_smoke() {
@@ -983,9 +954,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // get_centroids accessor consistency
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_pq_get_centroids_matches_direct_slice() {

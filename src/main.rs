@@ -26,9 +26,7 @@ use fasttext::matrix::Matrix;
 use fasttext::meter::Meter;
 use fasttext::FastText;
 
-// ---------------------------------------------------------------------------
 // CLI structure
-// ---------------------------------------------------------------------------
 
 #[derive(Parser)]
 #[command(
@@ -78,9 +76,7 @@ enum Commands {
     Dump(DumpArgs),
 }
 
-// ---------------------------------------------------------------------------
 // Argument structs
-// ---------------------------------------------------------------------------
 
 /// Training arguments shared by supervised / skipgram / cbow.
 #[derive(Args, Debug)]
@@ -294,9 +290,7 @@ struct DumpArgs {
     option: String,
 }
 
-// ---------------------------------------------------------------------------
 // Entry point
-// ---------------------------------------------------------------------------
 
 /// Preprocess command-line arguments to support C++ fastText-style single-dash
 /// long flags (e.g. `-epoch 5`) in addition to the standard double-dash
@@ -375,9 +369,7 @@ fn main() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Parse a loss name string to `LossName`.
 fn parse_loss(s: &str) -> Option<LossName> {
@@ -523,9 +515,7 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
     args
 }
 
-// ---------------------------------------------------------------------------
 // Subcommand implementations
-// ---------------------------------------------------------------------------
 
 fn run_train(train_args: TrainArgs, model_name: ModelName) {
     let output_base = train_args.output.clone();
@@ -659,9 +649,7 @@ fn run_test(test_args: TestEvalArgs, per_label: bool) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Quantize
-// ---------------------------------------------------------------------------
 
 fn run_quantize(qargs: QuantizeArgs) {
     let model_bin = format!("{}.bin", qargs.output);
@@ -702,9 +690,7 @@ fn run_quantize(qargs: QuantizeArgs) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Print word vectors
-// ---------------------------------------------------------------------------
 
 fn run_print_word_vectors(args: ModelPathArgs) {
     let model = load_model_or_exit(&args.model);
@@ -732,9 +718,7 @@ fn run_print_word_vectors(args: ModelPathArgs) {
     out.flush().unwrap_or_else(|_| process::exit(1));
 }
 
-// ---------------------------------------------------------------------------
 // Print sentence vectors
-// ---------------------------------------------------------------------------
 
 fn run_print_sentence_vectors(args: ModelPathArgs) {
     let model = load_model_or_exit(&args.model);
@@ -758,9 +742,7 @@ fn run_print_sentence_vectors(args: ModelPathArgs) {
     out.flush().unwrap_or_else(|_| process::exit(1));
 }
 
-// ---------------------------------------------------------------------------
 // Print ngrams
-// ---------------------------------------------------------------------------
 
 fn run_print_ngrams(args: PrintNgramsArgs) {
     let model = load_model_or_exit(&args.model);
@@ -780,9 +762,7 @@ fn run_print_ngrams(args: PrintNgramsArgs) {
     out.flush().unwrap_or_else(|_| process::exit(1));
 }
 
-// ---------------------------------------------------------------------------
 // Nearest neighbors
-// ---------------------------------------------------------------------------
 
 fn run_nn(args: NnArgs) {
     let model = load_model_or_exit(&args.model);
@@ -814,9 +794,7 @@ fn run_nn(args: NnArgs) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Analogies
-// ---------------------------------------------------------------------------
 
 fn run_analogies(args: AnalogiesArgs) {
     let k = args.k;
@@ -853,9 +831,7 @@ fn run_analogies(args: AnalogiesArgs) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Dump
-// ---------------------------------------------------------------------------
 
 fn run_dump(args: DumpArgs) {
     let model = load_model_or_exit(&args.model);
