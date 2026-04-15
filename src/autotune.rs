@@ -122,18 +122,18 @@ pub struct AutotuneStrategy {
 impl AutotuneStrategy {
     /// Create a new strategy starting from `original_args`.
     ///
-    /// `seed` is used to initialise the internal RNG (should equal `args.seed()`).
+    /// `seed` is used to initialise the internal RNG (should equal `args.seed`).
     pub fn new(original_args: &Args, seed: u64) -> Self {
         let minn_choices = vec![0, 2, 3];
         let mut strategy = AutotuneStrategy {
             best_args: original_args.clone(),
-            max_duration: original_args.autotune_duration() as f64,
+            max_duration: original_args.autotune_duration as f64,
             rng: MinstdRng::new(seed),
             trials: 0,
             best_minn_index: 0,
             best_dsub_exponent: 1,
             best_nonzero_bucket: 2_000_000,
-            original_bucket: original_args.bucket(),
+            original_bucket: original_args.bucket,
             minn_choices,
         };
         strategy.update_best(original_args);
@@ -156,21 +156,21 @@ impl AutotuneStrategy {
         let mut args = self.best_args.clone();
 
         // epoch: multiplicative, range [1, 100], startSigma=2.8, endSigma=2.5
-        let epoch = update_arg_gauss_i32(args.epoch(), 1, 100, 2.8, 2.5, t, false, &mut self.rng);
-        args.set_epoch(epoch);
+        let epoch = update_arg_gauss_i32(args.epoch, 1, 100, 2.8, 2.5, t, false, &mut self.rng);
+        args.epoch = epoch;
 
         // lr: multiplicative, range [0.01, 5.0], startSigma=1.9, endSigma=1.0
-        let lr = update_arg_gauss(args.lr(), 0.01, 5.0, 1.9, 1.0, t, false, &mut self.rng);
-        args.set_lr(lr);
+        let lr = update_arg_gauss(args.lr, 0.01, 5.0, 1.9, 1.0, t, false, &mut self.rng);
+        args.lr = lr;
 
         // dim: multiplicative, range [1, 1000], startSigma=1.4, endSigma=0.3
-        let dim = update_arg_gauss_i32(args.dim(), 1, 1000, 1.4, 0.3, t, false, &mut self.rng);
-        args.set_dim(dim);
+        let dim = update_arg_gauss_i32(args.dim, 1, 1000, 1.4, 0.3, t, false, &mut self.rng);
+        args.dim = dim;
 
         // wordNgrams: additive (linear), range [1, 5], startSigma=4.3, endSigma=2.4
         let word_ngrams =
-            update_arg_gauss_i32(args.word_ngrams(), 1, 5, 4.3, 2.4, t, true, &mut self.rng);
-        args.set_word_ngrams(word_ngrams);
+            update_arg_gauss_i32(args.word_ngrams, 1, 5, 4.3, 2.4, t, true, &mut self.rng);
+        args.word_ngrams = word_ngrams;
 
         // dsub: perturb the exponent additively in [1, 4], then dsub = 2^exponent
         let dsub_exp = update_arg_gauss_i32(
@@ -183,7 +183,7 @@ impl AutotuneStrategy {
             true,
             &mut self.rng,
         );
-        args.set_dsub(1usize << dsub_exp);
+        args.dsub = 1usize << dsub_exp;
 
         // minn: perturb the index into minn_choices additively in [0, len-1]
         let minn_idx = update_arg_gauss_i32(
@@ -198,13 +198,13 @@ impl AutotuneStrategy {
         );
         let minn_idx_clamped = minn_idx.max(0) as usize;
         let minn = self.minn_choices[minn_idx_clamped.min(self.minn_choices.len() - 1)];
-        args.set_minn(minn);
+        args.minn = minn;
 
         // maxn: derived from minn (minn + 3, or 0 if minn == 0)
         if minn == 0 {
-            args.set_maxn(0);
+            args.maxn = 0;
         } else {
-            args.set_maxn(minn + 3);
+            args.maxn = minn + 3;
         }
 
         // bucket: multiplicative, range [10_000, 10_000_000], startSigma=2.0, endSigma=1.5
@@ -218,20 +218,20 @@ impl AutotuneStrategy {
             false,
             &mut self.rng,
         );
-        if args.word_ngrams() > 1 || minn != 0 {
-            args.set_bucket(nonzero_bucket);
+        if args.word_ngrams > 1 || minn != 0 {
+            args.bucket = nonzero_bucket;
         } else {
             // No n-grams needed — restore original bucket
-            args.set_bucket(self.original_bucket);
+            args.bucket = self.original_bucket;
         }
 
         // If wordNgrams <= 1 and maxn == 0: no n-grams, set bucket to 0
-        if args.word_ngrams() <= 1 && args.maxn() == 0 {
-            args.set_bucket(0);
+        if args.word_ngrams <= 1 && args.maxn == 0 {
+            args.bucket = 0;
         }
 
         // loss: always softmax for supervised classification
-        args.set_loss(LossName::SOFTMAX);
+        args.loss = LossName::SOFTMAX;
 
         args
     }
@@ -239,11 +239,11 @@ impl AutotuneStrategy {
     /// Update the strategy's best-known args after a new best score was found.
     pub fn update_best(&mut self, args: &Args) {
         self.best_args = args.clone();
-        self.best_minn_index = Self::find_index(args.minn(), &self.minn_choices);
-        let dsub = args.dsub() as f64;
+        self.best_minn_index = Self::find_index(args.minn, &self.minn_choices);
+        let dsub = args.dsub as f64;
         self.best_dsub_exponent = if dsub > 0.0 { dsub.log2().round() as i32 } else { 1 };
-        if args.bucket() != 0 {
-            self.best_nonzero_bucket = args.bucket();
+        if args.bucket != 0 {
+            self.best_nonzero_bucket = args.bucket;
         }
     }
 
@@ -324,7 +324,7 @@ impl Autotune {
     /// - `FastTextError::InvalidArgument` — validation file not set or no trial succeeded.
     /// - `FastTextError::IoError` — validation file cannot be opened.
     pub fn run(autotune_args: Args) -> Result<FastText> {
-        let val_path = autotune_args.autotune_validation_file().to_string();
+        let val_path = autotune_args.autotune_validation_file.to_string();
         if val_path.is_empty() {
             return Err(FastTextError::InvalidArgument(
                 "autotune validation file is not set".to_string(),
@@ -336,24 +336,24 @@ impl Autotune {
             let _ = std::fs::File::open(&val_path).map_err(FastTextError::IoError)?;
         }
 
-        let seed = autotune_args.seed() as u64;
-        let duration_secs = autotune_args.autotune_duration() as f64;
-        let k = autotune_args.autotune_predictions().max(1) as usize;
-        let metric = autotune_args.autotune_metric().to_string();
+        let seed = autotune_args.seed as u64;
+        let duration_secs = autotune_args.autotune_duration as f64;
+        let k = autotune_args.autotune_predictions.max(1) as usize;
+        let metric = autotune_args.autotune_metric.to_string();
 
         // Parse the model-size constraint once before the loop.
         let model_size_bytes: Option<u64> = {
-            let size_str = autotune_args.autotune_model_size();
+            let size_str = &autotune_args.autotune_model_size;
             if size_str.is_empty() {
                 None
             } else {
-                parse_size_to_bytes(size_str)
+                parse_size_to_bytes(&size_str)
             }
         };
 
         // Mute verbose output during the search phase.
         let mut search_args = autotune_args.clone();
-        search_args.set_verbose(0);
+        search_args.verbose = 0;
 
         let mut strategy = AutotuneStrategy::new(&search_args, seed);
 
@@ -479,7 +479,7 @@ impl Autotune {
             )),
             Some(mut final_args) => {
                 // Restore the original verbose level for the final training run.
-                final_args.set_verbose(autotune_args.verbose());
+                final_args.verbose = autotune_args.verbose;
                 FastText::train(final_args)
             }
         }
@@ -566,16 +566,16 @@ mod tests {
     /// Build Args configured for fast supervised training (for tests).
     fn make_fast_supervised_args(input: &str) -> Args {
         let mut args = Args::default();
-        args.set_input(input.to_string());
-        args.set_output("/dev/null".to_string());
+        args.input = input.to_string();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
+        args.dim = 10;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
         args
     }
 
@@ -592,7 +592,7 @@ mod tests {
             "has_autotune() should be false when validation file is empty"
         );
         assert!(
-            args.autotune_validation_file().is_empty(),
+            args.autotune_validation_file.is_empty(),
             "Default autotune_validation_file should be empty"
         );
     }
@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn test_autotune_activation_when_validation_file_set() {
         let mut args = Args::default();
-        args.set_autotune_validation_file("some_validation_file.txt".to_string());
+        args.autotune_validation_file = "some_validation_file.txt".to_string();
         assert!(
             args.has_autotune(),
             "has_autotune() should be true when validation file is set"
@@ -617,7 +617,7 @@ mod tests {
     fn test_autotune_duration_default() {
         let args = Args::default();
         assert_eq!(
-            args.autotune_duration(),
+            args.autotune_duration,
             300,
             "Default autotune duration should be 300 seconds"
         );
@@ -627,18 +627,18 @@ mod tests {
     #[test]
     fn test_autotune_duration_custom() {
         let mut args = Args::default();
-        args.set_autotune_duration(60);
+        args.autotune_duration = 60;
         assert_eq!(
-            args.autotune_duration(),
+            args.autotune_duration,
             60,
             "Autotune duration should reflect the custom value"
         );
 
-        args.set_autotune_duration(1);
-        assert_eq!(args.autotune_duration(), 1, "Should accept duration of 1 second");
+        args.autotune_duration = 1;
+        assert_eq!(args.autotune_duration, 1, "Should accept duration of 1 second");
 
-        args.set_autotune_duration(3600);
-        assert_eq!(args.autotune_duration(), 3600, "Should accept large durations");
+        args.autotune_duration = 3600;
+        assert_eq!(args.autotune_duration, 3600, "Should accept large durations");
     }
 
     // =========================================================================
@@ -658,10 +658,10 @@ mod tests {
         let val_path = write_temp(&val_data, "time_budget_val");
 
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(1); // fast per-trial training
-        args.set_dim(5);
-        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-        args.set_autotune_duration(3); // 3-second budget
+        args.epoch = 1; // fast per-trial training
+        args.dim = 5;
+        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_duration = 3; // 3-second budget
 
         let start = Instant::now();
         let result = Autotune::run(args);
@@ -712,10 +712,10 @@ mod tests {
 
         // Start with epoch=1 (suboptimal) so higher epochs beat the baseline.
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(1); // deliberately suboptimal
-        args.set_dim(5);
-        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-        args.set_autotune_duration(4); // 4 seconds: enough for several trials
+        args.epoch = 1; // deliberately suboptimal
+        args.dim = 5;
+        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_duration = 4; // 4 seconds: enough for several trials
 
         let result = Autotune::run(args);
         std::fs::remove_file(&train_path).ok();
@@ -726,24 +726,24 @@ mod tests {
 
         // Verify returned args are within valid ranges.
         assert!(
-            best_args.epoch() >= 1 && best_args.epoch() <= 100,
+            best_args.epoch >= 1 && best_args.epoch <= 100,
             "Best epoch {} out of range [1, 100]",
-            best_args.epoch()
+            best_args.epoch
         );
         assert!(
-            best_args.lr() >= 0.01 && best_args.lr() <= 5.0,
+            best_args.lr >= 0.01 && best_args.lr <= 5.0,
             "Best lr {} out of range [0.01, 5.0]",
-            best_args.lr()
+            best_args.lr
         );
         assert!(
-            best_args.dim() >= 1 && best_args.dim() <= 1000,
+            best_args.dim >= 1 && best_args.dim <= 1000,
             "Best dim {} out of range [1, 1000]",
-            best_args.dim()
+            best_args.dim
         );
         assert!(
-            best_args.word_ngrams() >= 1 && best_args.word_ngrams() <= 5,
+            best_args.word_ngrams >= 1 && best_args.word_ngrams <= 5,
             "Best wordNgrams {} out of range [1, 5]",
-            best_args.word_ngrams()
+            best_args.word_ngrams
         );
 
         // The returned model must be usable.
@@ -759,30 +759,30 @@ mod tests {
     fn test_autotune_strategy_explores_params() {
         let train_path = write_temp(&make_train_data(), "strategy_dummy");
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(5);
-        args.set_autotune_duration(300);
+        args.epoch = 5;
+        args.autotune_duration = 300;
         std::fs::remove_file(&train_path).ok();
 
         let mut strategy = AutotuneStrategy::new(&args, 42);
 
         // Trial 1: should return original args unchanged.
         let trial1 = strategy.ask(0.0);
-        assert_eq!(trial1.epoch(), args.epoch(), "Trial 1 must return original epoch");
-        assert_eq!(trial1.dim(), args.dim(), "Trial 1 must return original dim");
+        assert_eq!(trial1.epoch, args.epoch, "Trial 1 must return original epoch");
+        assert_eq!(trial1.dim, args.dim, "Trial 1 must return original dim");
 
         // Trial 2: should differ in at least one parameter.
         let trial2 = strategy.ask(1.0);
-        let epoch_differs = trial2.epoch() != args.epoch();
-        let lr_differs = (trial2.lr() - args.lr()).abs() > 1e-9;
-        let dim_differs = trial2.dim() != args.dim();
+        let epoch_differs = trial2.epoch != args.epoch;
+        let lr_differs = (trial2.lr - args.lr).abs() > 1e-9;
+        let dim_differs = trial2.dim != args.dim;
 
         assert!(
             epoch_differs || lr_differs || dim_differs,
             "Trial 2 must differ from original in at least one parameter \
              (epoch={}, lr={:.4}, dim={})",
-            trial2.epoch(),
-            trial2.lr(),
-            trial2.dim()
+            trial2.epoch,
+            trial2.lr,
+            trial2.dim
         );
     }
 
@@ -799,10 +799,10 @@ mod tests {
         let val_path = write_temp(&val_data, "returns_model_val");
 
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(2);
-        args.set_dim(5);
-        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-        args.set_autotune_duration(3);
+        args.epoch = 2;
+        args.dim = 5;
+        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_duration = 3;
 
         let result = Autotune::run(args);
         std::fs::remove_file(&train_path).ok();
@@ -825,9 +825,9 @@ mod tests {
 
         // The args stored in the model must have valid values.
         let best_args = model.args();
-        assert!(best_args.epoch() >= 1, "Best epoch must be >= 1");
-        assert!(best_args.lr() > 0.0, "Best lr must be positive");
-        assert!(best_args.dim() >= 1, "Best dim must be >= 1");
+        assert!(best_args.epoch >= 1, "Best epoch must be >= 1");
+        assert!(best_args.lr > 0.0, "Best lr must be positive");
+        assert!(best_args.dim >= 1, "Best dim must be >= 1");
     }
 
     // =========================================================================
@@ -848,10 +848,10 @@ mod tests {
 
         // Minimal hyperparameters so training is very fast.
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(1);
-        args.set_dim(5);
-        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-        args.set_autotune_duration(1); // 1-second budget
+        args.epoch = 1;
+        args.dim = 5;
+        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_duration = 1; // 1-second budget
 
         let result = Autotune::run(args);
         std::fs::remove_file(&train_path).ok();
@@ -874,16 +874,16 @@ mod tests {
     fn test_autotune_strategy_update_best() {
         let train_path = write_temp(&make_train_data(), "strategy_update");
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(5);
-        args.set_autotune_duration(300);
+        args.epoch = 5;
+        args.autotune_duration = 300;
         std::fs::remove_file(&train_path).ok();
 
         let mut strategy = AutotuneStrategy::new(&args, 1);
 
         // Update best with minn=2 (index 1 in minn_choices=[0,2,3])
         let mut new_best = args.clone();
-        new_best.set_minn(2);
-        new_best.set_dsub(4); // dsub=4 → exponent=2
+        new_best.minn = 2;
+        new_best.dsub = 4; // dsub=4 → exponent=2
         strategy.update_best(&new_best);
 
         assert_eq!(strategy.best_minn_index, 1, "minn=2 should map to index 1");
@@ -972,7 +972,7 @@ mod tests {
     fn test_autotune_requires_validation_file() {
         let train_path = write_temp(&make_train_data(), "no_val_file");
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_autotune_duration(1);
+        args.autotune_duration = 1;
         // No validation file set!
         std::fs::remove_file(&train_path).ok();
 
@@ -988,8 +988,8 @@ mod tests {
     fn test_autotune_missing_validation_file() {
         let train_path = write_temp(&make_train_data(), "missing_val");
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_autotune_duration(1);
-        args.set_autotune_validation_file("/nonexistent/path/validation.txt".to_string());
+        args.autotune_duration = 1;
+        args.autotune_validation_file = "/nonexistent/path/validation.txt".to_string();
         std::fs::remove_file(&train_path).ok();
 
         let result = Autotune::run(args);
@@ -1037,12 +1037,12 @@ mod tests {
         let val_path = write_temp(&val_data, "label_f1_val");
 
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(1);
-        args.set_dim(5);
-        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-        args.set_autotune_duration(3);
+        args.epoch = 1;
+        args.dim = 5;
+        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_duration = 3;
         // Use per-label F1 metric for the __label__sports class.
-        args.set_autotune_metric("f1:__label__sports".to_string());
+        args.autotune_metric = "f1:__label__sports".to_string();
 
         let result = Autotune::run(args);
         std::fs::remove_file(&train_path).ok();
@@ -1063,11 +1063,11 @@ mod tests {
         let val_path = write_temp(&val_data, "default_f1_val");
 
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(1);
-        args.set_dim(5);
-        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-        args.set_autotune_duration(3);
-        args.set_autotune_metric("f1".to_string()); // explicit default
+        args.epoch = 1;
+        args.dim = 5;
+        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_duration = 3;
+        args.autotune_metric = "f1".to_string(); // explicit default
 
         let result = Autotune::run(args);
         std::fs::remove_file(&train_path).ok();
@@ -1092,8 +1092,8 @@ mod tests {
         let train_data = make_train_data();
         let train_path = write_temp(&train_data, "size_check_mech");
         let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
-        args.set_epoch(1);
-        args.set_dim(5);
+        args.epoch = 1;
+        args.dim = 5;
         let mut model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&train_path).ok();
 

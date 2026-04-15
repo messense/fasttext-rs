@@ -413,43 +413,43 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
     if model_name == ModelName::SUP {
         args.apply_supervised_defaults();
     } else {
-        args.set_model(model_name);
+        args.model = model_name;
     }
 
     // Apply user-provided values (only when explicitly set).
-    args.set_input(train_args.input);
-    args.set_output(train_args.output.clone());
+    args.input = train_args.input;
+    args.output = train_args.output.clone();
 
     if let Some(v) = train_args.lr {
-        args.set_lr(v);
+        args.lr = v;
     }
     if let Some(v) = train_args.lr_update_rate {
-        args.set_lr_update_rate(v);
+        args.lr_update_rate = v;
     }
     if let Some(v) = train_args.dim {
-        args.set_dim(v);
+        args.dim = v;
     }
     if let Some(v) = train_args.ws {
-        args.set_ws(v);
+        args.ws = v;
     }
     if let Some(v) = train_args.epoch {
-        args.set_epoch(v);
+        args.epoch = v;
     }
     if let Some(v) = train_args.min_count {
-        args.set_min_count(v);
+        args.min_count = v;
     }
     if let Some(v) = train_args.min_count_label {
-        args.set_min_count_label(v);
+        args.min_count_label = v;
     }
     if let Some(v) = train_args.neg {
-        args.set_neg(v);
+        args.neg = v;
     }
     if let Some(v) = train_args.word_ngrams {
-        args.set_word_ngrams(v);
+        args.word_ngrams = v;
     }
     if let Some(ref loss_str) = train_args.loss {
         match parse_loss(loss_str) {
-            Some(loss) => args.set_loss(loss),
+            Some(loss) => args.loss = loss,
             None => {
                 eprintln!("Error: unknown loss function '{}'. Valid values: ns, hs, softmax, ova", loss_str);
                 process::exit(1);
@@ -457,34 +457,34 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
         }
     }
     if let Some(v) = train_args.bucket {
-        args.set_bucket(v);
+        args.bucket = v;
     }
     if let Some(v) = train_args.minn {
-        args.set_minn(v);
+        args.minn = v;
     }
     if let Some(v) = train_args.maxn {
-        args.set_maxn(v);
+        args.maxn = v;
     }
     if let Some(v) = train_args.thread {
-        args.set_thread(v);
+        args.thread = v;
     }
     if let Some(v) = train_args.t {
-        args.set_t(v);
+        args.t = v;
     }
     if let Some(v) = train_args.label {
-        args.set_label(v);
+        args.label = v;
     }
     if let Some(v) = train_args.verbose {
-        args.set_verbose(v);
+        args.verbose = v;
     }
     if let Some(v) = train_args.pretrained_vectors {
-        args.set_pretrained_vectors(v);
+        args.pretrained_vectors = v;
     }
     if train_args.save_output {
-        args.set_save_output(true);
+        args.save_output = true;
     }
     if let Some(v) = train_args.seed {
-        args.set_seed(v);
+        args.seed = v;
     }
 
     args
@@ -637,13 +637,13 @@ fn run_quantize(qargs: QuantizeArgs) {
 
     // Build quantize args from the CLI options.
     let mut ft_qargs = model.args().clone();
-    ft_qargs.set_cutoff(qargs.cutoff);
-    ft_qargs.set_retrain(qargs.retrain);
-    ft_qargs.set_qnorm(qargs.qnorm);
-    ft_qargs.set_qout(qargs.qout);
-    ft_qargs.set_dsub(qargs.dsub);
+    ft_qargs.cutoff = qargs.cutoff;
+    ft_qargs.retrain = qargs.retrain;
+    ft_qargs.qnorm = qargs.qnorm;
+    ft_qargs.qout = qargs.qout;
+    ft_qargs.dsub = qargs.dsub;
     if !qargs.input.is_empty() {
-        ft_qargs.set_input(qargs.input);
+        ft_qargs.input = qargs.input;
     }
 
     if let Err(e) = model.quantize(&ft_qargs) {
@@ -812,21 +812,21 @@ fn run_dump(args: DumpArgs) {
     match args.option.as_str() {
         "args" => {
             let a = model.args();
-            writeln!(out, "dim {}", a.dim()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "ws {}", a.ws()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "epoch {}", a.epoch()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "minCount {}", a.min_count()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "neg {}", a.neg()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "wordNgrams {}", a.word_ngrams())
+            writeln!(out, "dim {}", a.dim).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "ws {}", a.ws).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "epoch {}", a.epoch).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "minCount {}", a.min_count).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "neg {}", a.neg).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "wordNgrams {}", a.word_ngrams)
                 .unwrap_or_else(|_| process::exit(1));
             writeln!(out, "loss {}", a.loss_to_string()).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "model {}", a.model_to_string()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "bucket {}", a.bucket()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "minn {}", a.minn()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "maxn {}", a.maxn()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "lrUpdateRate {}", a.lr_update_rate())
+            writeln!(out, "bucket {}", a.bucket).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "minn {}", a.minn).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "maxn {}", a.maxn).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "lrUpdateRate {}", a.lr_update_rate)
                 .unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "t {}", a.t()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "t {}", a.t).unwrap_or_else(|_| process::exit(1));
         }
         "dict" => {
             let dict = model.dict();

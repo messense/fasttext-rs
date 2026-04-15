@@ -1,88 +1,50 @@
-// Vector: 64-byte aligned f32 array with SIMD-accelerated operations
+// Vector: f32 array with SIMD-accelerated operations
 
-use std::alloc::{self, Layout};
 use std::fmt;
 use std::ops::{Index, IndexMut};
 
-/// Alignment in bytes for SIMD-friendly memory layout.
-const ALIGNMENT: usize = 64;
-
-/// A vector of `f32` values with 64-byte aligned storage for SIMD operations.
-///
-/// Matches the C++ fastText `Vector` class backed by `intgemm::AlignedVector<real>`.
-#[derive(Debug)]
+/// A vector of `f32` values used throughout fastText for embeddings,
+/// hidden states, gradients, and output scores.
+#[derive(Debug, Clone)]
 pub struct Vector {
-    /// Raw pointer to the aligned allocation.
-    ptr: *mut f32,
-    /// Number of elements.
-    len: usize,
+    data: Vec<f32>,
 }
 
-// SAFETY: Vector owns its allocation and provides &/&mut access through safe methods.
-// The raw pointer is not shared and is only accessed through safe Rust references.
-unsafe impl Send for Vector {}
-unsafe impl Sync for Vector {}
-
 impl Vector {
-    /// Create a new vector with the given size. Elements are uninitialized
-    /// (in practice zeroed by the allocator for safety, but call `zero()` for guaranteed zeros).
+    /// Create a new zero-initialized vector with the given size.
     pub fn new(size: usize) -> Self {
-        if size == 0 {
-            return Vector {
-                ptr: std::ptr::null_mut(),
-                len: 0,
-            };
+        Vector {
+            data: vec![0.0; size],
         }
-        let layout = Layout::array::<f32>(size)
-            .and_then(|l| l.align_to(ALIGNMENT))
-            .expect("Invalid layout");
-        // SAFETY: layout has non-zero size (checked above) and valid alignment.
-        let ptr = unsafe { alloc::alloc_zeroed(layout) as *mut f32 };
-        if ptr.is_null() {
-            alloc::handle_alloc_error(layout);
-        }
-        Vector { ptr, len: size }
     }
 
     /// Set all elements to zero.
     pub fn zero(&mut self) {
-        let data = self.data_mut();
-        for v in data.iter_mut() {
-            *v = 0.0;
-        }
+        self.data.fill(0.0);
     }
 
     /// Return the number of elements.
     #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.data.len()
     }
 
     /// Return true if the vector has zero elements.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.data.is_empty()
     }
 
     /// Return a slice of the vector data.
     #[inline]
     pub fn data(&self) -> &[f32] {
-        if self.len == 0 {
-            return &[];
-        }
-        // SAFETY: ptr is valid for `len` f32 elements and is properly aligned.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        &self.data
     }
 
     /// Return a mutable slice of the vector data.
     #[inline]
     pub fn data_mut(&mut self) -> &mut [f32] {
-        if self.len == 0 {
-            return &mut [];
-        }
-        // SAFETY: ptr is valid for `len` f32 elements and is properly aligned.
-        // We have &mut self so no aliasing.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+        &mut self.data
     }
 
     /// Compute the L2 (Euclidean) norm of the vector.
@@ -92,8 +54,7 @@ impl Vector {
 
     /// Multiply all elements by a scalar.
     pub fn mul(&mut self, a: f32) {
-        let data = self.data_mut();
-        for v in data.iter_mut() {
+        for v in &mut self.data {
             *v *= a;
         }
     }
@@ -135,43 +96,15 @@ impl Vector {
     /// For an empty vector, returns 0 (matching C++ behavior where argmax
     /// on a zero-size vector is undefined).
     pub fn argmax(&self) -> usize {
-        if self.len == 0 {
-            return 0;
-        }
-        let data = self.data();
-        let mut max_val = data[0];
         let mut max_idx = 0;
-        for (i, &val) in data.iter().enumerate().skip(1) {
-            if val > max_val {
-                max_val = val;
+        let mut max_val = f32::NEG_INFINITY;
+        for (i, &v) in self.data.iter().enumerate() {
+            if v > max_val {
+                max_val = v;
                 max_idx = i;
             }
         }
         max_idx
-    }
-}
-
-impl Clone for Vector {
-    fn clone(&self) -> Self {
-        let mut v = Vector::new(self.len);
-        if self.len > 0 {
-            v.data_mut().copy_from_slice(self.data());
-        }
-        v
-    }
-}
-
-impl Drop for Vector {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() && self.len > 0 {
-            let layout = Layout::array::<f32>(self.len)
-                .and_then(|l| l.align_to(ALIGNMENT))
-                .expect("Invalid layout in Drop");
-            // SAFETY: ptr was allocated with this layout in new().
-            unsafe {
-                alloc::dealloc(self.ptr as *mut u8, layout);
-            }
-        }
     }
 }
 
@@ -180,21 +113,20 @@ impl Index<usize> for Vector {
 
     #[inline]
     fn index(&self, idx: usize) -> &f32 {
-        &self.data()[idx]
+        &self.data[idx]
     }
 }
 
 impl IndexMut<usize> for Vector {
     #[inline]
     fn index_mut(&mut self, idx: usize) -> &mut f32 {
-        &mut self.data_mut()[idx]
+        &mut self.data[idx]
     }
 }
 
 impl fmt::Display for Vector {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let data = self.data();
-        for (i, val) in data.iter().enumerate() {
+        for (i, val) in self.data.iter().enumerate() {
             if i > 0 {
                 write!(f, " ")?;
             }
@@ -688,24 +620,6 @@ mod tests {
         assert_eq!(v.argmax(), 0);
     }
 
-    // --- Alignment ---
-
-    #[test]
-    fn test_vector_alignment() {
-        // Verify 64-byte alignment for various sizes
-        for &size in &[1, 2, 4, 8, 15, 16, 31, 32, 64, 100, 128, 256, 512, 1000] {
-            let v = Vector::new(size);
-            let ptr_addr = v.data().as_ptr() as usize;
-            assert_eq!(
-                ptr_addr % ALIGNMENT,
-                0,
-                "Vector of size {} is not 64-byte aligned (addr: 0x{:x})",
-                size,
-                ptr_addr
-            );
-        }
-    }
-
     // --- Size-1 vectors ---
 
     #[test]
@@ -752,10 +666,6 @@ mod tests {
         assert_eq!(v[0], 0.0);
         assert_eq!(v[9999], 9999.0);
         assert_eq!(v.argmax(), 9999);
-
-        // Verify alignment
-        let ptr_addr = v.data().as_ptr() as usize;
-        assert_eq!(ptr_addr % ALIGNMENT, 0);
     }
 
     #[test]
@@ -925,17 +835,6 @@ mod tests {
         // Clone of zero-size vector must also work without panic.
         let v2 = v.clone();
         assert_eq!(v2.len(), 0);
-    }
-
-    #[test]
-    fn test_vector_layout_overflow_check() {
-        // Layout::array::<f32>(usize::MAX) must fail (checked arithmetic).
-        // This verifies that the new Layout::array approach would catch overflow,
-        // whereas the old unchecked multiplication would silently produce a wrong size.
-        assert!(Layout::array::<f32>(usize::MAX).is_err());
-        // A very large size just under isize::MAX / 4 should also fail if it overflows isize.
-        let large = (isize::MAX as usize / std::mem::size_of::<f32>()) + 1;
-        assert!(Layout::array::<f32>(large).is_err());
     }
 
     // --- Edge cases ---

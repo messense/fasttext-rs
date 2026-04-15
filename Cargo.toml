@@ -12,9 +12,13 @@ repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
 rayon = "1"
-clap = { version = "4", features = ["derive"] }
 thiserror = "2"
+clap = { version = "4", features = ["derive"], optional = true }
+
+[features]
+cli = ["clap"]
 
 [[bin]]
 name = "fasttext"
 path = "src/main.rs"
+required-features = ["cli"]

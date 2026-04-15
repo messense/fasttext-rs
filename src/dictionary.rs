@@ -167,9 +167,9 @@ impl Dictionary {
 
     /// Get the entry type for a word string by checking the label prefix.
     ///
-    /// A word is a label iff it starts with `args.label()` (default: `"__label__"`).
+    /// A word is a label iff it starts with `args.label` (default: `"__label__"`).
     pub fn get_type_from_str(&self, w: &str) -> EntryType {
-        if w.starts_with(self.args.label()) {
+        if w.starts_with(self.args.label.as_str()) {
             EntryType::Label
         } else {
             EntryType::Word
@@ -413,7 +413,7 @@ impl Dictionary {
     ///
     /// Reads until EOF, incrementally thresholding if the vocabulary grows too large
     /// (> 75% of table capacity). After reading, applies final threshold using
-    /// `args.min_count()` and `args.min_count_label()`, then computes the discard table.
+    /// `args.min_count` and `args.min_count_label`, then computes the discard table.
     ///
     /// Note: `init_ngrams()` (subwords) is called separately in the dictionary-subwords feature.
     pub fn read_from_file<R: Read>(&mut self, reader: &mut R) -> Result<()> {
@@ -436,8 +436,8 @@ impl Dictionary {
         }
 
         self.threshold(
-            self.args.min_count() as i64,
-            self.args.min_count_label() as i64,
+            self.args.min_count as i64,
+            self.args.min_count_label as i64,
         );
         self.init_table_discard();
         self.init_ngrams();
@@ -462,7 +462,7 @@ impl Dictionary {
         self.pdiscard.resize(self.size as usize, 0.0);
         for i in 0..self.size as usize {
             let f = self.words[i].count as f32 / self.ntokens as f32;
-            self.pdiscard[i] = (self.args.t() as f32 / f).sqrt() + self.args.t() as f32 / f;
+            self.pdiscard[i] = (self.args.t as f32 / f).sqrt() + self.args.t as f32 / f;
         }
     }
 
@@ -485,7 +485,7 @@ impl Dictionary {
     /// When `pruneidx_size > 0`, maps `id` through `pruneidx` (drops if not found).
     /// Otherwise (pruneidx_size < 0, normal operation), pushes `nwords + id`.
     fn push_hash(&self, hashes: &mut Vec<i32>, id: i32) {
-        if self.args.bucket() == 0 || self.pruneidx_size == 0 || id < 0 {
+        if self.args.bucket == 0 || self.pruneidx_size == 0 || id < 0 {
             return;
         }
         if self.pruneidx_size > 0 {
@@ -509,9 +509,9 @@ impl Dictionary {
     ///
     /// No-op if `maxn == 0` or `bucket == 0`.
     pub fn compute_subwords(&self, word: &str, ngrams: &mut Vec<i32>) {
-        let minn = self.args.minn();
-        let maxn = self.args.maxn();
-        let bucket = self.args.bucket();
+        let minn = self.args.minn;
+        let maxn = self.args.maxn;
+        let bucket = self.args.bucket;
 
         if maxn == 0 || bucket == 0 {
             return;
@@ -609,7 +609,7 @@ impl Dictionary {
     ///
     /// `hashes` contains the FNV-1a hash of each word token (as `i32`), in order.
     pub fn add_word_ngrams(&self, line: &mut Vec<i32>, hashes: &[i32], n: i32) {
-        let bucket = self.args.bucket() as u64;
+        let bucket = self.args.bucket as u64;
         if bucket == 0 || n <= 1 {
             return;
         }
@@ -645,7 +645,7 @@ impl Dictionary {
                 let word_with_markers = format!("{}{}{}", BOW, token, EOW);
                 self.compute_subwords(&word_with_markers, line);
             }
-        } else if self.args.maxn() <= 0 {
+        } else if self.args.maxn <= 0 {
             // In-vocab without subwords: just the word ID.
             line.push(wid);
         } else {
@@ -705,9 +705,9 @@ impl Dictionary {
     /// Similar to `compute_subwords` but also records each n-gram string alongside its ID.
     /// Only adds an entry when the n-gram's bucket ID is valid (not pruned).
     fn compute_subwords_with_strings(&self, word: &str, result: &mut Vec<(i32, String)>) {
-        let minn = self.args.minn();
-        let maxn = self.args.maxn();
-        let bucket = self.args.bucket();
+        let minn = self.args.minn;
+        let maxn = self.args.maxn;
+        let bucket = self.args.bucket;
 
         if maxn == 0 || bucket == 0 {
             return;
@@ -820,7 +820,7 @@ impl Dictionary {
             }
         }
 
-        self.add_word_ngrams(words, &word_hashes, self.args.word_ngrams());
+        self.add_word_ngrams(words, &word_hashes, self.args.word_ngrams);
         ntokens
     }
 
@@ -871,7 +871,7 @@ impl Dictionary {
             }
         }
 
-        self.add_word_ngrams(words, &word_hashes, self.args.word_ngrams());
+        self.add_word_ngrams(words, &word_hashes, self.args.word_ngrams);
         ntokens
     }
 
@@ -885,7 +885,7 @@ impl Dictionary {
     /// Always returns `false` for supervised models.
     pub fn discard(&self, id: i32, rand: f32) -> bool {
         debug_assert!(id >= 0 && id < self.nwords);
-        if self.args.model() == ModelName::SUP {
+        if self.args.model == ModelName::SUP {
             return false;
         }
         rand > self.pdiscard[id as usize]
@@ -1460,7 +1460,7 @@ mod tests {
     #[test]
     fn test_label_detection_custom_prefix() {
         let mut args = Args::default();
-        args.set_label("#".to_string());
+        args.label = "#".to_string();
         let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         assert_eq!(
@@ -1803,7 +1803,7 @@ mod tests {
         // Verify that read_from_file (which uses read_word_from_reader) correctly
         // preserves multi-byte UTF-8 tokens in the vocabulary.
         let mut args = Args::default();
-        args.set_min_count(1);
+        args.min_count = 1;
         let args = Arc::new(args);
         let mut dict = Dictionary::new_with_capacity(args, 1024);
 
@@ -1870,9 +1870,9 @@ mod tests {
     /// Build an args with specific subword settings for testing.
     fn make_subword_args(minn: i32, maxn: i32, bucket: i32) -> Arc<Args> {
         let mut args = Args::default();
-        args.set_minn(minn);
-        args.set_maxn(maxn);
-        args.set_bucket(bucket);
+        args.minn = minn;
+        args.maxn = maxn;
+        args.bucket = bucket;
         Arc::new(args)
     }
 
@@ -2246,8 +2246,8 @@ mod tests {
         // h = hash(word1) (as i64 as u64), then h = h * 116049371 + hash(word2)
         // Result pushed is nwords + (h % bucket).
         let mut args = Args::default();
-        args.set_bucket(100000);
-        args.set_word_ngrams(2);
+        args.bucket = 100000;
+        args.word_ngrams = 2;
         let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         let h1 = crate::utils::hash(b"hello") as i32;
@@ -2277,8 +2277,8 @@ mod tests {
     fn test_word_ngram_hash_trigram() {
         // 3 words with wordNgrams=3: bigrams (1,2), (2,3) + trigram (1,2,3).
         let mut args = Args::default();
-        args.set_bucket(1_000_000);
-        args.set_word_ngrams(3);
+        args.bucket = 1_000_000;
+        args.word_ngrams = 3;
         let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         let h1 = crate::utils::hash(b"the") as i32;
@@ -2325,8 +2325,8 @@ mod tests {
     fn test_word_ngram_no_ngrams_for_word_ngrams_1() {
         // With wordNgrams=1, no n-grams should be added.
         let mut args = Args::default();
-        args.set_bucket(100000);
-        args.set_word_ngrams(1);
+        args.bucket = 100000;
+        args.word_ngrams = 1;
         let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         let hashes = vec![
@@ -2343,8 +2343,8 @@ mod tests {
     fn test_word_ngram_zero_bucket() {
         // With bucket=0, add_word_ngrams is a no-op.
         let mut args = Args::default();
-        args.set_bucket(0);
-        args.set_word_ngrams(2);
+        args.bucket = 0;
+        args.word_ngrams = 2;
         let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         let hashes = vec![
@@ -2364,8 +2364,8 @@ mod tests {
     fn test_word_ngram_ids_in_range() {
         // All generated n-gram IDs should be in [nwords, nwords + bucket).
         let mut args = Args::default();
-        args.set_bucket(500);
-        args.set_word_ngrams(3);
+        args.bucket = 500;
+        args.word_ngrams = 3;
         let mut dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
         dict.add("a");
         dict.add("b");
@@ -2407,7 +2407,7 @@ mod tests {
         // With t=0.0001:
         //   If count=100, ntokens=1000 → f=0.1 → pdiscard = sqrt(0.001) + 0.001 ≈ 0.03262
         let mut args = Args::default();
-        args.set_t(0.0001);
+        args.t = 0.0001;
         let mut dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         // Add "word" 100 times and 900 "other"s → ntokens = 1000, word frequency = 0.1
@@ -2443,7 +2443,7 @@ mod tests {
     fn test_discard_supervised_bypass() {
         // In supervised mode, discard() always returns false.
         let mut args = Args::default();
-        args.set_t(1.0); // Very high threshold: would discard everything
+        args.t = 1.0; // Very high threshold: would discard everything
         args.apply_supervised_defaults();
         let mut dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
@@ -2476,8 +2476,8 @@ mod tests {
         // In unsupervised mode, discard(id, rand) returns true when rand > pdiscard[id].
         // Use a very low-frequency word with high t to force discard.
         let mut args = Args::default();
-        args.set_t(0.9); // Very high t
-        args.set_model(crate::args::ModelName::SG); // Unsupervised
+        args.t = 0.9; // Very high t
+        args.model = crate::args::ModelName::SG; // Unsupervised
         let mut dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
         // Add "rare" once, "common" 1000 times → f_rare ≈ 0.001
@@ -2518,8 +2518,8 @@ mod tests {
         // With t=0.0001, f=0.999: pdiscard = sqrt(0.0001) + 0.0001 ≈ 0.01001
         // rand=0.5 > 0.01001 → discard returns true.
         let mut args2 = Args::default();
-        args2.set_t(0.0001);
-        args2.set_model(crate::args::ModelName::SG);
+        args2.t = 0.0001;
+        args2.model = crate::args::ModelName::SG;
         let mut dict2 = Dictionary::new_with_capacity(Arc::new(args2), 1024);
         for _ in 0..9999 {
             dict2.add("frequent");
@@ -2746,10 +2746,10 @@ mod tests {
     fn test_getline_with_word_ngrams() {
         // Verify that word n-grams are added after processing the line.
         let mut args = Args::default();
-        args.set_minn(0);
-        args.set_maxn(0);
-        args.set_bucket(100000);
-        args.set_word_ngrams(2);
+        args.minn = 0;
+        args.maxn = 0;
+        args.bucket = 100000;
+        args.word_ngrams = 2;
         let mut dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
         dict.add("hello");
         dict.add("world");

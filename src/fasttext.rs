@@ -63,16 +63,16 @@ pub struct Prediction {
     pub label: String,
 }
 
-/// Build the appropriate loss function based on `args.loss()`.
+/// Build the appropriate loss function based on `args.loss`.
 ///
 /// - `SoftmaxLoss` — full softmax (used for supervised models with softmax loss)
 /// - `NegativeSamplingLoss` — negative sampling (skipgram/CBOW)
 /// - `HierarchicalSoftmaxLoss` — Huffman-tree hierarchical softmax
 /// - `OneVsAllLoss` — one-vs-all binary logistic
 fn build_loss(args: &Args, wo: Arc<DenseMatrix>, target_counts: &[i64]) -> Box<dyn Loss> {
-    match args.loss() {
+    match args.loss {
         LossName::HS => Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts)),
-        LossName::NS => Box::new(NegativeSamplingLoss::new(wo, args.neg(), target_counts)),
+        LossName::NS => Box::new(NegativeSamplingLoss::new(wo, args.neg, target_counts)),
         LossName::OVA => Box::new(OneVsAllLoss::new(wo)),
         LossName::SOFTMAX => Box::new(SoftmaxLoss::new(wo)),
     }
@@ -136,7 +136,7 @@ pub struct FastText {
     quant: bool,
     /// Quantized input matrix. Present when `quant=true`.
     quant_input: Option<QuantMatrix>,
-    /// Quantized output matrix. Present when `quant=true` and `args.qout()=true`.
+    /// Quantized output matrix. Present when `quant=true` and `args.qout=true`.
     quant_output: Option<QuantMatrix>,
     /// Pre-built inference model (uses dense matrices; bypassed when quant=true).
     model: Model,
@@ -188,8 +188,8 @@ impl FastText {
 
         // Version 11 backward compatibility:
         // Old supervised models do not use character n-grams.
-        if version == 11 && args.model() == ModelName::SUP {
-            args.set_maxn(0);
+        if version == 11 && args.model == ModelName::SUP {
+            args.maxn = 0;
         }
 
         // 4. Read Dictionary block
@@ -220,7 +220,7 @@ impl FastText {
 
         // 7. Read qout flag (stored in args)
         let qout = utils::read_bool(reader)?;
-        args.set_qout(qout);
+        args.qout = qout;
 
         // 8. Load output matrix
         let (output_dense, output_quant) = if quant_input && qout {
@@ -236,13 +236,13 @@ impl FastText {
         let output_arc = Arc::new(output_dense);
         let label_counts = dict.get_counts(EntryType::Label);
         let word_counts = dict.get_counts(EntryType::Word);
-        let target_counts = if args.model() == ModelName::SUP {
+        let target_counts = if args.model == ModelName::SUP {
             label_counts
         } else {
             word_counts
         };
         let loss = build_loss(&args, Arc::clone(&output_arc), &target_counts);
-        let normalize_gradient = args.model() == ModelName::SUP;
+        let normalize_gradient = args.model == ModelName::SUP;
         let model = Model::new(Arc::clone(&input_arc), loss, normalize_gradient);
 
         Ok(FastText {
@@ -301,9 +301,9 @@ impl FastText {
             self.input.save(writer)?;
         }
         // 7. qout
-        utils::write_bool(writer, self.args.qout())?;
+        utils::write_bool(writer, self.args.qout)?;
         // 8. Output matrix
-        if self.quant && self.args.qout() {
+        if self.quant && self.args.qout {
             if let Some(ref qm) = self.quant_output {
                 qm.save(writer)?;
             } else {
@@ -363,7 +363,7 @@ impl FastText {
     /// OOV words the subwords are computed on-the-fly; if there are no subwords
     /// (e.g. `bucket=0`) a zero vector is returned.
     pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
-        let dim = self.args.dim() as usize;
+        let dim = self.args.dim as usize;
         let mut result = vec![0.0f32; dim];
         let ids = self.dict.get_subwords_for_string(word);
         if ids.is_empty() {
@@ -400,10 +400,10 @@ impl FastText {
     ///
     /// Empty input returns a zero vector.
     pub fn get_sentence_vector(&self, sentence: &str) -> Vec<f32> {
-        let dim = self.args.dim() as usize;
+        let dim = self.args.dim as usize;
         let mut result = vec![0.0f32; dim];
 
-        if self.args.model() == ModelName::SUP {
+        if self.args.model == ModelName::SUP {
             // Supervised: use dictionary tokenization (subwords included).
             // Append EOS to match C++ getSentenceVector behavior: the C++
             // stream-based getLine includes an EOS token produced by the
@@ -516,7 +516,7 @@ impl FastText {
 
     /// Return the model dimensionality (the `dim` hyperparameter).
     pub fn get_dimension(&self) -> i32 {
-        self.args.dim()
+        self.args.dim
     }
 
     /// Return the word ID for the given word, or `-1` if not in vocabulary.
@@ -600,7 +600,7 @@ impl FastText {
             return Vec::new();
         }
 
-        let dim = self.args.dim() as usize;
+        let dim = self.args.dim as usize;
         let mut state = State::new(dim, nlabels, 0);
 
         // Clamp k to at most the number of labels.
@@ -672,7 +672,7 @@ impl FastText {
         }
 
         // Apply the appropriate normalization based on loss type.
-        match self.args.loss() {
+        match self.args.loss {
             LossName::OVA => {
                 // One-vs-all: independent sigmoid per class.
                 let tables = LossTables::new();
@@ -726,7 +726,7 @@ impl FastText {
     /// statistics for all examples in `reader`.
     pub fn test_model<R: Read + Seek>(&self, reader: &mut R, k: usize, threshold: f32) -> Result<Meter> {
         let nlabels = self.dict.nlabels() as usize;
-        let dim = self.args.dim() as usize;
+        let dim = self.args.dim as usize;
         let k_eff = if nlabels == 0 { 0i32 } else { k.min(nlabels) as i32 };
         let effective_threshold = if threshold < 0.0 { 0.0 } else { threshold };
 
@@ -783,7 +783,7 @@ impl FastText {
     ///
     /// This mirrors the C++ `FastText::getNgramVectors`.
     pub fn get_ngram_vectors(&self, word: &str) -> Vec<(String, Vec<f32>)> {
-        let dim = self.args.dim() as usize;
+        let dim = self.args.dim as usize;
         let entries = self.dict.get_ngram_strings(word);
         entries
             .into_iter()
@@ -815,7 +815,7 @@ impl FastText {
     /// Used as a precomputation step for nearest-neighbor and analogy queries.
     pub fn precompute_word_vectors(&self) -> DenseMatrix {
         let nwords = self.dict.nwords() as usize;
-        let dim = self.args.dim() as i64;
+        let dim = self.args.dim as i64;
         let mut word_vectors = DenseMatrix::new(nwords as i64, dim);
         for i in 0..nwords {
             let word = self.dict.get_word(i as i32);
@@ -862,7 +862,7 @@ impl FastText {
         word_c: &str,
         k: usize,
     ) -> Vec<(f32, String)> {
-        let dim = self.args.dim() as usize;
+        let dim = self.args.dim as usize;
         let mut query = vec![0.0f32; dim];
 
         let buf = self.get_word_vector(word_a);
@@ -991,12 +991,12 @@ impl FastText {
     ///    a. Select top embeddings by L2 norm.
     ///    b. Prune the dictionary to those embeddings.
     ///    c. Build a new pruned input `DenseMatrix`.
-    ///    d. If `qargs.retrain()`: retrain with pruned input.
+    ///    d. If `qargs.retrain`: retrain with pruned input.
     /// 3. Create a `QuantMatrix` from the (possibly pruned) input.
-    /// 4. If `qargs.qout()`: create a `QuantMatrix` from the output.
+    /// 4. If `qargs.qout`: create a `QuantMatrix` from the output.
     /// 5. Set `quant=true`, update `args.qout`.
     pub fn quantize(&mut self, qargs: &Args) -> Result<()> {
-        if self.args.model() != ModelName::SUP {
+        if self.args.model != ModelName::SUP {
             return Err(FastTextError::InvalidArgument(
                 "For now we only support quantization of supervised models".to_string(),
             ));
@@ -1007,7 +1007,7 @@ impl FastText {
         let input_n = self.input.cols();
         let mut input_data: Vec<f32> = self.input.data().to_vec();
 
-        let cutoff = qargs.cutoff();
+        let cutoff = qargs.cutoff;
         if cutoff > 0 && cutoff < input_m as usize {
             let idx = self.select_embeddings(cutoff);
 
@@ -1043,7 +1043,7 @@ impl FastText {
             input_m = pruned_m;
             input_data = pruned_data;
 
-            if qargs.retrain() {
+            if qargs.retrain {
                 // Rebuild model with pruned input and retrain.
                 let pruned_dense = DenseMatrix::from_data(pruned_m, input_n, &input_data);
                 let pruned_arc = Arc::new(pruned_dense);
@@ -1056,13 +1056,13 @@ impl FastText {
         }
 
         // Quantize the input matrix.
-        let dsub = qargs.dsub() as i32;
-        let qnorm = qargs.qnorm();
+        let dsub = qargs.dsub as i32;
+        let qnorm = qargs.qnorm;
         let quant_in = QuantMatrix::from_dense(&input_data, input_m, input_n, dsub, qnorm);
         self.quant_input = Some(quant_in);
 
         // Optionally quantize the output matrix.
-        if qargs.qout() {
+        if qargs.qout {
             let output_data = self.output.data().to_vec();
             let out_m = self.output.rows();
             let out_n = self.output.cols();
@@ -1074,7 +1074,7 @@ impl FastText {
         // Mark model as quantized and update args.
         self.quant = true;
         let mut new_args = (*self.args).clone();
-        new_args.set_qout(qargs.qout());
+        new_args.qout = qargs.qout;
         self.args = Arc::new(new_args);
 
         Ok(())
@@ -1092,7 +1092,7 @@ impl FastText {
         pruned_input: Arc<DenseMatrix>,
         qargs: &Args,
     ) -> Result<()> {
-        let input_path = qargs.input();
+        let input_path = &qargs.input;
         if input_path.is_empty() {
             return Err(FastTextError::InvalidArgument(
                 "retrain=true requires qargs.input to be set to the training data path"
@@ -1102,12 +1102,12 @@ impl FastText {
 
         // Build retrain args from qargs values.
         let mut retrain_args = (*self.args).clone();
-        retrain_args.set_input(input_path.to_string());
-        retrain_args.set_epoch(qargs.epoch());
-        retrain_args.set_lr(qargs.lr());
-        retrain_args.set_thread(qargs.thread());
+        retrain_args.input = input_path.to_string();
+        retrain_args.epoch = qargs.epoch;
+        retrain_args.lr = qargs.lr;
+        retrain_args.thread = qargs.thread;
 
-        let n_threads = (retrain_args.thread() as usize).max(1);
+        let n_threads = (retrain_args.thread as usize).max(1);
         let output_size = self.output.rows() as usize;
         let output = Arc::clone(&self.output);
         let target_counts = self.dict.get_counts(EntryType::Label);
@@ -1200,7 +1200,7 @@ impl FastText {
         abort_flag: Arc<AtomicBool>,
         epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
     ) -> Result<Self> {
-        let input_path = args.input().to_string();
+        let input_path = args.input.to_string();
         if input_path.is_empty() {
             return Err(FastTextError::InvalidArgument(
                 "Input file path is empty".to_string(),
@@ -1225,7 +1225,7 @@ impl FastText {
         }
 
         // Guard: supervised mode requires at least one label.
-        if args.model() == ModelName::SUP && dict.nlabels() == 0 {
+        if args.model == ModelName::SUP && dict.nlabels() == 0 {
             return Err(FastTextError::InvalidArgument(
                 "Supervised training requires at least one label, but none were found. \
                  Labels must start with the label prefix (default: '__label__')."
@@ -1234,22 +1234,22 @@ impl FastText {
         }
 
         let nwords = dict.nwords() as i64;
-        let bucket = args.bucket() as i64;
-        let dim = args.dim() as i64;
+        let bucket = args.bucket as i64;
+        let dim = args.dim as i64;
 
         // Initialize input matrix: (nwords + bucket) × dim, uniform in [-1/dim, 1/dim].
         // If pretrained vectors are specified, load them after uniform initialization.
         let input = Arc::new({
             let mut m = DenseMatrix::new(nwords + bucket, dim);
-            m.uniform(1.0 / args.dim() as f32, args.seed());
-            if !args.pretrained_vectors().is_empty() {
-                Self::load_pretrained_vectors(args.pretrained_vectors(), &args, &dict, &mut m)?;
+            m.uniform(1.0 / args.dim as f32, args.seed);
+            if !args.pretrained_vectors.is_empty() {
+                Self::load_pretrained_vectors(&args.pretrained_vectors, &args, &dict, &mut m)?;
             }
             m
         });
 
         // Initialize output matrix: (nlabels for supervised, nwords for unsupervised) × dim, zeros.
-        let out_rows = if args.model() == ModelName::SUP {
+        let out_rows = if args.model == ModelName::SUP {
             dict.nlabels() as i64
         } else {
             dict.nwords() as i64
@@ -1259,15 +1259,15 @@ impl FastText {
         let output_size = output.rows() as usize;
 
         // Build target counts for loss construction.
-        let target_counts = if args.model() == ModelName::SUP {
+        let target_counts = if args.model == ModelName::SUP {
             dict.get_counts(EntryType::Label)
         } else {
             dict.get_counts(EntryType::Word)
         };
-        let normalize_gradient = args.model() == ModelName::SUP;
+        let normalize_gradient = args.model == ModelName::SUP;
 
         // Number of threads (at least 1).
-        let n_threads = (args.thread() as usize).max(1);
+        let n_threads = (args.thread as usize).max(1);
 
         // Shared atomic token counter across all training threads.
         let token_count = Arc::new(AtomicI64::new(0));
@@ -1367,7 +1367,7 @@ impl FastText {
     ///
     /// # Errors
     /// - `FastTextError::IoError` if the file cannot be opened.
-    /// - `FastTextError::InvalidArgument` if the `.vec` dimension doesn't match `args.dim()`.
+    /// - `FastTextError::InvalidArgument` if the `.vec` dimension doesn't match `args.dim`.
     /// - `FastTextError::InvalidModel` if the file is malformed.
     fn load_pretrained_vectors(
         path: &str,
@@ -1406,11 +1406,11 @@ impl FastText {
             })?;
 
         // Dimension must match the model dim.
-        if vec_dim != args.dim() {
+        if vec_dim != args.dim {
             return Err(FastTextError::InvalidArgument(format!(
                 "Dimension of pretrained vectors ({}) does not match model dimension ({})",
                 vec_dim,
-                args.dim()
+                args.dim
             )));
         }
 
@@ -1507,7 +1507,7 @@ impl FastText {
             return Ok(());
         }
 
-        let input_path = ctx.args.input().to_string();
+        let input_path = ctx.args.input.to_string();
 
         // Open file and seek to this thread's starting position.
         let mut file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
@@ -1517,15 +1517,15 @@ impl FastText {
             .map_err(FastTextError::IoError)?;
         let mut reader = BufReader::new(file);
 
-        let seed = thread_id as u64 + ctx.args.seed() as u64;
-        let mut state = State::new(ctx.args.dim() as usize, ctx.output_size, seed);
+        let seed = thread_id as u64 + ctx.args.seed as u64;
+        let mut state = State::new(ctx.args.dim as usize, ctx.output_size, seed);
 
-        let model_name = ctx.args.model();
-        let is_ova = ctx.args.loss() == LossName::OVA;
-        let ws = ctx.args.ws();
-        let lr_update_rate = ctx.args.lr_update_rate() as i64;
-        let base_lr = ctx.args.lr() as f32;
-        let epoch = ctx.args.epoch() as i64;
+        let model_name = ctx.args.model;
+        let is_ova = ctx.args.loss == LossName::OVA;
+        let ws = ctx.args.ws;
+        let lr_update_rate = ctx.args.lr_update_rate as i64;
+        let base_lr = ctx.args.lr as f32;
+        let epoch = ctx.args.epoch as i64;
 
         let mut local_token_count: i64 = 0;
         let mut line: Vec<i32> = Vec::new();
@@ -1765,19 +1765,19 @@ mod tests {
         //        loss=SOFTMAX(3), model=SUP(3), bucket=0, minn=0, maxn=0,
         //        lrUpdateRate=100, t=0.0001
         let mut args = Args::default();
-        args.set_dim(2);
-        args.set_ws(1);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_neg(5);
-        args.set_word_ngrams(1);
-        args.set_loss(LossName::SOFTMAX);
-        args.set_model(ModelName::SUP);
-        args.set_bucket(0);
-        args.set_minn(0);
-        args.set_maxn(0);
-        args.set_lr_update_rate(100);
-        args.set_t(0.0001);
+        args.dim = 2;
+        args.ws = 1;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.neg = 5;
+        args.word_ngrams = 1;
+        args.loss = LossName::SOFTMAX;
+        args.model = ModelName::SUP;
+        args.bucket = 0;
+        args.minn = 0;
+        args.maxn = 0;
+        args.lr_update_rate = 100;
+        args.t = 0.0001;
         args.save(&mut buf).unwrap();
 
         // Dictionary: 2 entries (</s> + one label), nwords=1, nlabels=1
@@ -1917,19 +1917,19 @@ mod tests {
         let mut cursor = Cursor::new(&buf);
         let model = FastText::load(&mut cursor).unwrap();
 
-        assert_eq!(model.args().dim(), 2);
-        assert_eq!(model.args().ws(), 1);
-        assert_eq!(model.args().epoch(), 1);
-        assert_eq!(model.args().min_count(), 1);
-        assert_eq!(model.args().neg(), 5);
-        assert_eq!(model.args().word_ngrams(), 1);
-        assert_eq!(model.args().loss(), LossName::SOFTMAX);
-        assert_eq!(model.args().model(), ModelName::SUP);
-        assert_eq!(model.args().bucket(), 0);
-        assert_eq!(model.args().minn(), 0);
-        assert_eq!(model.args().maxn(), 0);
-        assert_eq!(model.args().lr_update_rate(), 100);
-        assert!((model.args().t() - 0.0001).abs() < f64::EPSILON);
+        assert_eq!(model.args().dim, 2);
+        assert_eq!(model.args().ws, 1);
+        assert_eq!(model.args().epoch, 1);
+        assert_eq!(model.args().min_count, 1);
+        assert_eq!(model.args().neg, 5);
+        assert_eq!(model.args().word_ngrams, 1);
+        assert_eq!(model.args().loss, LossName::SOFTMAX);
+        assert_eq!(model.args().model, ModelName::SUP);
+        assert_eq!(model.args().bucket, 0);
+        assert_eq!(model.args().minn, 0);
+        assert_eq!(model.args().maxn, 0);
+        assert_eq!(model.args().lr_update_rate, 100);
+        assert!((model.args().t - 0.0001).abs() < f64::EPSILON);
     }
 
     // =========================================================================
@@ -2058,22 +2058,22 @@ mod tests {
 
         let args = model.args();
         // From C++ `dump args` reference output
-        assert_eq!(args.dim(), 100, "dim should be 100");
-        assert_eq!(args.ws(), 5, "ws should be 5");
-        assert_eq!(args.epoch(), 50, "epoch should be 50");
-        assert_eq!(args.min_count(), 1, "minCount should be 1");
-        assert_eq!(args.neg(), 5, "neg should be 5");
-        assert_eq!(args.word_ngrams(), 1, "wordNgrams should be 1");
-        assert_eq!(args.loss(), LossName::SOFTMAX, "loss should be softmax");
-        assert_eq!(args.model(), ModelName::SUP, "model should be SUP");
-        assert_eq!(args.bucket(), 0, "bucket should be 0");
-        assert_eq!(args.minn(), 0, "minn should be 0");
-        assert_eq!(args.maxn(), 0, "maxn should be 0");
-        assert_eq!(args.lr_update_rate(), 100, "lrUpdateRate should be 100");
+        assert_eq!(args.dim, 100, "dim should be 100");
+        assert_eq!(args.ws, 5, "ws should be 5");
+        assert_eq!(args.epoch, 50, "epoch should be 50");
+        assert_eq!(args.min_count, 1, "minCount should be 1");
+        assert_eq!(args.neg, 5, "neg should be 5");
+        assert_eq!(args.word_ngrams, 1, "wordNgrams should be 1");
+        assert_eq!(args.loss, LossName::SOFTMAX, "loss should be softmax");
+        assert_eq!(args.model, ModelName::SUP, "model should be SUP");
+        assert_eq!(args.bucket, 0, "bucket should be 0");
+        assert_eq!(args.minn, 0, "minn should be 0");
+        assert_eq!(args.maxn, 0, "maxn should be 0");
+        assert_eq!(args.lr_update_rate, 100, "lrUpdateRate should be 100");
         assert!(
-            (args.t() - 0.0001).abs() < 1e-10,
+            (args.t - 0.0001).abs() < 1e-10,
             "t should be 0.0001, got {}",
-            args.t()
+            args.t
         );
     }
 
@@ -2246,7 +2246,7 @@ mod tests {
 
         // Version 11 with SUP model should force maxn=0
         assert_eq!(
-            model.args().maxn(),
+            model.args().maxn,
             0,
             "Version 11 supervised model should have maxn=0"
         );
@@ -2261,19 +2261,19 @@ mod tests {
         utils::write_i32(&mut buf, 11).unwrap(); // version 11
 
         let mut args = Args::default();
-        args.set_dim(2);
-        args.set_ws(1);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_neg(5);
-        args.set_word_ngrams(1);
-        args.set_loss(LossName::NS);
-        args.set_model(ModelName::SG); // NOT supervised
-        args.set_bucket(100);
-        args.set_minn(3);
-        args.set_maxn(6); // should remain 6
-        args.set_lr_update_rate(100);
-        args.set_t(0.0001);
+        args.dim = 2;
+        args.ws = 1;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.neg = 5;
+        args.word_ngrams = 1;
+        args.loss = LossName::NS;
+        args.model = ModelName::SG; // NOT supervised
+        args.bucket = 100;
+        args.minn = 3;
+        args.maxn = 6; // should remain 6
+        args.lr_update_rate = 100;
+        args.t = 0.0001;
         args.save(&mut buf).unwrap();
 
         // Minimal dictionary (1 word, 0 labels)
@@ -2310,7 +2310,7 @@ mod tests {
 
         // Non-supervised v11 model should keep maxn=6
         assert_eq!(
-            model.args().maxn(),
+            model.args().maxn,
             6,
             "Version 11 non-supervised model should keep maxn=6"
         );
@@ -2336,10 +2336,10 @@ mod tests {
         let model2 = FastText::load(&mut cursor2).unwrap();
 
         // Args should match
-        assert_eq!(model1.args().dim(), model2.args().dim());
-        assert_eq!(model1.args().epoch(), model2.args().epoch());
-        assert_eq!(model1.args().model(), model2.args().model());
-        assert_eq!(model1.args().loss(), model2.args().loss());
+        assert_eq!(model1.args().dim, model2.args().dim);
+        assert_eq!(model1.args().epoch, model2.args().epoch);
+        assert_eq!(model1.args().model, model2.args().model);
+        assert_eq!(model1.args().loss, model2.args().loss);
 
         // Dict should match
         assert_eq!(model1.dict().size(), model2.dict().size());
@@ -2442,9 +2442,9 @@ mod tests {
         let vec_before = model1.get_word_vector("banana");
         assert_eq!(
             vec_before.len(),
-            model1.args().dim() as usize,
+            model1.args().dim as usize,
             "Word vector should have dim={} elements",
-            model1.args().dim()
+            model1.args().dim
         );
 
         // ------------------------------------------------------------------
@@ -2465,70 +2465,70 @@ mod tests {
         // 5. Verify all args match.
         // ------------------------------------------------------------------
         assert_eq!(
-            model1.args().dim(),
-            model2.args().dim(),
+            model1.args().dim,
+            model2.args().dim,
             "dim should match after round-trip"
         );
         assert_eq!(
-            model1.args().ws(),
-            model2.args().ws(),
+            model1.args().ws,
+            model2.args().ws,
             "ws should match after round-trip"
         );
         assert_eq!(
-            model1.args().epoch(),
-            model2.args().epoch(),
+            model1.args().epoch,
+            model2.args().epoch,
             "epoch should match after round-trip"
         );
         assert_eq!(
-            model1.args().min_count(),
-            model2.args().min_count(),
+            model1.args().min_count,
+            model2.args().min_count,
             "minCount should match after round-trip"
         );
         assert_eq!(
-            model1.args().neg(),
-            model2.args().neg(),
+            model1.args().neg,
+            model2.args().neg,
             "neg should match after round-trip"
         );
         assert_eq!(
-            model1.args().word_ngrams(),
-            model2.args().word_ngrams(),
+            model1.args().word_ngrams,
+            model2.args().word_ngrams,
             "wordNgrams should match after round-trip"
         );
         assert_eq!(
-            model1.args().loss(),
-            model2.args().loss(),
+            model1.args().loss,
+            model2.args().loss,
             "loss should match after round-trip"
         );
         assert_eq!(
-            model1.args().model(),
-            model2.args().model(),
+            model1.args().model,
+            model2.args().model,
             "model should match after round-trip"
         );
         assert_eq!(
-            model1.args().bucket(),
-            model2.args().bucket(),
+            model1.args().bucket,
+            model2.args().bucket,
             "bucket should match after round-trip"
         );
         assert_eq!(
-            model1.args().minn(),
-            model2.args().minn(),
+            model1.args().minn,
+            model2.args().minn,
             "minn should match after round-trip"
         );
         assert_eq!(
-            model1.args().maxn(),
-            model2.args().maxn(),
+            model1.args().maxn,
+            model2.args().maxn,
             "maxn should match after round-trip"
         );
         assert_eq!(
-            model1.args().lr_update_rate(),
-            model2.args().lr_update_rate(),
+            model1.args().lr_update_rate,
+            model2.args().lr_update_rate,
             "lrUpdateRate should match after round-trip"
         );
         assert!(
-            (model1.args().t() - model2.args().t()).abs() < f64::EPSILON,
+            (model1.args().t - model2.args().t).abs() < f64::EPSILON,
             "t should match after round-trip: {} vs {}",
-            model1.args().t(),
-            model2.args().t()
+            model1.args().t,
+            model2.args().t
         );
 
         // ------------------------------------------------------------------
@@ -2704,19 +2704,19 @@ mod tests {
         utils::write_i32(&mut buf, FASTTEXT_VERSION).unwrap();
 
         let mut args = Args::default();
-        args.set_dim(2);
-        args.set_ws(1);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_neg(5);
-        args.set_word_ngrams(1);
-        args.set_loss(LossName::NS);
-        args.set_model(ModelName::SG);
-        args.set_bucket(0);
-        args.set_minn(0);
-        args.set_maxn(0);
-        args.set_lr_update_rate(100);
-        args.set_t(0.0001);
+        args.dim = 2;
+        args.ws = 1;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.neg = 5;
+        args.word_ngrams = 1;
+        args.loss = LossName::NS;
+        args.model = ModelName::SG;
+        args.bucket = 0;
+        args.minn = 0;
+        args.maxn = 0;
+        args.lr_update_rate = 100;
+        args.t = 0.0001;
         args.save(&mut buf).unwrap();
 
         // Dictionary: 1 word entry (</s>), 0 labels.
@@ -3263,7 +3263,7 @@ mod tests {
     fn test_get_word_vector_unknown_zero() {
         let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
         // cooking model has maxn=0 (no subword computation)
-        assert_eq!(model.args().maxn(), 0, "cooking model should have maxn=0");
+        assert_eq!(model.args().maxn, 0, "cooking model should have maxn=0");
 
         let vec = model.get_word_vector("xyzzy_definitely_not_in_vocabulary_42");
         assert_eq!(vec.len(), 100, "Vector should have 100 dimensions");
@@ -3320,19 +3320,19 @@ mod tests {
 
         // Args: SG model with subwords enabled
         let mut args = Args::default();
-        args.set_dim(dim as i32);
-        args.set_ws(1);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_neg(1);
-        args.set_word_ngrams(1);
-        args.set_loss(LossName::NS);
-        args.set_model(ModelName::SG);
-        args.set_bucket(bucket);
-        args.set_minn(minn);
-        args.set_maxn(maxn);
-        args.set_lr_update_rate(100);
-        args.set_t(0.0001);
+        args.dim = dim as i32;
+        args.ws = 1;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.neg = 1;
+        args.word_ngrams = 1;
+        args.loss = LossName::NS;
+        args.model = ModelName::SG;
+        args.bucket = bucket;
+        args.minn = minn;
+        args.maxn = maxn;
+        args.lr_update_rate = 100;
+        args.t = 0.0001;
         args.save(&mut buf).unwrap();
 
         // Dictionary: 1 word (</s>), 0 labels
@@ -3377,8 +3377,8 @@ mod tests {
         let model = FastText::load(&mut cursor).expect("Subword model should load");
 
         // Verify model has subwords enabled
-        assert_eq!(model.args().maxn(), maxn, "Model should have maxn={}", maxn);
-        assert_eq!(model.args().minn(), minn, "Model should have minn={}", minn);
+        assert_eq!(model.args().maxn, maxn, "Model should have maxn={}", maxn);
+        assert_eq!(model.args().minn, minn, "Model should have minn={}", minn);
 
         // Test: OOV word "zyx" → character n-grams map to bucket rows [1..101]
         // which are all 1.0 → averaged result is non-zero
@@ -3397,7 +3397,7 @@ mod tests {
         // (already tested in test_get_word_vector_unknown_zero, but confirmed here
         // by checking that our model DOES have maxn>0 and returns non-zero)
         assert!(
-            model.args().maxn() > 0,
+            model.args().maxn > 0,
             "Test model should have maxn>0 to exercise subword path"
         );
     }
@@ -3513,19 +3513,19 @@ mod tests {
 
         // Args: skip-gram model, no subwords (maxn=0), no buckets
         let mut args = Args::default();
-        args.set_dim(dim as i32);
-        args.set_ws(1);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_neg(1);
-        args.set_word_ngrams(1);
-        args.set_loss(LossName::NS);
-        args.set_model(ModelName::SG);
-        args.set_bucket(0);
-        args.set_minn(0);
-        args.set_maxn(0);
-        args.set_lr_update_rate(100);
-        args.set_t(0.0001);
+        args.dim = dim as i32;
+        args.ws = 1;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.neg = 1;
+        args.word_ngrams = 1;
+        args.loss = LossName::NS;
+        args.model = ModelName::SG;
+        args.bucket = 0;
+        args.minn = 0;
+        args.maxn = 0;
+        args.lr_update_rate = 100;
+        args.t = 0.0001;
         args.save(&mut buf).unwrap();
 
         // Dictionary: 2 words (</s> at index 0, "hello" at index 1), 0 labels
@@ -3574,7 +3574,7 @@ mod tests {
 
         // Confirm model type is unsupervised
         assert_eq!(
-            model.args().model(),
+            model.args().model,
             ModelName::SG,
             "Model should be SG (unsupervised)"
         );
@@ -3809,14 +3809,14 @@ mod tests {
         assert!(!model.is_quant(), "cooking.model.bin should not be quantized");
     }
 
-    /// get_dimension() matches args.dim().
+    /// get_dimension() matches args.dim.
     #[test]
     fn test_get_dimension_matches_args() {
         let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
         assert_eq!(
             model.get_dimension(),
-            model.args().dim(),
-            "get_dimension() should equal args().dim()"
+            model.args().dim,
+            "get_dimension() should equal args().dim"
         );
     }
 
@@ -3903,15 +3903,15 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(5);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_word_ngrams(1);
-        args.set_bucket(0);
+        args.dim = 10;
+        args.epoch = 5;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.word_ngrams = 1;
+        args.bucket = 0;
 
         let model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&path).ok();
@@ -3953,19 +3953,19 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
-        args.set_model(ModelName::CBOW);
-        args.set_loss(LossName::NS);
-        args.set_dim(10);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_lr(0.05);
-        args.set_ws(3);
-        args.set_neg(5);
-        args.set_bucket(100);
-        args.set_minn(0);
-        args.set_maxn(0);
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
+        args.model = ModelName::CBOW;
+        args.loss = LossName::NS;
+        args.dim = 10;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.lr = 0.05;
+        args.ws = 3;
+        args.neg = 5;
+        args.bucket = 100;
+        args.minn = 0;
+        args.maxn = 0;
 
         let model = FastText::train(args).expect("CBOW training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4004,19 +4004,19 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
-        args.set_model(ModelName::SG);
-        args.set_loss(LossName::NS);
-        args.set_dim(10);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_lr(0.05);
-        args.set_ws(3);
-        args.set_neg(5);
-        args.set_bucket(100);
-        args.set_minn(0);
-        args.set_maxn(0);
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
+        args.model = ModelName::SG;
+        args.loss = LossName::NS;
+        args.dim = 10;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.lr = 0.05;
+        args.ws = 3;
+        args.neg = 5;
+        args.bucket = 100;
+        args.minn = 0;
+        args.maxn = 0;
 
         let model = FastText::train(args).expect("Skip-gram training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4056,13 +4056,13 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(50);
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 50;
 
         let model = FastText::train(args).expect("Supervised training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4070,7 +4070,7 @@ mod tests {
         let nwords = model.dict().nwords() as i64;
         let nlabels = model.dict().nlabels() as i64;
         let dim = model.get_dimension() as i64;
-        let bucket = model.args().bucket() as i64;
+        let bucket = model.args().bucket as i64;
 
         let input = model.input_matrix();
         assert_eq!(
@@ -4099,24 +4099,24 @@ mod tests {
         let path2_str = path2.to_str().unwrap().to_string();
 
         let mut args2 = Args::default();
-        args2.set_input(path2_str.clone());
-        args2.set_output("/dev/null".to_string());
-        args2.set_model(ModelName::CBOW);
-        args2.set_loss(LossName::NS);
-        args2.set_dim(10);
-        args2.set_epoch(1);
-        args2.set_min_count(1);
-        args2.set_neg(5);
-        args2.set_bucket(50);
-        args2.set_minn(0);
-        args2.set_maxn(0);
+        args2.input = path2_str.clone();
+        args2.output = "/dev/null".to_string();
+        args2.model = ModelName::CBOW;
+        args2.loss = LossName::NS;
+        args2.dim = 10;
+        args2.epoch = 1;
+        args2.min_count = 1;
+        args2.neg = 5;
+        args2.bucket = 50;
+        args2.minn = 0;
+        args2.maxn = 0;
 
         let model2 = FastText::train(args2).expect("CBOW training should succeed");
         std::fs::remove_file(&path2).ok();
 
         let nwords2 = model2.dict().nwords() as i64;
         let dim2 = model2.get_dimension() as i64;
-        let bucket2 = model2.args().bucket() as i64;
+        let bucket2 = model2.args().bucket as i64;
 
         let input2 = model2.input_matrix();
         assert_eq!(
@@ -4248,14 +4248,14 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(5);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
+        args.dim = 5;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
 
         let result = FastText::train(args);
         std::fs::remove_file(&path).ok();
@@ -4280,15 +4280,15 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(4);
+        args.dim = 10;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 4;
 
         let model = FastText::train(args).expect("Parallel training (thread=4) should succeed");
         std::fs::remove_file(&path).ok();
@@ -4324,15 +4324,15 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
-        args.set_model(crate::args::ModelName::CBOW);
-        args.set_loss(crate::args::LossName::NS);
-        args.set_dim(10);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_thread(4);
-        args.set_bucket(100);
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
+        args.model = crate::args::ModelName::CBOW;
+        args.loss = crate::args::LossName::NS;
+        args.dim = 10;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.thread = 4;
+        args.bucket = 100;
 
         let model = FastText::train(args).expect("Multi-threaded CBOW training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4356,15 +4356,15 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(3);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(4); // Multiple threads: each contributes to shared loss
+        args.dim = 10;
+        args.epoch = 3;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 4; // Multiple threads: each contributes to shared loss
 
         let model = FastText::train(args).expect("Multi-threaded training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4400,15 +4400,15 @@ mod tests {
 
         let handle = std::thread::spawn(move || {
             let mut args = Args::default();
-            args.set_input(path_str.clone());
-            args.set_output("/dev/null".to_string());
+            args.input = path_str.clone();
+            args.output = "/dev/null".to_string();
             args.apply_supervised_defaults();
-            args.set_dim(10);
-            args.set_epoch(500); // Very large epoch count so training won't finish naturally.
-            args.set_min_count(1);
-            args.set_lr(0.1);
-            args.set_bucket(0);
-            args.set_thread(1);
+            args.dim = 10;
+            args.epoch = 500; // Very large epoch count so training won't finish naturally.
+            args.min_count = 1;
+            args.lr = 0.1;
+            args.bucket = 0;
+            args.thread = 1;
             FastText::train_with_abort(args, abort_for_train)
         });
 
@@ -4440,15 +4440,15 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(500); // Large epoch count so training won't finish naturally.
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
+        args.dim = 10;
+        args.epoch = 500; // Large epoch count so training won't finish naturally.
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
 
         // Spawn training in a background thread via the public API.
         let handle = FastText::spawn_training(args);
@@ -4479,15 +4479,15 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(5);
-        args.set_epoch(2);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
+        args.dim = 5;
+        args.epoch = 2;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
 
         let model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4511,16 +4511,16 @@ mod tests {
 
         let make_args = |path: &str| {
             let mut args = Args::default();
-            args.set_input(path.to_string());
-            args.set_output("/dev/null".to_string());
+            args.input = path.to_string();
+            args.output = "/dev/null".to_string();
             args.apply_supervised_defaults();
-            args.set_dim(10);
-            args.set_epoch(3);
-            args.set_min_count(1);
-            args.set_lr(0.1);
-            args.set_bucket(0);
-            args.set_thread(1); // Single thread for determinism.
-            args.set_seed(42); // Fixed seed.
+            args.dim = 10;
+            args.epoch = 3;
+            args.min_count = 1;
+            args.lr = 0.1;
+            args.bucket = 0;
+            args.thread = 1; // Single thread for determinism.
+            args.seed = 42; // Fixed seed.
             args
         };
 
@@ -4575,16 +4575,16 @@ mod tests {
         let train_str = train_path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(train_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = train_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(5);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
+        args.dim = 10;
+        args.epoch = 5;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
 
         let model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&train_path).ok();
@@ -4653,13 +4653,13 @@ __label__food cook recipe eat meal\n";
         let train_str = train_path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(train_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = train_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(0);
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 0;
 
         let model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&train_path).ok();
@@ -4699,16 +4699,16 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(5);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
+        args.dim = 10;
+        args.epoch = 5;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
 
         let model1 = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&path).ok();
@@ -4765,13 +4765,13 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(0);
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 0;
 
         let result = FastText::train(args);
         std::fs::remove_file(&path).ok();
@@ -4799,13 +4799,13 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(0);
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 0;
 
         let result = FastText::train(args);
         std::fs::remove_file(&path).ok();
@@ -4828,15 +4828,15 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(0);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
+        args.dim = 10;
+        args.epoch = 0;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
 
         let result = FastText::train(args);
         std::fs::remove_file(&path).ok();
@@ -4874,14 +4874,14 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(3);
-        args.set_bucket(0);
-        args.set_thread(1);
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 3;
+        args.bucket = 0;
+        args.thread = 1;
 
         let model = FastText::train(args).expect("Training with min_count=3 should succeed");
         std::fs::remove_file(&path).ok();
@@ -4923,17 +4923,17 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(10);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
-        args.set_lr_update_rate(50);
+        args.dim = 10;
+        args.epoch = 10;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
+        args.lr_update_rate = 50;
 
         let result = FastText::train_tracking_epoch_losses(args);
         std::fs::remove_file(&path).ok();
@@ -5015,16 +5015,16 @@ __label__food cook recipe eat meal\n";
         ]);
 
         let mut args = Args::default();
-        args.set_input(train_path.to_str().unwrap().to_string());
-        args.set_output("/dev/null".to_string());
+        args.input = train_path.to_str().unwrap().to_string();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(dim as i32);
-        args.set_epoch(0); // epoch=0: no training, just init + load pretrained
-        args.set_min_count(1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
-        args.set_pretrained_vectors(vec_path.to_str().unwrap().to_string());
+        args.dim = dim as i32;
+        args.epoch = 0; // epoch=0: no training, just init + load pretrained
+        args.min_count = 1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
+        args.pretrained_vectors = vec_path.to_str().unwrap().to_string();
 
         let model = FastText::train(args).expect("Training with pretrained vectors should succeed");
         std::fs::remove_file(&train_path).ok();
@@ -5064,14 +5064,14 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(0);
-        args.set_pretrained_vectors("/nonexistent/path/vectors.vec".to_string());
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 0;
+        args.pretrained_vectors = "/nonexistent/path/vectors.vec".to_string();
 
         let result = FastText::train(args);
         std::fs::remove_file(&path).ok();
@@ -5102,16 +5102,16 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(10);
-        args.set_epoch(5);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
+        args.dim = 10;
+        args.epoch = 5;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
 
         let model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&path).ok();
@@ -5146,26 +5146,26 @@ __label__food cook recipe eat meal\n";
         // 1. Empty file -> error
         let empty_path = write_temp_file("");
         let mut args = Args::default();
-        args.set_input(empty_path.to_str().unwrap().to_string());
-        args.set_output("/dev/null".to_string());
+        args.input = empty_path.to_str().unwrap().to_string();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(5);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(0);
+        args.dim = 5;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 0;
         assert!(FastText::train(args).is_err(), "Empty file should return error");
         std::fs::remove_file(&empty_path).ok();
 
         // 2. No labels for supervised -> error
         let no_label_path = write_temp_file("word1 word2 word3\nmore text here\n");
         let mut args2 = Args::default();
-        args2.set_input(no_label_path.to_str().unwrap().to_string());
-        args2.set_output("/dev/null".to_string());
+        args2.input = no_label_path.to_str().unwrap().to_string();
+        args2.output = "/dev/null".to_string();
         args2.apply_supervised_defaults();
-        args2.set_dim(5);
-        args2.set_epoch(1);
-        args2.set_min_count(1);
-        args2.set_bucket(0);
+        args2.dim = 5;
+        args2.epoch = 1;
+        args2.min_count = 1;
+        args2.bucket = 0;
         assert!(FastText::train(args2).is_err(), "No labels should return error");
         std::fs::remove_file(&no_label_path).ok();
 
@@ -5173,14 +5173,14 @@ __label__food cook recipe eat meal\n";
         let data = supervised_train_data();
         let p = write_temp_file(&data);
         let mut args3 = Args::default();
-        args3.set_input(p.to_str().unwrap().to_string());
-        args3.set_output("/dev/null".to_string());
+        args3.input = p.to_str().unwrap().to_string();
+        args3.output = "/dev/null".to_string();
         args3.apply_supervised_defaults();
-        args3.set_dim(5);
-        args3.set_epoch(0);
-        args3.set_min_count(1);
-        args3.set_bucket(0);
-        args3.set_thread(1);
+        args3.dim = 5;
+        args3.epoch = 0;
+        args3.min_count = 1;
+        args3.bucket = 0;
+        args3.thread = 1;
         let result = FastText::train(args3);
         std::fs::remove_file(&p).ok();
         match result {
@@ -5201,16 +5201,16 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str);
-        args.set_output("/dev/null".to_string());
+        args.input = path_str;
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(dim);
-        args.set_epoch(epoch);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(bucket);
-        args.set_thread(1);
-        args.set_seed(42);
+        args.dim = dim;
+        args.epoch = epoch;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = bucket;
+        args.thread = 1;
+        args.seed = 42;
 
         let model = FastText::train(args).expect("Training should succeed");
         (model, path)
@@ -5224,14 +5224,14 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str);
-        args.set_output("/dev/null".to_string());
-        args.set_model(crate::args::ModelName::CBOW);
-        args.set_loss(crate::args::LossName::NS);
-        args.set_dim(10);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(100);
+        args.input = path_str;
+        args.output = "/dev/null".to_string();
+        args.model = crate::args::ModelName::CBOW;
+        args.loss = crate::args::LossName::NS;
+        args.dim = 10;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 100;
 
         let mut model = FastText::train(args).expect("CBOW training should succeed");
         std::fs::remove_file(&path).ok();
@@ -5256,7 +5256,7 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
 
         let result = model.quantize(&qargs);
         assert!(result.is_ok(), "Supervised model quantize should succeed: {:?}", result.err());
@@ -5270,7 +5270,7 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
         model.quantize(&qargs).expect("Quantize should succeed");
 
         assert!(model.is_quant(), "is_quant() should be true");
@@ -5304,14 +5304,14 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str);
-        args.set_output("/dev/null".to_string());
+        args.input = path_str;
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(50);
-        args.set_epoch(1);
-        args.set_min_count(1);
-        args.set_bucket(0);
-        args.set_thread(1);
+        args.dim = 50;
+        args.epoch = 1;
+        args.min_count = 1;
+        args.bucket = 0;
+        args.thread = 1;
 
         let mut model = FastText::train(args).expect("Training should succeed");
         std::fs::remove_file(&path).ok();
@@ -5326,7 +5326,7 @@ __label__food cook recipe eat meal\n";
 
         // Quantize and save .ftz
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
         model.quantize(&qargs).expect("Quantize should succeed");
         model.save_model(ftz_path.to_str().unwrap()).expect("Save .ftz should succeed");
         let ftz_size = std::fs::metadata(&ftz_path).unwrap().len();
@@ -5368,7 +5368,7 @@ __label__food cook recipe eat meal\n";
 
         // Quantize the model
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
         model.quantize(&qargs).expect("Quantize should succeed");
 
         // Collect post-quantization predictions
@@ -5402,8 +5402,8 @@ __label__food cook recipe eat meal\n";
         let mut model_zero = model_cutoff.clone_for_test();
         {
             let mut qargs = Args::default();
-            qargs.set_dsub(2);
-            qargs.set_cutoff(0);
+            qargs.dsub = 2;
+            qargs.cutoff = 0;
             model_zero.quantize(&qargs).expect("zero cutoff quantize should succeed");
         }
         // Zero cutoff: vocabulary size should be unchanged
@@ -5414,8 +5414,8 @@ __label__food cook recipe eat meal\n";
         let cutoff = (nwords_before as usize / 2).max(1);
         {
             let mut qargs = Args::default();
-            qargs.set_dsub(2);
-            qargs.set_cutoff(cutoff);
+            qargs.dsub = 2;
+            qargs.cutoff = cutoff;
             model_cutoff.quantize(&qargs).expect("positive cutoff quantize should succeed");
         }
         let nwords_after = model_cutoff.dict().nwords();
@@ -5431,8 +5431,8 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&train_path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_qnorm(true);
+        qargs.dsub = 2;
+        qargs.qnorm = true;
 
         model.quantize(&qargs).expect("qnorm quantize should succeed");
         assert!(model.is_quant(), "is_quant() should be true with qnorm=true");
@@ -5455,12 +5455,12 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&train_path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_qout(true);
+        qargs.dsub = 2;
+        qargs.qout = true;
 
         model.quantize(&qargs).expect("qout quantize should succeed");
         assert!(model.is_quant(), "is_quant() should be true with qout=true");
-        assert!(model.args().qout(), "args.qout() should be true");
+        assert!(model.args().qout, "args.qout should be true");
 
         // quant_output should be set
         assert!(model.quant_output.is_some(), "quant_output should be set when qout=true");
@@ -5484,16 +5484,16 @@ __label__food cook recipe eat meal\n";
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.set_input(path_str.clone());
-        args.set_output("/dev/null".to_string());
+        args.input = path_str.clone();
+        args.output = "/dev/null".to_string();
         args.apply_supervised_defaults();
-        args.set_dim(16);
-        args.set_epoch(5);
-        args.set_min_count(1);
-        args.set_lr(0.1);
-        args.set_bucket(0);
-        args.set_thread(1);
-        args.set_seed(42);
+        args.dim = 16;
+        args.epoch = 5;
+        args.min_count = 1;
+        args.lr = 0.1;
+        args.bucket = 0;
+        args.thread = 1;
+        args.seed = 42;
 
         let mut model = FastText::train(args).expect("Training should succeed");
         let nwords_before = model.dict().nwords();
@@ -5501,13 +5501,13 @@ __label__food cook recipe eat meal\n";
         let cutoff = (nwords_before as usize / 2).max(2);
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_cutoff(cutoff);
-        qargs.set_retrain(true);
-        qargs.set_input(path_str.clone());
-        qargs.set_epoch(1);
-        qargs.set_lr(0.05);
-        qargs.set_thread(1);
+        qargs.dsub = 2;
+        qargs.cutoff = cutoff;
+        qargs.retrain = true;
+        qargs.input = path_str.clone();
+        qargs.epoch = 1;
+        qargs.lr = 0.05;
+        qargs.thread = 1;
 
         let result = model.quantize(&qargs);
         std::fs::remove_file(&path).ok();
@@ -5529,7 +5529,7 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&train_path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
         model.quantize(&qargs).expect("Quantize should succeed");
 
         // Get pre-save predictions
@@ -5586,7 +5586,7 @@ __label__food cook recipe eat meal\n";
             .collect();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
         model.quantize(&qargs).expect("Quantize should succeed");
 
         let preds_quant: Vec<String> = test_inputs.iter()
@@ -5615,7 +5615,7 @@ __label__food cook recipe eat meal\n";
         assert!(!model.is_quant(), "Before quantization: is_quant() should be false");
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
+        qargs.dsub = 2;
         model.quantize(&qargs).expect("Quantize should succeed");
 
         assert!(model.is_quant(), "After quantization: is_quant() should be true");
@@ -5647,8 +5647,8 @@ __label__food cook recipe eat meal\n";
         let cutoff = (nwords_before as usize / 2).max(1);
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_cutoff(cutoff);
+        qargs.dsub = 2;
+        qargs.cutoff = cutoff;
         model.quantize(&qargs).expect("cutoff quantize should succeed");
 
         // After pruning, predictions should still work (no panics, valid probabilities).
@@ -5688,8 +5688,8 @@ __label__food cook recipe eat meal\n";
         let cutoff = (nwords_before as usize / 2).max(2);
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_cutoff(cutoff);
+        qargs.dsub = 2;
+        qargs.cutoff = cutoff;
         model.quantize(&qargs).expect("cutoff quantize should succeed");
 
         // The quantized model should be usable for save/load round-trip.
@@ -5721,13 +5721,13 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&train_path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_qout(true);
-        qargs.set_qnorm(true);
+        qargs.dsub = 2;
+        qargs.qout = true;
+        qargs.qnorm = true;
 
         model.quantize(&qargs).expect("qout+qnorm quantize should succeed");
         assert!(model.is_quant(), "is_quant() should be true");
-        assert!(model.args().qout(), "args.qout() should be true");
+        assert!(model.args().qout, "args.qout should be true");
 
         // Both input and output QuantMatrix should have qnorm=true.
         assert!(
@@ -5755,8 +5755,8 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&train_path).ok();
 
         let mut qargs = Args::default();
-        qargs.set_dsub(2);
-        qargs.set_qout(true);
+        qargs.dsub = 2;
+        qargs.qout = true;
         // qnorm is false by default
 
         model.quantize(&qargs).expect("qout quantize should succeed");
