@@ -191,7 +191,10 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
         }
     }
 
-    // Min-heap (smallest log-prob at top) via Reverse.
+    // Min-heap keyed on raw probability (smallest at top) via Reverse.
+    // Since std_log is monotonically increasing, ordering by raw score
+    // gives the same top-k as ordering by log-score. We only compute
+    // std_log for the final k survivors, avoiding ln() on all other labels.
     let mut min_heap: BinaryHeap<Reverse<(OrdF32, i32)>> = BinaryHeap::with_capacity(k + 1);
 
     for i in 0..output.len() {
@@ -199,23 +202,22 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
         if score < threshold {
             continue;
         }
-        let log_score = std_log(score);
         if min_heap.len() == k {
-            if log_score < min_heap.peek().unwrap().0 .0 .0 {
+            if score < min_heap.peek().unwrap().0 .0 .0 {
                 continue;
             }
         }
-        min_heap.push(Reverse((OrdF32(log_score), i as i32)));
+        min_heap.push(Reverse((OrdF32(score), i as i32)));
         if min_heap.len() > k {
-            min_heap.pop(); // remove smallest
+            min_heap.pop();
         }
     }
 
-    // Drain into heap and sort descending.
+    // Convert survivors to log-probability and sort descending.
     heap.extend(
         min_heap
             .into_iter()
-            .map(|Reverse((OrdF32(s), idx))| (s, idx)),
+            .map(|Reverse((OrdF32(s), idx))| (std_log(s), idx)),
     );
     heap.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 }
@@ -734,23 +736,37 @@ impl Loss for SoftmaxLoss {
 
     fn compute_output(&self, state: &mut State) {
         let osz = self.wo.rows() as usize;
+        let cols = self.wo.cols() as usize;
+        let hidden = state.hidden.data();
+        let wo_data = self.wo.data();
+        let out = state.output.data_mut();
         // Compute raw logits: output[i] = wo[i] · hidden
         for i in 0..osz {
-            let dot = self.wo.dot_row(&state.hidden, i as i64).unwrap_or(0.0);
-            state.output[i] = dot;
+            let row_start = i * cols;
+            let row = &wo_data[row_start..row_start + cols];
+            let mut d = 0.0f32;
+            for (a, b) in row.iter().zip(hidden.iter()) {
+                d += a * b;
+            }
+            out[i] = d;
         }
         // Max-subtraction for numerical stability
-        let max = state.output.data()[..osz]
-            .iter()
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let mut max = f32::NEG_INFINITY;
+        for i in 0..osz {
+            if out[i] > max {
+                max = out[i];
+            }
+        }
         let mut z = 0.0f32;
         for i in 0..osz {
-            state.output[i] = (state.output[i] - max).exp();
-            z += state.output[i];
+            out[i] = (out[i] - max).exp();
+            z += out[i];
         }
-        for i in 0..osz {
-            state.output[i] /= z;
+        if z > 0.0 {
+            let inv_z = 1.0 / z;
+            for i in 0..osz {
+                out[i] *= inv_z;
+            }
         }
     }
 }

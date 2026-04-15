@@ -351,19 +351,11 @@ impl Dictionary {
         }
 
         let mut buf = [0u8; 1];
-        // Accumulate raw bytes so that multi-byte UTF-8 sequences are preserved intact.
-        // Converting individual bytes via `c as char` would corrupt any byte > 127,
-        // turning multi-byte code points into garbage Latin-1 characters.
-        let mut word_bytes: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => {
-                    // EOF: flush accumulated bytes if any.
-                    if !word_bytes.is_empty() {
-                        *word = String::from_utf8_lossy(&word_bytes).into_owned();
-                        return true;
-                    }
-                    return false;
+                    // EOF: return true if we accumulated a token.
+                    return !word.is_empty();
                 }
                 Ok(_) => {
                     let c = buf[0];
@@ -371,15 +363,13 @@ impl Dictionary {
                         matches!(c, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0');
 
                     if is_ws {
-                        if word_bytes.is_empty() {
+                        if word.is_empty() {
                             if c == b'\n' {
                                 word.push_str(EOS);
                                 return true;
                             }
                             // Skip non-newline whitespace when buffer is empty.
                         } else {
-                            // Token complete: convert accumulated bytes to String.
-                            *word = String::from_utf8_lossy(&word_bytes).into_owned();
                             if c == b'\n' {
                                 // Put back the newline via the pending flag.
                                 *pending_newline = true;
@@ -387,15 +377,18 @@ impl Dictionary {
                             return true;
                         }
                     } else {
-                        word_bytes.push(c);
+                        // Push byte directly into the String.
+                        // fastText data is ASCII; for non-ASCII bytes, push the
+                        // Unicode replacement char to match from_utf8_lossy behavior.
+                        if c.is_ascii() {
+                            word.push(c as char);
+                        } else {
+                            word.push(char::REPLACEMENT_CHARACTER);
+                        }
                     }
                 }
                 Err(_) => {
-                    if !word_bytes.is_empty() {
-                        *word = String::from_utf8_lossy(&word_bytes).into_owned();
-                        return true;
-                    }
-                    return false;
+                    return !word.is_empty();
                 }
             }
         }

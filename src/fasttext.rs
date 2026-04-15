@@ -812,15 +812,37 @@ impl FastText {
     pub fn precompute_word_vectors(&self) -> DenseMatrix {
         let nwords = self.dict.nwords() as usize;
         let dim = self.args.dim as i64;
+        let dim_usize = dim as usize;
         let mut word_vectors = DenseMatrix::new(nwords as i64, dim);
         for i in 0..nwords {
             let word = self.dict.get_word(i as i32);
-            let vec = self.get_word_vector(word);
-            let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+            let ids = self.dict.get_subwords_for_string(word);
+            if ids.is_empty() {
+                continue;
+            }
+            let row = word_vectors.row_mut(i as i64);
+            let scale = 1.0 / ids.len() as f32;
+            if self.quant {
+                if let Some(ref qi) = self.quant_input {
+                    let mut vec = Vector::new(dim_usize);
+                    for &id in &ids {
+                        qi.add_row_to_vector(&mut vec, id, scale);
+                    }
+                    row.copy_from_slice(vec.data());
+                }
+            } else {
+                for &id in &ids {
+                    let input_row = self.input.row(id as i64);
+                    for (r, &v) in row.iter_mut().zip(input_row.iter()) {
+                        *r += v * scale;
+                    }
+                }
+            }
+            let norm: f32 = row.iter().map(|&v| v * v).sum::<f32>().sqrt();
             if norm > 0.0 {
-                let row = word_vectors.row_mut(i as i64);
-                for (r, &v) in row.iter_mut().zip(vec.iter()) {
-                    *r = v / norm;
+                let inv_norm = 1.0 / norm;
+                for r in row.iter_mut() {
+                    *r *= inv_norm;
                 }
             }
         }
