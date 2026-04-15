@@ -190,7 +190,7 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
         let log_score = std_log(score);
         if heap.len() == k {
             // If the current log-score is not better than the k-th best, skip.
-            if log_score <= heap[0].0 {
+            if log_score < heap[0].0 {
                 continue;
             }
         }
@@ -260,29 +260,9 @@ impl BinaryLogisticBase {
             // state.grad += alpha * wo[target]
             self.wo.add_row_to_vector(&mut state.grad, target, alpha);
             // wo[target] += alpha * hidden  (Hogwild! lock-free SGD)
-            //
-            // SAFETY: This implements the Hogwild! algorithm (Recht et al., 2011),
-            // which intentionally allows concurrent, unsynchronised writes to shared
-            // weight matrices during multi-threaded training — exactly as C++ fastText
-            // does in `FastText::trainThread` / `loss.cc`.
-            //
-            // Why this is sound:
-            // 1. Each training thread operates on a distinct mini-batch.  In practice
-            //    threads write to *different rows* of `wo` (one per target label), so
-            //    races are rare.
-            // 2. When a race does occur the worst outcome is a benign, bounded
-            //    numerical noise on that row's values.  Hogwild! theory proves that
-            //    this non-determinism does not prevent convergence; it is equivalent to
-            //    stochastic gradient noise.
-            // 3. The `DenseMatrix` backing store is a plain `Vec<f32>` (heap-allocated,
-            //    valid for the lifetime of `Arc<DenseMatrix>`).  No allocations or
-            //    structural mutations happen here — only in-place `f32` field writes,
-            //    which are individually atomic on all supported platforms.
-            // 4. The `Arc` keeps `wo` alive as long as any thread holds a reference,
-            //    so the raw-pointer dereference is never dangling.
-            let wo_ptr = Arc::as_ptr(&self.wo) as *mut DenseMatrix;
+            // SAFETY: see DenseMatrix::add_vector_to_row_unsync documentation.
             unsafe {
-                (*wo_ptr).add_vector_to_row(&state.hidden, target as i64, alpha);
+                self.wo.add_vector_to_row_unsync(&state.hidden, target as i64, alpha);
             }
         }
         if label_is_positive {
@@ -741,16 +721,9 @@ impl Loss for SoftmaxLoss {
                 // state.grad += alpha * wo[i]
                 self.wo.add_row_to_vector(&mut state.grad, i as i32, alpha);
                 // wo[i] += alpha * hidden  (Hogwild! lock-free SGD)
-                //
-                // SAFETY: Same Hogwild! invariants as in `BinaryLogisticBase::binary_logistic`:
-                // concurrent unsynchronised writes to `wo` rows are intentional and match
-                // C++ fastText behaviour.  The non-determinism is benign: individual f32
-                // writes are atomic on all supported platforms, and the Hogwild! algorithm
-                // guarantees convergence despite the sparse data races.  The Arc keeps the
-                // backing store alive for the duration of all writes.
-                let wo_ptr = Arc::as_ptr(&self.wo) as *mut DenseMatrix;
+                // SAFETY: see DenseMatrix::add_vector_to_row_unsync documentation.
                 unsafe {
-                    (*wo_ptr).add_vector_to_row(&state.hidden, i as i64, alpha);
+                    self.wo.add_vector_to_row_unsync(&state.hidden, i as i64, alpha);
                 }
             }
         }

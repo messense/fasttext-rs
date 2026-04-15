@@ -13,6 +13,7 @@ repository = "https://github.com/messense/fasttext-rs"
 [dependencies]
 rayon = "1"
 clap = { version = "4", features = ["derive"] }
+thiserror = "2"
 
 [[bin]]
 name = "fasttext"

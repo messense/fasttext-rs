@@ -6,6 +6,7 @@
 use std::io::{Read, Write};
 
 use crate::error::{FastTextError, Result};
+use crate::model::MinstdRng;
 use crate::utils;
 use crate::vector::Vector;
 
@@ -31,72 +32,7 @@ const SEED: u64 = 1234;
 /// Small perturbation applied when splitting empty clusters (matches C++ `eps_ = 1e-7`).
 const EPS: f32 = 1e-7;
 
-// ============================================================================
-// Linear congruential generator
-// ============================================================================
 
-/// Linear congruential generator matching C++ `std::minstd_rand`.
-///
-/// Parameters: multiplier=48271, increment=0, modulus=2^31-1=2147483647.
-/// Values are in the range [1, 2147483646].
-#[derive(Debug, Clone)]
-struct Minstd {
-    state: u64,
-}
-
-impl Minstd {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    /// Advance the state and return a value in [1, 2147483646].
-    #[inline]
-    fn next(&mut self) -> u32 {
-        self.state = (self.state * 48271) % 2147483647;
-        self.state as u32
-    }
-
-    /// Generate a uniform real in [0, 1) matching C++ `std::uniform_real_distribution<>(0, 1)`.
-    ///
-    /// libc++ maps minstd_rand output `s` (in [1, 2147483646]) to:
-    /// `(s - min) / (max - min + 1) = (s - 1) / 2147483646`
-    fn uniform_real(&mut self) -> f64 {
-        (self.next() as f64 - 1.0) / 2147483646.0
-    }
-
-    /// Generate a uniform integer in `[0, n]` inclusive.
-    ///
-    /// Uses the scaling + rejection approach from libstdc++ `uniform_int_distribution`,
-    /// which avoids modulo bias.
-    /// `urngrange = max - min = 2147483646 - 1 = 2147483645`
-    fn uniform_int(&mut self, n: usize) -> usize {
-        if n == 0 {
-            return 0;
-        }
-        let urng_range: u64 = 2147483645;
-        let ue_range: u64 = n as u64 + 1;
-        let scaling: u64 = urng_range / ue_range;
-        let past: u64 = ue_range * scaling;
-        loop {
-            // subtract min (1) to get range [0, 2147483645]
-            let ret: u64 = (self.next() as u64) - 1;
-            if ret < past {
-                return (ret / scaling) as usize;
-            }
-        }
-    }
-
-    /// Fisher-Yates shuffle matching C++ `std::shuffle`.
-    ///
-    /// For i in 1..n: swap v[i] with v[uniform_int(0, i)].
-    fn shuffle(&mut self, v: &mut [i32]) {
-        let n = v.len();
-        for i in 1..n {
-            let j = self.uniform_int(i);
-            v.swap(i, j);
-        }
-    }
-}
 
 // ============================================================================
 // Helper: L2 squared distance
@@ -150,7 +86,7 @@ fn estep(x: &[f32], centroids: &[f32], codes: &mut [u8], d: usize, n: usize) {
 /// M-step: recompute `centroids` (shape `KSUB × d`) as the mean of assigned
 /// points. Empty clusters are filled by splitting the largest cluster with a
 /// small perturbation, using `rng` for random tie-breaking.
-fn mstep(rng: &mut Minstd, x: &[f32], centroids: &mut [f32], codes: &[u8], d: usize, n: usize) {
+fn mstep(rng: &mut MinstdRng, x: &[f32], centroids: &mut [f32], codes: &[u8], d: usize, n: usize) {
     let ksub = KSUB as usize;
     let mut nelts = vec![0i32; ksub];
 
@@ -207,7 +143,7 @@ fn mstep(rng: &mut Minstd, x: &[f32], centroids: &mut [f32], codes: &[u8], d: us
 
 /// Run `niter` iterations of k-means on `n` points in `d` dimensions, writing
 /// `KSUB` centroids into `centroids` (length `KSUB * d`).
-fn kmeans(rng: &mut Minstd, x: &[f32], centroids: &mut [f32], n: usize, d: usize) {
+fn kmeans(rng: &mut MinstdRng, x: &[f32], centroids: &mut [f32], n: usize, d: usize) {
     let ksub = KSUB as usize;
 
     // Initialise centroids from a random permutation of the data points.
@@ -255,7 +191,7 @@ pub struct ProductQuantizer {
     /// - m == nsubq-1: starts at `m * KSUB * dsub + i * lastdsub`
     pub centroids: Vec<f32>,
     /// Internal RNG for training.
-    rng: Minstd,
+    rng: MinstdRng,
 }
 
 impl ProductQuantizer {
@@ -277,7 +213,7 @@ impl ProductQuantizer {
             dsub,
             lastdsub,
             centroids: vec![0.0f32; (dim * KSUB) as usize],
-            rng: Minstd::new(SEED),
+            rng: MinstdRng::new(SEED),
         }
     }
 
@@ -532,7 +468,7 @@ impl ProductQuantizer {
             dsub,
             lastdsub,
             centroids,
-            rng: Minstd::new(SEED),
+            rng: MinstdRng::new(SEED),
         })
     }
 }

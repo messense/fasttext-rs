@@ -1,43 +1,20 @@
-use std::fmt;
 use std::io;
 
 /// Error type for all fastText operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum FastTextError {
     /// An I/O error occurred.
-    IoError(io::Error),
+    #[error("I/O error: {0}")]
+    IoError(#[from] io::Error),
     /// An invalid argument was provided.
+    #[error("Invalid argument: {0}")]
     InvalidArgument(String),
     /// The model file is invalid or corrupted.
+    #[error("Invalid model: {0}")]
     InvalidModel(String),
     /// A NaN value was encountered during computation.
+    #[error("Encountered NaN")]
     EncounteredNaN,
-}
-
-impl fmt::Display for FastTextError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FastTextError::IoError(err) => write!(f, "I/O error: {}", err),
-            FastTextError::InvalidArgument(msg) => write!(f, "Invalid argument: {}", msg),
-            FastTextError::InvalidModel(msg) => write!(f, "Invalid model: {}", msg),
-            FastTextError::EncounteredNaN => write!(f, "Encountered NaN"),
-        }
-    }
-}
-
-impl std::error::Error for FastTextError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            FastTextError::IoError(err) => Some(err),
-            _ => None,
-        }
-    }
-}
-
-impl From<io::Error> for FastTextError {
-    fn from(err: io::Error) -> Self {
-        FastTextError::IoError(err)
-    }
 }
 
 /// A specialized `Result` type for fastText operations.

@@ -54,10 +54,67 @@ impl MinstdRng {
         self.state
     }
 
+    /// Generate a uniform real in `[0, 1)` matching C++ `std::uniform_real_distribution<>(0, 1)`.
+    ///
+    /// libc++ maps minstd_rand output `s` (in `[1, 2147483646]`) to:
+    /// `(s - min) / (max - min + 1) = (s - 1) / 2147483646`
+    pub fn uniform_real(&mut self) -> f64 {
+        (self.generate() as f64 - 1.0) / 2147483646.0
+    }
+
+    /// Generate a uniform integer in `[0, n]` inclusive.
+    ///
+    /// Uses the scaling + rejection approach from libstdc++ `uniform_int_distribution`,
+    /// which avoids modulo bias.
+    pub fn uniform_int(&mut self, n: usize) -> usize {
+        if n == 0 {
+            return 0;
+        }
+        let urng_range: u64 = Self::M - 2; // 2147483645
+        let ue_range: u64 = n as u64 + 1;
+        let scaling: u64 = urng_range / ue_range;
+        let past: u64 = ue_range * scaling;
+        loop {
+            // subtract min (1) to get range [0, 2147483645]
+            let ret: u64 = self.generate() - 1;
+            if ret < past {
+                return (ret / scaling) as usize;
+            }
+        }
+    }
+
+    /// Fisher-Yates shuffle matching C++ `std::shuffle`.
+    ///
+    /// For i in 1..n: swap v[i] with v[uniform_int(0, i)].
+    pub fn shuffle(&mut self, v: &mut [i32]) {
+        let n = v.len();
+        for i in 1..n {
+            let j = self.uniform_int(i);
+            v.swap(i, j);
+        }
+    }
+
     /// Return a uniform value in `[0, n)`.
+    ///
+    /// Uses rejection sampling to avoid modulo bias, matching the behavior
+    /// of C++ `std::uniform_int_distribution`.
     #[inline]
     pub fn uniform_usize(&mut self, n: usize) -> usize {
-        self.generate() as usize % n
+        if n <= 1 {
+            return 0;
+        }
+        // Range of generate() is [1, M-1], so urng_range = M - 2.
+        let urng_range: u64 = Self::M - 2;
+        let ue_range: u64 = n as u64;
+        let scaling: u64 = (urng_range + 1) / ue_range;
+        let past: u64 = ue_range * scaling;
+        loop {
+            // Shift generate() output from [1, M-1] to [0, M-2].
+            let ret: u64 = self.generate() - 1;
+            if ret < past {
+                return (ret / scaling) as usize;
+            }
+        }
     }
 }
 
@@ -263,13 +320,11 @@ impl Model {
         if self.normalize_gradient {
             state.grad.mul(1.0 / input_ids.len() as f32);
         }
-        // Hogwild!: unsynchronised write to wi is intentional (matching C++).
-        // SAFETY: concurrent lock-free writes to different rows are benign by
-        // the Hogwild! algorithm; same pattern used in loss.rs for wo.
-        let wi_ptr = Arc::as_ptr(&self.wi) as *mut DenseMatrix;
+        // Hogwild! unsynchronised write to wi (matching C++ fastText).
+        // SAFETY: see DenseMatrix::add_vector_to_row_unsync documentation.
         for &idx in input_ids {
             unsafe {
-                (*wi_ptr).add_vector_to_row(&state.grad, idx as i64, 1.0);
+                self.wi.add_vector_to_row_unsync(&state.grad, idx as i64, 1.0);
             }
         }
     }

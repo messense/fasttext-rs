@@ -189,6 +189,30 @@ impl DenseMatrix {
         &mut self.data_mut()[start..end]
     }
 
+    /// Add `scale * vec` to row `i` without requiring `&mut self`.
+    ///
+    /// # Safety
+    ///
+    /// This method implements the Hogwild! algorithm (Recht et al., 2011), which
+    /// intentionally allows concurrent, unsynchronized writes to shared weight
+    /// matrices during multi-threaded SGD training — exactly as C++ fastText does.
+    ///
+    /// The caller must ensure:
+    /// 1. The matrix is alive (held via `Arc`) for the duration of the call.
+    /// 2. Only `f32` element writes occur — no structural mutations (resize, etc.).
+    /// 3. The caller accepts that concurrent writes to the same element produce
+    ///    benign numerical noise (proven convergent by Hogwild! theory).
+    ///
+    /// Individual `f32` writes are atomic on all platforms we target (x86_64, aarch64),
+    /// so no torn reads can occur.
+    pub unsafe fn add_vector_to_row_unsync(&self, vec: &Vector, i: i64, scale: f32) {
+        debug_assert!(i >= 0 && i < self.m, "Row index out of bounds");
+        debug_assert_eq!(vec.len(), self.n as usize);
+        let start = (i as usize) * (self.n as usize);
+        let row = std::slice::from_raw_parts_mut(self.ptr.add(start), self.n as usize);
+        add_vector_impl(row, vec.data(), scale);
+    }
+
     /// Set all elements to zero.
     pub fn zero(&mut self) {
         let data = self.data_mut();

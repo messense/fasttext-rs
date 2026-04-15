@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::args::{Args, LossName, ModelName};
 use crate::dictionary::{Dictionary, EntryType, EOS};
 use crate::error::{FastTextError, Result};
-use crate::loss::{find_k_best, HierarchicalSoftmaxLoss, Loss, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
+use crate::loss::{find_k_best, HierarchicalSoftmaxLoss, Loss, LossTables, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
 use crate::matrix::{DenseMatrix, Matrix};
 use crate::meter::Meter;
 use crate::model::{Model, Predictions, State};
@@ -61,19 +61,6 @@ pub struct Prediction {
     pub prob: f32,
     /// The label string (e.g. `"__label__baking"`).
     pub label: String,
-}
-
-/// Read a boolean (1 byte) from a reader.
-fn read_bool<R: Read>(reader: &mut R) -> Result<bool> {
-    let mut buf = [0u8; 1];
-    reader.read_exact(&mut buf)?;
-    Ok(buf[0] != 0)
-}
-
-/// Write a boolean (1 byte) to a writer.
-fn write_bool<W: Write>(writer: &mut W, value: bool) -> Result<()> {
-    writer.write_all(&[value as u8])?;
-    Ok(())
 }
 
 /// Build the appropriate loss function based on `args.loss()`.
@@ -210,7 +197,7 @@ impl FastText {
         let dict = Dictionary::load_from_reader(reader, args_arc)?;
 
         // 5. Read quant_input flag
-        let quant_input = read_bool(reader)?;
+        let quant_input = utils::read_bool(reader)?;
 
         // 6. Load input matrix
         let (input_dense, input_quant) = if !quant_input {
@@ -232,7 +219,7 @@ impl FastText {
         }
 
         // 7. Read qout flag (stored in args)
-        let qout = read_bool(reader)?;
+        let qout = utils::read_bool(reader)?;
         args.set_qout(qout);
 
         // 8. Load output matrix
@@ -300,7 +287,7 @@ impl FastText {
         // 4. Dictionary block
         self.dict.save(writer)?;
         // 5. quant_input
-        write_bool(writer, self.quant)?;
+        utils::write_bool(writer, self.quant)?;
         // 6. Input matrix
         if self.quant {
             if let Some(ref qm) = self.quant_input {
@@ -314,7 +301,7 @@ impl FastText {
             self.input.save(writer)?;
         }
         // 7. qout
-        write_bool(writer, self.args.qout())?;
+        utils::write_bool(writer, self.args.qout())?;
         // 8. Output matrix
         if self.quant && self.args.qout() {
             if let Some(ref qm) = self.quant_output {
@@ -644,8 +631,9 @@ impl FastText {
     ///
     /// Computes hidden from `quant_input`, then computes output scores using
     /// `quant_output` (if present) or the dense `output` matrix.  Applies
-    /// softmax normalization (for supervised models) and returns top-k predictions
-    /// as (log_probability, label_index) pairs.
+    /// the appropriate normalization based on the configured loss function
+    /// (softmax, OVA/sigmoid, or HS) and returns top-k predictions as
+    /// (log_probability, label_index) pairs.
     fn predict_raw_quantized(
         &self,
         word_ids: &[i32],
@@ -683,19 +671,31 @@ impl FastText {
             }
         }
 
-        // Apply softmax normalization (standard for supervised models).
-        let max = state.output.data()[..osz]
-            .iter()
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let mut z = 0.0f32;
-        for i in 0..osz {
-            state.output[i] = (state.output[i] - max).exp();
-            z += state.output[i];
-        }
-        if z > 0.0 {
-            for i in 0..osz {
-                state.output[i] /= z;
+        // Apply the appropriate normalization based on loss type.
+        match self.args.loss() {
+            LossName::OVA => {
+                // One-vs-all: independent sigmoid per class.
+                let tables = LossTables::new();
+                for i in 0..osz {
+                    state.output[i] = tables.sigmoid(state.output[i]);
+                }
+            }
+            _ => {
+                // Softmax (and NS, which also uses softmax for prediction).
+                let max = state.output.data()[..osz]
+                    .iter()
+                    .cloned()
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let mut z = 0.0f32;
+                for i in 0..osz {
+                    state.output[i] = (state.output[i] - max).exp();
+                    z += state.output[i];
+                }
+                if z > 0.0 {
+                    for i in 0..osz {
+                        state.output[i] /= z;
+                    }
+                }
             }
         }
 

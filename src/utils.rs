@@ -73,6 +73,19 @@ pub fn write_f64<W: Write>(writer: &mut W, value: f64) -> Result<()> {
     Ok(())
 }
 
+/// Read a boolean (1 byte) from a reader.
+pub fn read_bool<R: Read>(reader: &mut R) -> Result<bool> {
+    let mut buf = [0u8; 1];
+    reader.read_exact(&mut buf)?;
+    Ok(buf[0] != 0)
+}
+
+/// Write a boolean (1 byte) to a writer.
+pub fn write_bool<W: Write>(writer: &mut W, value: bool) -> Result<()> {
+    writer.write_all(&[value as u8])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

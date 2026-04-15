@@ -12,23 +12,6 @@ use crate::utils;
 use crate::vector::Vector;
 
 // ============================================================================
-// Helper I/O functions
-// ============================================================================
-
-/// Read a boolean (1 byte) from a reader.
-fn read_bool<R: Read>(reader: &mut R) -> Result<bool> {
-    let mut buf = [0u8; 1];
-    reader.read_exact(&mut buf)?;
-    Ok(buf[0] != 0)
-}
-
-/// Write a boolean (1 byte) to a writer.
-fn write_bool<W: Write>(writer: &mut W, value: bool) -> Result<()> {
-    writer.write_all(&[value as u8])?;
-    Ok(())
-}
-
-// ============================================================================
 // QuantMatrix
 // ============================================================================
 
@@ -234,7 +217,7 @@ impl Matrix for QuantMatrix {
     ///   npq:        ProductQuantizer (variable)
     /// ```
     fn save<W: Write>(&self, writer: &mut W) -> Result<()> {
-        write_bool(writer, self.qnorm)?;
+        utils::write_bool(writer, self.qnorm)?;
         utils::write_i64(writer, self.m)?;
         utils::write_i64(writer, self.n)?;
         utils::write_i32(writer, self.codesize)?;
@@ -256,7 +239,7 @@ impl Matrix for QuantMatrix {
     ///
     /// Reads the same layout as `save`.
     fn load<R: Read>(reader: &mut R) -> Result<Self> {
-        let qnorm = read_bool(reader)?;
+        let qnorm = utils::read_bool(reader)?;
         let m = utils::read_i64(reader)?;
         let n = utils::read_i64(reader)?;
         let codesize = utils::read_i32(reader)?;
@@ -787,7 +770,7 @@ mod tests {
     fn test_qm_load_negative_dims_rejected() {
         // Negative m or n should produce InvalidModel error.
         let mut buf = Vec::new();
-        write_bool(&mut buf, false).unwrap(); // qnorm
+        utils::write_bool(&mut buf, false).unwrap(); // qnorm
         utils::write_i64(&mut buf, -1).unwrap(); // m (invalid)
         utils::write_i64(&mut buf, 4).unwrap(); // n
         utils::write_i32(&mut buf, 0).unwrap(); // codesize
@@ -800,7 +783,7 @@ mod tests {
     #[test]
     fn test_qm_load_negative_codesize_rejected() {
         let mut buf = Vec::new();
-        write_bool(&mut buf, false).unwrap();
+        utils::write_bool(&mut buf, false).unwrap();
         utils::write_i64(&mut buf, 4).unwrap(); // m
         utils::write_i64(&mut buf, 4).unwrap(); // n
         utils::write_i32(&mut buf, -1).unwrap(); // codesize (invalid)
@@ -828,7 +811,7 @@ mod tests {
 
         // Build a binary that claims codesize=10 (wrong; should be m*nsubq = 4*2 = 8).
         let mut buf = Vec::new();
-        write_bool(&mut buf, false).unwrap(); // qnorm=false
+        utils::write_bool(&mut buf, false).unwrap(); // qnorm=false
         utils::write_i64(&mut buf, 4).unwrap(); // m=4
         utils::write_i64(&mut buf, 4).unwrap(); // n=4
         utils::write_i32(&mut buf, 10).unwrap(); // codesize=10 (WRONG)
