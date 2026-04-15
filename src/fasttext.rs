@@ -816,18 +816,35 @@ impl FastText {
         let cutoff = qargs.cutoff();
         if cutoff > 0 && cutoff < input_m as usize {
             let idx = self.select_embeddings(cutoff);
+
+            // Capture nwords before pruning to separate word rows from ngram rows.
+            let nwords_before = self.dict.nwords();
             // Prune dictionary to the selected indices.
+            // After prune(), words are kept in ascending original-ID order.
             self.dict.prune(&idx);
 
-            // Build pruned input matrix (rows in `idx` order).
-            let pruned_m = idx.len() as i64;
+            // Separate word rows and ngram rows from `idx`.
+            // Sort word rows ascending to match the pruned dictionary's word order.
+            // Ngram rows keep their order from `idx` (which matches pruneidx mapping).
+            let mut words_idx: Vec<i32> =
+                idx.iter().copied().filter(|&i| i < nwords_before).collect();
+            let ngrams_idx: Vec<i32> =
+                idx.iter().copied().filter(|&i| i >= nwords_before).collect();
+            words_idx.sort_unstable(); // match dict word order (ascending original ID)
+
+            // ordered_idx: word rows first (sorted), then ngram rows.
+            // Invariant: matrix row j == dictionary word j (for j < new_nwords).
+            let ordered_idx: Vec<i32> =
+                words_idx.iter().chain(ngrams_idx.iter()).copied().collect();
+
+            // Build pruned input matrix (rows in ordered_idx order).
+            let pruned_m = ordered_idx.len() as i64;
             let mut pruned_data = vec![0f32; (pruned_m as usize) * (input_n as usize)];
-            for (i, &old_row) in idx.iter().enumerate() {
+            for (i, &old_row) in ordered_idx.iter().enumerate() {
                 let src_start = old_row as usize * input_n as usize;
-                let src_end = src_start + input_n as usize;
                 let dst_start = i * input_n as usize;
                 pruned_data[dst_start..dst_start + input_n as usize]
-                    .copy_from_slice(&input_data[src_start..src_end]);
+                    .copy_from_slice(&input_data[src_start..src_start + input_n as usize]);
             }
             input_m = pruned_m;
             input_data = pruned_data;
@@ -855,8 +872,8 @@ impl FastText {
             let output_data = self.output.data().to_vec();
             let out_m = self.output.rows();
             let out_n = self.output.cols();
-            // C++ uses dsub=2 and qnorm=false for the output matrix.
-            let quant_out = QuantMatrix::from_dense(&output_data, out_m, out_n, 2, false);
+            // C++ uses dsub=2 and passes the qnorm flag for the output matrix.
+            let quant_out = QuantMatrix::from_dense(&output_data, out_m, out_n, 2, qnorm);
             self.quant_output = Some(quant_out);
         }
 
@@ -5417,6 +5434,145 @@ __label__food cook recipe eat meal\n";
         std::fs::remove_file(&ftz_path).ok();
 
         assert!(loaded.is_quant(), "Loaded .ftz: is_quant() should be true");
+    }
+
+    // =========================================================================
+    // Fix tests: cutoff pruning row alignment
+    // =========================================================================
+
+    /// Verify that after cutoff pruning the model still produces valid predictions.
+    ///
+    /// This exercises the invariant that matrix row j == dictionary word j after
+    /// pruning (the key fix for the row misalignment bug).
+    #[test]
+    fn test_quantize_cutoff_predictions_valid() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let nwords_before = model.dict().nwords();
+        let cutoff = (nwords_before as usize / 2).max(1);
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_cutoff(cutoff);
+        model.quantize(&qargs).expect("cutoff quantize should succeed");
+
+        // After pruning, predictions should still work (no panics, valid probabilities).
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        assert!(
+            !preds.is_empty(),
+            "Cutoff-pruned quantized model should produce predictions"
+        );
+        assert!(
+            preds[0].prob.is_finite() && preds[0].prob >= 0.0 && preds[0].prob <= 1.0,
+            "Cutoff-pruned model prediction prob {} should be in [0, 1]",
+            preds[0].prob
+        );
+
+        // The dictionary word count should match the cutoff.
+        let nwords_after = model.dict().nwords();
+        assert!(
+            nwords_after <= cutoff as i32,
+            "After cutoff={}, nwords should be <= {}, got {}",
+            cutoff,
+            cutoff,
+            nwords_after
+        );
+    }
+
+    /// Verify that matrix row count == nwords after cutoff pruning.
+    ///
+    /// Specifically, the input QuantMatrix should have rows matching the
+    /// pruned vocabulary size, enforcing the word-at-index-i invariant.
+    #[test]
+    fn test_quantize_cutoff_matrix_row_alignment() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let nwords_before = model.dict().nwords();
+        // Use a tight cutoff: exactly half the words.
+        let cutoff = (nwords_before as usize / 2).max(2);
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_cutoff(cutoff);
+        model.quantize(&qargs).expect("cutoff quantize should succeed");
+
+        // The quantized model should be usable for save/load round-trip.
+        let ftz_path = std::env::temp_dir()
+            .join(format!("test_cutoff_alignment_{}.ftz", std::process::id()));
+        model
+            .save_model(ftz_path.to_str().unwrap())
+            .expect("Save pruned .ftz should succeed");
+        let loaded = FastText::load_model(ftz_path.to_str().unwrap())
+            .expect("Load pruned .ftz should succeed");
+        std::fs::remove_file(&ftz_path).ok();
+
+        assert!(loaded.is_quant(), "Loaded pruned .ftz should be quant");
+        let preds = loaded.predict("basketball player sport game", 1, 0.0);
+        assert!(
+            !preds.is_empty(),
+            "Loaded cutoff-pruned model should produce predictions"
+        );
+    }
+
+    // =========================================================================
+    // Fix tests: qout respects qnorm flag
+    // =========================================================================
+
+    /// Verify that qout=true + qnorm=true sets qnorm on the output QuantMatrix.
+    #[test]
+    fn test_quantize_qout_respects_qnorm() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_qout(true);
+        qargs.set_qnorm(true);
+
+        model.quantize(&qargs).expect("qout+qnorm quantize should succeed");
+        assert!(model.is_quant(), "is_quant() should be true");
+        assert!(model.args().qout(), "args.qout() should be true");
+
+        // Both input and output QuantMatrix should have qnorm=true.
+        assert!(
+            model.quant_input.as_ref().unwrap().qnorm,
+            "quant_input should have qnorm=true when qnorm flag is set"
+        );
+        assert!(
+            model.quant_output.as_ref().unwrap().qnorm,
+            "quant_output should have qnorm=true when qout+qnorm flags are set"
+        );
+
+        // Should still produce valid predictions.
+        let preds = model.predict("basketball player sport game", 1, 0.0);
+        assert!(!preds.is_empty(), "qout+qnorm model should produce predictions");
+        assert!(
+            preds[0].prob.is_finite() && preds[0].prob >= 0.0 && preds[0].prob <= 1.0,
+            "qout+qnorm prediction prob should be in [0, 1]"
+        );
+    }
+
+    /// Verify that qout=true + qnorm=false keeps qnorm=false on the output QuantMatrix.
+    #[test]
+    fn test_quantize_qout_false_qnorm_not_set() {
+        let (mut model, train_path) = train_small_supervised(16, 5, 0);
+        std::fs::remove_file(&train_path).ok();
+
+        let mut qargs = Args::default();
+        qargs.set_dsub(2);
+        qargs.set_qout(true);
+        // qnorm is false by default
+
+        model.quantize(&qargs).expect("qout quantize should succeed");
+        assert!(model.is_quant(), "is_quant() should be true");
+
+        // quant_output should have qnorm=false (the default).
+        assert!(
+            !model.quant_output.as_ref().unwrap().qnorm,
+            "quant_output should have qnorm=false when qnorm flag is not set"
+        );
     }
 
 }

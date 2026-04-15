@@ -1,7 +1,7 @@
 // Autotune and AutotuneStrategy: Gaussian perturbation, time-boxed hyperparameter search
 
 use std::io::BufReader;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,9 @@ use crate::args::{Args, LossName};
 use crate::error::{FastTextError, Result};
 use crate::fasttext::FastText;
 use crate::model::MinstdRng;
+
+/// Global counter for unique temp-file naming during model-size checks.
+static SIZE_CHECK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ============================================================================
 // Normal distribution sampler (Box-Muller transform)
@@ -262,6 +265,39 @@ impl AutotuneStrategy {
 /// Sentinel value for "no score found yet".
 const UNKNOWN_BEST_SCORE: f64 = f64::NEG_INFINITY;
 
+/// Parse a human-readable byte-size string into a `u64` byte count.
+///
+/// Supported formats (case-insensitive suffixes):
+/// - `"100"` or `"100B"` → 100 bytes
+/// - `"100K"` or `"100KB"` → 100 × 1 024 bytes
+/// - `"100M"` or `"100MB"` → 100 × 1 024² bytes
+/// - `"100G"` or `"100GB"` → 100 × 1 024³ bytes
+///
+/// Fractional values are supported (e.g. `"1.5M"`).  Returns `None` for
+/// unrecognised formats.
+fn parse_size_to_bytes(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Split at the first character that is not an ASCII digit or '.'.
+    let split_pos = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let num_str = &s[..split_pos];
+    let unit = s[split_pos..].trim();
+
+    let num: f64 = num_str.parse().ok()?;
+    let multiplier: u64 = match unit.to_ascii_uppercase().as_str() {
+        "" | "B" => 1,
+        "K" | "KB" => 1_024,
+        "M" | "MB" => 1_024 * 1_024,
+        "G" | "GB" => 1_024 * 1_024 * 1_024,
+        _ => return None,
+    };
+    Some((num * multiplier as f64) as u64)
+}
+
 /// Time-boxed hyperparameter search for fastText supervised models.
 ///
 /// Runs multiple training trials within the configured duration, evaluates
@@ -304,6 +340,16 @@ impl Autotune {
         let duration_secs = autotune_args.autotune_duration() as f64;
         let k = autotune_args.autotune_predictions().max(1) as usize;
         let metric = autotune_args.autotune_metric().to_string();
+
+        // Parse the model-size constraint once before the loop.
+        let model_size_bytes: Option<u64> = {
+            let size_str = autotune_args.autotune_model_size();
+            if size_str.is_empty() {
+                None
+            } else {
+                parse_size_to_bytes(size_str)
+            }
+        };
 
         // Mute verbose output during the search phase.
         let mut search_args = autotune_args.clone();
@@ -361,7 +407,7 @@ impl Autotune {
             }
 
             // Unwrap the thread result (skip on training errors or panics).
-            let model = match model_result {
+            let mut model = match model_result {
                 Ok(Ok(m)) => m,
                 Ok(Err(_e)) => {
                     // Training diverged (e.g., NaN loss) — skip this trial.
@@ -372,6 +418,43 @@ impl Autotune {
                     continue;
                 }
             };
+
+            // If model_size constraint is set, quantize the candidate and verify it fits.
+            if let Some(max_bytes) = model_size_bytes {
+                // Check remaining time before attempting potentially slow quantization.
+                if start.elapsed().as_secs_f64() >= duration_secs {
+                    break; // Time budget already exhausted.
+                }
+                let qargs = Args::default();
+                // Use standard quantization defaults for size checking
+                // (no cutoff, no retrain, no qout, no qnorm).
+                if model.quantize(&qargs).is_err() {
+                    continue;
+                }
+                // If quantization itself ran over the budget, stop the search.
+                if start.elapsed().as_secs_f64() >= duration_secs {
+                    break;
+                }
+                // Save the quantized model to a temp file and measure its size.
+                let tmp_path = std::env::temp_dir().join(format!(
+                    "fasttext_autotune_size_{}_{}.ftz",
+                    std::process::id(),
+                    SIZE_CHECK_COUNTER.fetch_add(1, Ordering::Relaxed)
+                ));
+                let tmp_str = tmp_path.to_string_lossy().to_string();
+                if model.save_model(&tmp_str).is_err() {
+                    std::fs::remove_file(&tmp_path).ok();
+                    continue;
+                }
+                let ftz_size =
+                    std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(u64::MAX);
+                std::fs::remove_file(&tmp_path).ok();
+                if ftz_size > max_bytes {
+                    // Quantized model exceeds the size constraint — skip this trial.
+                    continue;
+                }
+                // Model fits: evaluate the quantized model.
+            }
 
             // Evaluate on the validation file.
             let score = match Self::evaluate(&model, &val_path, k, &metric) {
@@ -404,13 +487,25 @@ impl Autotune {
 
     /// Evaluate `model` on the validation file at `val_path`.
     ///
-    /// Returns the metric score (currently always macro-F1).
-    fn evaluate(model: &FastText, val_path: &str, k: usize, _metric: &str) -> Result<f64> {
+    /// Dispatches to the correct metric based on `metric`:
+    /// - `"f1"` — macro F1 score (`meter.f1()`)
+    /// - `"f1:LABEL"` — per-label F1 score for the named label
+    /// - Other values — falls back to macro F1
+    fn evaluate(model: &FastText, val_path: &str, k: usize, metric: &str) -> Result<f64> {
         let file = std::fs::File::open(val_path).map_err(FastTextError::IoError)?;
         let mut reader = BufReader::new(file);
         let meter = model.test_model(&mut reader, k, 0.0)?;
-        // Default metric: macro F1 score.
-        Ok(meter.f1())
+        // Dispatch based on metric string.
+        if metric == "f1" {
+            Ok(meter.f1())
+        } else if let Some(label_name) = metric.strip_prefix("f1:") {
+            // Per-label F1: look up the label ID in the model's dictionary.
+            let label_id = model.dict().get_id(label_name);
+            Ok(meter.f1_for_label(label_id))
+        } else {
+            // Unknown or unsupported metric: fall back to macro F1.
+            Ok(meter.f1())
+        }
     }
 }
 
@@ -901,6 +996,129 @@ mod tests {
         assert!(
             result.is_err(),
             "Autotune with missing validation file should return an error"
+        );
+    }
+
+    // =========================================================================
+    // Fix tests: parse_size_to_bytes
+    // =========================================================================
+
+    #[test]
+    fn test_parse_size_to_bytes() {
+        assert_eq!(parse_size_to_bytes("100"), Some(100));
+        assert_eq!(parse_size_to_bytes("100B"), Some(100));
+        assert_eq!(parse_size_to_bytes("1K"), Some(1_024));
+        assert_eq!(parse_size_to_bytes("1KB"), Some(1_024));
+        assert_eq!(parse_size_to_bytes("2M"), Some(2 * 1_024 * 1_024));
+        assert_eq!(parse_size_to_bytes("2MB"), Some(2 * 1_024 * 1_024));
+        assert_eq!(parse_size_to_bytes("1G"), Some(1_024 * 1_024 * 1_024));
+        assert_eq!(parse_size_to_bytes("1GB"), Some(1_024 * 1_024 * 1_024));
+        // Fractional
+        let expected = (1.5 * 1_024.0 * 1_024.0) as u64;
+        assert_eq!(parse_size_to_bytes("1.5M"), Some(expected));
+        // Empty / unknown
+        assert_eq!(parse_size_to_bytes(""), None);
+        assert_eq!(parse_size_to_bytes("100X"), None);
+        // Case insensitive
+        assert_eq!(parse_size_to_bytes("1m"), Some(1_024 * 1_024));
+        assert_eq!(parse_size_to_bytes("1k"), Some(1_024));
+    }
+
+    // =========================================================================
+    // Fix tests: autotune evaluate() metric dispatch
+    // =========================================================================
+
+    /// Verify autotune runs successfully with a label-specific F1 metric.
+    #[test]
+    fn test_autotune_label_f1_metric() {
+        let train_data = make_train_data();
+        let train_path = write_temp(&train_data, "label_f1_train");
+        let val_data = make_val_data();
+        let val_path = write_temp(&val_data, "label_f1_val");
+
+        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        args.set_epoch(1);
+        args.set_dim(5);
+        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
+        args.set_autotune_duration(3);
+        // Use per-label F1 metric for the __label__sports class.
+        args.set_autotune_metric("f1:__label__sports".to_string());
+
+        let result = Autotune::run(args);
+        std::fs::remove_file(&train_path).ok();
+        std::fs::remove_file(&val_path).ok();
+
+        // Should complete without error and produce a usable model.
+        let model = result.expect("Autotune with label F1 metric should succeed");
+        let preds = model.predict("basketball player sport", 1, 0.0);
+        assert!(!preds.is_empty(), "Model from label-F1 autotune should produce predictions");
+    }
+
+    /// Verify autotune with default F1 metric still works after the dispatch refactor.
+    #[test]
+    fn test_autotune_default_f1_metric() {
+        let train_data = make_train_data();
+        let train_path = write_temp(&train_data, "default_f1_train");
+        let val_data = make_val_data();
+        let val_path = write_temp(&val_data, "default_f1_val");
+
+        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        args.set_epoch(1);
+        args.set_dim(5);
+        args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
+        args.set_autotune_duration(3);
+        args.set_autotune_metric("f1".to_string()); // explicit default
+
+        let result = Autotune::run(args);
+        std::fs::remove_file(&train_path).ok();
+        std::fs::remove_file(&val_path).ok();
+
+        let model = result.expect("Autotune with default F1 metric should succeed");
+        let preds = model.predict("banana fruit eat recipe", 1, 0.0);
+        assert!(!preds.is_empty(), "Model from default-F1 autotune should produce predictions");
+    }
+
+    // =========================================================================
+    // Fix tests: autotune model_size enforcement
+    // =========================================================================
+
+    /// Verify the quantize-save-size-check mechanism works correctly.
+    ///
+    /// Trains a small model, quantizes it, and checks that its .ftz size
+    /// is within expected bounds. This validates the core of model_size enforcement
+    /// without relying on autotune timing behaviour.
+    #[test]
+    fn test_autotune_model_size_check_mechanism() {
+        let train_data = make_train_data();
+        let train_path = write_temp(&train_data, "size_check_mech");
+        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        args.set_epoch(1);
+        args.set_dim(5);
+        let mut model = FastText::train(args).expect("Training should succeed");
+        std::fs::remove_file(&train_path).ok();
+
+        // Quantize the model using default settings.
+        let qargs = Args::default();
+        model.quantize(&qargs).expect("Quantize should succeed for size-check path");
+
+        // Save and measure size.
+        let tmp_path = std::env::temp_dir().join(format!(
+            "test_size_check_mech_{}.ftz",
+            std::process::id()
+        ));
+        model.save_model(tmp_path.to_str().unwrap()).expect("Save should succeed");
+        let ftz_size = std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
+        std::fs::remove_file(&tmp_path).ok();
+
+        // A real quantized model must be larger than 1 byte.
+        assert!(ftz_size > 1, "Quantized model should be > 1 byte; got {} bytes", ftz_size);
+
+        // Our tiny test model should be well under 10 MB.
+        let ten_mb = 10u64 * 1024 * 1024;
+        assert!(
+            ftz_size < ten_mb,
+            "Tiny test model should be < 10 MB; got {} bytes",
+            ftz_size
         );
     }
 }
