@@ -298,8 +298,64 @@ struct DumpArgs {
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Preprocess command-line arguments to support C++ fastText-style single-dash
+/// long flags (e.g. `-epoch 5`) in addition to the standard double-dash
+/// (`--epoch 5`).
+///
+/// Maps known single-dash C++ flags to their clap double-dash equivalents so
+/// that clap parsing works unchanged.
+fn normalize_args(raw: impl Iterator<Item = String>) -> Vec<String> {
+    // Mapping from single-dash C++ flag name → double-dash clap flag name.
+    // C++ uses camelCase; clap uses kebab-case.
+    const FLAG_MAP: &[(&str, &str)] = &[
+        ("-epoch",           "--epoch"),
+        ("-lr",              "--lr"),
+        ("-lrUpdateRate",    "--lr-update-rate"),
+        ("-dim",             "--dim"),
+        ("-ws",              "--ws"),
+        ("-minCount",        "--min-count"),
+        ("-minCountLabel",   "--min-count-label"),
+        ("-neg",             "--neg"),
+        ("-wordNgrams",      "--word-ngrams"),
+        ("-loss",            "--loss"),
+        ("-bucket",          "--bucket"),
+        ("-minn",            "--minn"),
+        ("-maxn",            "--maxn"),
+        ("-thread",          "--thread"),
+        ("-t",               "--t"),
+        ("-label",           "--label"),
+        ("-verbose",         "--verbose"),
+        ("-seed",            "--seed"),
+        ("-input",           "--input"),
+        ("-output",          "--output"),
+        ("-pretrainedVectors", "--pretrained-vectors"),
+        ("-saveOutput",      "--save-output"),
+        ("-cutoff",          "--cutoff"),
+        ("-retrain",         "--retrain"),
+        ("-qnorm",           "--qnorm"),
+        ("-qout",            "--qout"),
+        ("-dsub",            "--dsub"),
+        ("-autotuneValidationFile", "--autotune-validation-file"),
+        ("-autotuneDuration", "--autotune-duration"),
+        ("-autotuneModelSize", "--autotune-model-size"),
+        ("-autotuneMetric",  "--autotune-metric"),
+    ];
+
+    raw.map(|arg| {
+        for (single, double) in FLAG_MAP {
+            if arg == *single {
+                return double.to_string();
+            }
+        }
+        arg
+    })
+    .collect()
+}
+
 fn main() {
-    let cli = Cli::parse();
+    let raw_args = std::env::args();
+    let normalized = normalize_args(raw_args);
+    let cli = Cli::parse_from(normalized);
 
     match cli.command {
         Commands::Supervised(args) => run_train(args, ModelName::SUP),
@@ -469,13 +525,24 @@ fn run_predict(predict_args: PredictArgs, with_prob: bool) {
 
     let process_line = |line: &str, out: &mut dyn Write| {
         let predictions = model.predict(line, k, threshold);
-        for pred in &predictions {
-            if with_prob {
+        if with_prob {
+            // predict-prob: one "label prob" pair per line (C++ behavior).
+            for pred in &predictions {
                 writeln!(out, "{} {:.6}", pred.label, pred.prob)
                     .unwrap_or_else(|_| process::exit(1));
-            } else {
-                writeln!(out, "{}", pred.label)
-                    .unwrap_or_else(|_| process::exit(1));
+            }
+        } else {
+            // predict: all k labels on a single line separated by spaces (C++ behavior).
+            let mut first = true;
+            for pred in &predictions {
+                if !first {
+                    write!(out, " ").unwrap_or_else(|_| process::exit(1));
+                }
+                write!(out, "{}", pred.label).unwrap_or_else(|_| process::exit(1));
+                first = false;
+            }
+            if !predictions.is_empty() {
+                writeln!(out).unwrap_or_else(|_| process::exit(1));
             }
         }
     };

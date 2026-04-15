@@ -353,9 +353,9 @@ fn test_cross_train_save_load_predict() {
 /// default parameters. Autotune model must achieve higher F1 on the validation
 /// set than the default model.
 ///
-/// Uses a deliberately suboptimal baseline (epoch=1, dim=5) so autotune has
-/// room to improve, and gives autotune enough time (5 seconds) to find better
-/// hyperparameters.
+/// Uses reasonable baseline parameters (same as make_supervised_args) so that
+/// autotune is tested against a realistic starting point, not an intentionally
+/// weakened one.
 #[test]
 fn test_cross_autotune_outperforms() {
     let dir = temp_dir();
@@ -364,12 +364,10 @@ fn test_cross_autotune_outperforms() {
     let train_path = write_file(&dir, "train.txt", &train_data);
     let val_path = write_file(&dir, "val.txt", &val_data);
 
-    // Train a deliberately weak baseline (epoch=1, dim=5).
+    // Train a baseline model with standard (non-weakened) parameters.
     let baseline_output = dir.join("baseline").to_string_lossy().into_owned();
-    let mut baseline_args =
+    let baseline_args =
         make_supervised_args(train_path.to_str().unwrap(), &baseline_output);
-    baseline_args.set_epoch(1);
-    baseline_args.set_dim(5);
     let baseline_model = FastText::train(baseline_args).expect("Baseline training should succeed");
 
     // Compute baseline F1 on the validation set.
@@ -381,11 +379,9 @@ fn test_cross_autotune_outperforms() {
     let baseline_f1 = baseline_meter.f1();
 
     // Run autotune with a short budget (5 seconds) starting from the same
-    // weak baseline, so it has clear room to improve.
+    // standard parameters; autotune must match or improve upon the baseline.
     let mut autotune_args =
         make_supervised_args(train_path.to_str().unwrap(), "/dev/null");
-    autotune_args.set_epoch(1); // same starting point as baseline
-    autotune_args.set_dim(5);
     autotune_args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
     autotune_args.set_autotune_duration(5); // 5-second budget
     autotune_args.set_autotune_metric("f1".to_string());

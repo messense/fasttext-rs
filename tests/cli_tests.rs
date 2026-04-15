@@ -359,17 +359,25 @@ fn test_cli_predict_k() {
     );
 
     let lines: Vec<&str> = stdout.lines().collect();
+    // C++ fastText outputs all k labels for a single input on ONE line, space-separated.
     assert_eq!(
         lines.len(),
-        2,
-        "One input line with k=2 should produce 2 output lines, got: {:?}",
+        1,
+        "One input line with k=2 should produce 1 output line (all labels space-separated), got: {:?}",
         lines
     );
-    for line in &lines {
+    let labels: Vec<&str> = lines[0].split_whitespace().collect();
+    assert_eq!(
+        labels.len(),
+        2,
+        "Output line should have 2 space-separated labels for k=2, got: {:?}",
+        labels
+    );
+    for label in &labels {
         assert!(
-            line.starts_with("__label__"),
-            "Each output line should start with __label__, got: {}",
-            line
+            label.starts_with("__label__"),
+            "Each label should start with __label__, got: {}",
+            label
         );
     }
 }
@@ -641,6 +649,58 @@ fn test_cli_flag_passthrough() {
         model.args().dim(),
         20,
         "dim flag should be passed through to Args"
+    );
+}
+
+/// Verify that C++ fastText-style single-dash flags (e.g. `-epoch 3`) are
+/// accepted by the CLI and override the defaults correctly.
+#[test]
+fn test_cli_single_dash_flags() {
+    let dir = temp_dir();
+    let train_file = dir.join("train.txt");
+    let model_base = dir.join("single_dash_model");
+
+    write_train_data(&train_file);
+
+    // Use C++ single-dash flag style: -epoch, -dim, -thread, -minCount
+    let (stdout, stderr, code) = run_fasttext(
+        &[
+            "supervised",
+            "-input",
+            train_file.to_str().unwrap(),
+            "-output",
+            model_base.to_str().unwrap(),
+            "-epoch",
+            "3",
+            "-dim",
+            "15",
+            "-minCount",
+            "1",
+            "-thread",
+            "1",
+        ],
+        None,
+    );
+
+    assert_eq!(
+        code, 0,
+        "single-dash flag training failed\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
+
+    let model_bin = dir.join("single_dash_model.bin");
+    let model = fasttext::FastText::load_model(model_bin.to_str().unwrap())
+        .expect("Failed to load model for single-dash flag test");
+
+    assert_eq!(
+        model.args().epoch(),
+        3,
+        "-epoch flag should override default epoch"
+    );
+    assert_eq!(
+        model.args().dim(),
+        15,
+        "-dim flag should override default dim"
     );
 }
 

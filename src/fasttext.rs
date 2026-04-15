@@ -15,6 +15,7 @@ use crate::meter::Meter;
 use crate::model::{Model, Predictions, State};
 use crate::quant_matrix::QuantMatrix;
 use crate::utils;
+use crate::vector::Vector;
 
 /// Magic number identifying a valid fastText binary model file.
 pub const FASTTEXT_FILEFORMAT_MAGIC_INT32: i32 = 793712314;
@@ -382,10 +383,21 @@ impl FastText {
             return result;
         }
         let scale = 1.0 / ids.len() as f32;
-        for &id in &ids {
-            let row = self.input.row(id as i64);
-            for (r, &v) in result.iter_mut().zip(row.iter()) {
-                *r += v * scale;
+        if self.quant {
+            // Quantized path: use QuantMatrix reconstruction.
+            if let Some(ref qi) = self.quant_input {
+                let mut vec = Vector::new(dim);
+                for &id in &ids {
+                    qi.add_row_to_vector(&mut vec, id, scale);
+                }
+                result.copy_from_slice(vec.data());
+            }
+        } else {
+            for &id in &ids {
+                let row = self.input.row(id as i64);
+                for (r, &v) in result.iter_mut().zip(row.iter()) {
+                    *r += v * scale;
+                }
             }
         }
         result
@@ -425,17 +437,31 @@ impl FastText {
             }
 
             let count = words.len() as f32;
-            for &id in &words {
-                let row = self.input.row(id as i64);
-                for (r, &v) in result.iter_mut().zip(row.iter()) {
-                    *r += v;
+            if self.quant {
+                // Quantized path: use QuantMatrix reconstruction.
+                if let Some(ref qi) = self.quant_input {
+                    let mut vec = Vector::new(dim);
+                    for &id in &words {
+                        qi.add_row_to_vector(&mut vec, id, 1.0);
+                    }
+                    for (r, &v) in result.iter_mut().zip(vec.data().iter()) {
+                        *r = v / count;
+                    }
+                }
+            } else {
+                for &id in &words {
+                    let row = self.input.row(id as i64);
+                    for (r, &v) in result.iter_mut().zip(row.iter()) {
+                        *r += v;
+                    }
+                }
+                for r in &mut result {
+                    *r /= count;
                 }
             }
-            for r in &mut result {
-                *r /= count;
-            }
         } else {
-            // Unsupervised: split whitespace, get word vector, L2-normalize, average
+            // Unsupervised: split whitespace, get word vector, L2-normalize, average.
+            // get_word_vector() already handles the quant path internally.
             let mut count = 0i32;
             for word in sentence.split_whitespace() {
                 let vec = self.get_word_vector(word);
@@ -764,8 +790,17 @@ impl FastText {
             .map(|(id, s)| {
                 let mut vec = vec![0.0f32; dim];
                 if id >= 0 {
-                    let row = self.input.row(id as i64);
-                    vec.copy_from_slice(row);
+                    if self.quant {
+                        // Quantized path: use QuantMatrix reconstruction.
+                        if let Some(ref qi) = self.quant_input {
+                            let mut v = Vector::new(dim);
+                            qi.add_row_to_vector(&mut v, id, 1.0);
+                            vec.copy_from_slice(v.data());
+                        }
+                    } else {
+                        let row = self.input.row(id as i64);
+                        vec.copy_from_slice(row);
+                    }
                 }
                 (s, vec)
             })
