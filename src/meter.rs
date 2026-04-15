@@ -19,19 +19,21 @@ struct LabelMetrics {
 }
 
 impl LabelMetrics {
-    /// Returns precision for this label, or 0.0 when no predictions were made.
+    /// Returns precision for this label, or `NaN` when no predictions were made.
+    /// Matches C++ `Metrics::precision()`.
     fn precision(&self) -> f64 {
         if self.predicted == 0 {
-            0.0
+            f64::NAN
         } else {
             self.predicted_gold as f64 / self.predicted as f64
         }
     }
 
-    /// Returns recall for this label, or 0.0 when there are no gold examples.
+    /// Returns recall for this label, or `NaN` when there are no gold examples.
+    /// Matches C++ `Metrics::recall()`.
     fn recall(&self) -> f64 {
         if self.gold == 0 {
-            0.0
+            f64::NAN
         } else {
             self.predicted_gold as f64 / self.gold as f64
         }
@@ -39,14 +41,13 @@ impl LabelMetrics {
 
     /// Returns F1 score for this label.
     ///
-    /// Returns `0.0` (not NaN) when both precision and recall are zero.
+    /// Returns `NaN` when both predicted and gold are zero.
+    /// Matches C++ `Metrics::f1Score()`.
     fn f1(&self) -> f64 {
-        let p = self.precision();
-        let r = self.recall();
-        if p + r == 0.0 {
-            0.0
+        if self.predicted + self.gold == 0 {
+            f64::NAN
         } else {
-            2.0 * p * r / (p + r)
+            2.0 * self.predicted_gold as f64 / (self.predicted + self.gold) as f64
         }
     }
 }
@@ -162,32 +163,35 @@ impl Meter {
 
     /// Precision for a specific label.
     ///
-    /// Returns `0.0` if the label was never predicted or is unknown.
+    /// Returns `NaN` if the label was never predicted or is unknown.
+    /// Matches C++ `Meter::precision(labelId)`.
     pub fn precision_for_label(&self, label_id: i32) -> f64 {
         self.label_metrics
             .get(&label_id)
             .map(|lm| lm.precision())
-            .unwrap_or(0.0)
+            .unwrap_or(f64::NAN)
     }
 
     /// Recall for a specific label.
     ///
-    /// Returns `0.0` if the label never appeared in the gold set or is unknown.
+    /// Returns `NaN` if the label never appeared in the gold set or is unknown.
+    /// Matches C++ `Meter::recall(labelId)`.
     pub fn recall_for_label(&self, label_id: i32) -> f64 {
         self.label_metrics
             .get(&label_id)
             .map(|lm| lm.recall())
-            .unwrap_or(0.0)
+            .unwrap_or(f64::NAN)
     }
 
     /// F1 score for a specific label.
     ///
-    /// Returns `0.0` (not NaN) when both precision and recall are zero, or when unknown.
+    /// Returns `NaN` when both precision and recall are zero, or when unknown.
+    /// Matches C++ `Meter::f1Score(labelId)`.
     pub fn f1_for_label(&self, label_id: i32) -> f64 {
         self.label_metrics
             .get(&label_id)
             .map(|lm| lm.f1())
-            .unwrap_or(0.0)
+            .unwrap_or(f64::NAN)
     }
 
     // -------------------------------------------------------------------------
@@ -294,10 +298,32 @@ impl Meter {
     /// Write general metrics (N, P@k, R@k) to `stdout`.
     ///
     /// Mirrors `Meter::writeGeneralMetrics` from C++ fastText.
+    /// C++ uses `std::setprecision(3)` (3 significant digits, not fixed).
     pub fn write_general_metrics(&self, k: i32) {
+        fn fmt3(val: f64) -> String {
+            // Match C++ setprecision(3): 3 significant digits, no trailing zeros.
+            let s = format!("{:.2e}", val);
+            let e_pos = s.find('e').unwrap();
+            let exp: i32 = s[e_pos + 1..].parse().unwrap();
+            if exp >= -4 && exp < 3 {
+                let dec = if exp >= 0 {
+                    2usize.saturating_sub(exp as usize)
+                } else {
+                    2 + (-exp) as usize
+                };
+                let fixed = format!("{:.prec$}", val, prec = dec);
+                if fixed.contains('.') {
+                    fixed.trim_end_matches('0').trim_end_matches('.').to_string()
+                } else {
+                    fixed
+                }
+            } else {
+                s
+            }
+        }
         println!("N\t{}", self.n_examples);
-        println!("P@{}\t{:.3}", k, self.precision());
-        println!("R@{}\t{:.3}", k, self.recall());
+        println!("P@{}\t{}", k, fmt3(self.precision()));
+        println!("R@{}\t{}", k, fmt3(self.recall()));
     }
 }
 
@@ -450,33 +476,26 @@ mod tests {
     }
 
     #[test]
-    fn test_meter_f1_not_nan_per_label() {
-        // Per-label F1 should also be 0.0, not NaN, when no TP.
+    fn test_meter_f1_nan_per_label() {
+        // Per-label metrics match C++: NaN when denominator is zero.
         let mut meter = Meter::new();
         // Predict label 0 (wrong), gold is label 1.
         meter.add(&[(0.9, 0)], &[1], 1);
 
-        // For label 0: predicted=1, predictedGold=0, gold=0 → p=0.0, r=0.0
+        // For label 0: predicted=1, predictedGold=0, gold=0
+        // precision=0/1=0.0, recall=NaN (gold==0), f1=0/1=0.0
         let f0 = meter.f1_for_label(0);
-        assert!(
-            f0.is_finite(),
-            "Per-label F1 should be finite, got {}",
-            f0
-        );
         assert_eq!(f0, 0.0);
+        assert!(meter.recall_for_label(0).is_nan());
 
-        // For label 1: predicted=0, predictedGold=0, gold=1 → p=0.0, r=0.0
+        // For label 1: predicted=0, predictedGold=0, gold=1
+        // precision=NaN (predicted==0), recall=0/1=0.0, f1=0/1=0.0
         let f1 = meter.f1_for_label(1);
-        assert!(
-            f1.is_finite(),
-            "Per-label F1 should be finite, got {}",
-            f1
-        );
         assert_eq!(f1, 0.0);
+        assert!(meter.precision_for_label(1).is_nan());
 
-        // Unknown label
-        let f99 = meter.f1_for_label(99);
-        assert_eq!(f99, 0.0);
+        // Unknown label → NaN (matching C++ auto-insert of default Metrics)
+        assert!(meter.f1_for_label(99).is_nan());
     }
 
     #[test]
@@ -559,10 +578,11 @@ mod tests {
 
     #[test]
     fn test_meter_per_label_unknown() {
+        // Unknown labels return NaN, matching C++ auto-insert behavior.
         let meter = Meter::new();
-        assert_eq!(meter.precision_for_label(42), 0.0);
-        assert_eq!(meter.recall_for_label(42), 0.0);
-        assert_eq!(meter.f1_for_label(42), 0.0);
+        assert!(meter.precision_for_label(42).is_nan());
+        assert!(meter.recall_for_label(42).is_nan());
+        assert!(meter.f1_for_label(42).is_nan());
     }
 
     // -------------------------------------------------------------------------

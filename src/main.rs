@@ -390,6 +390,39 @@ fn parse_loss(s: &str) -> Option<LossName> {
     }
 }
 
+/// Format an f64 like C++ `std::cout` with `std::setprecision(n)` (default notation).
+/// This matches C++ `printf("%.*g", n, val)` behavior.
+fn cpp_default_format(val: f64, sig_digits: usize) -> String {
+    let sci = format!("{:.prec$e}", val, prec = sig_digits.saturating_sub(1));
+    let e_pos = sci.find('e').unwrap();
+    let exp: i32 = sci[e_pos + 1..].parse().unwrap();
+
+    // C++ default notation: use fixed if -4 <= exp < sig_digits, else scientific.
+    if exp >= -4 && exp < sig_digits as i32 {
+        let decimal_places = if exp >= 0 {
+            sig_digits.saturating_sub(1 + exp as usize)
+        } else {
+            sig_digits + (-exp as usize) - 1
+        };
+        let fixed = format!("{:.prec$}", val, prec = decimal_places);
+        if fixed.contains('.') {
+            fixed.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            fixed
+        }
+    } else {
+        // C++ uses zero-padded 2-digit exponents and strips trailing zeros from mantissa.
+        let mantissa = sci[..e_pos].trim_end_matches('0').trim_end_matches('.');
+        let exp_sign = if exp < 0 { "-" } else { "+" };
+        let exp_abs = exp.unsigned_abs();
+        if exp_abs < 10 {
+            format!("{}e{}{:02}", mantissa, exp_sign, exp_abs)
+        } else {
+            format!("{}e{}{}", mantissa, exp_sign, exp_abs)
+        }
+    }
+}
+
 /// Load a model from `path`, exiting with an error message if it fails.
 fn load_model_or_exit(path: &str) -> FastText {
     if !std::path::Path::new(path).exists() {
@@ -525,26 +558,20 @@ fn run_predict(predict_args: PredictArgs, with_prob: bool) {
 
     let process_line = |line: &str, out: &mut dyn Write| {
         let predictions = model.predict(line, k, threshold);
-        if with_prob {
-            // predict-prob: one "label prob" pair per line (C++ behavior).
-            for pred in &predictions {
-                writeln!(out, "{} {:.6}", pred.label, pred.prob)
+        // C++ printPredictions: all on one line, space-separated.
+        let mut first = true;
+        for pred in &predictions {
+            if !first {
+                write!(out, " ").unwrap_or_else(|_| process::exit(1));
+            }
+            first = false;
+            write!(out, "{}", pred.label).unwrap_or_else(|_| process::exit(1));
+            if with_prob {
+                write!(out, " {}", cpp_default_format(pred.prob as f64, 6))
                     .unwrap_or_else(|_| process::exit(1));
             }
-        } else {
-            // predict: all k labels on a single line separated by spaces (C++ behavior).
-            let mut first = true;
-            for pred in &predictions {
-                if !first {
-                    write!(out, " ").unwrap_or_else(|_| process::exit(1));
-                }
-                write!(out, "{}", pred.label).unwrap_or_else(|_| process::exit(1));
-                first = false;
-            }
-            if !predictions.is_empty() {
-                writeln!(out).unwrap_or_else(|_| process::exit(1));
-            }
         }
+        writeln!(out).unwrap_or_else(|_| process::exit(1));
     };
 
     if predict_args.input == "-" {
@@ -598,18 +625,36 @@ fn run_test(test_args: TestEvalArgs, per_label: bool) {
     };
 
     if per_label {
-        // Print per-label metrics: label, precision, recall, F1
         let nlabels = model.dict().nlabels();
+        let fmt_metric = |name: &str, val: f64| -> String {
+            if val.is_finite() {
+                format!("{} : {:.6}", name, val)
+            } else {
+                format!("{} : --------", name)
+            }
+        };
         for lid in 0..nlabels {
             if let Ok(label_str) = model.dict().get_label(lid) {
+                let f = meter.f1_for_label(lid);
                 let p = meter.precision_for_label(lid);
                 let r = meter.recall_for_label(lid);
-                let f = meter.f1_for_label(lid);
-                println!("{}\t{:.3}\t{:.3}\t{:.3}", label_str, p, r, f);
+                println!(
+                    "{}  {}  {}   {}",
+                    fmt_metric("F1-Score", f),
+                    fmt_metric("Precision", p),
+                    fmt_metric("Recall", r),
+                    label_str
+                );
             }
         }
+    }
+    if per_label {
+        // C++ test-label sets std::fixed before writeGeneralMetrics, so
+        // setprecision(3) becomes 3 fixed decimal places, not 3 sig digits.
+        println!("N\t{}", meter.n_examples());
+        println!("P@{}\t{:.3}", k, meter.precision());
+        println!("R@{}\t{:.3}", k, meter.recall());
     } else {
-        // Print aggregate metrics: N, P@k, R@k
         meter.write_general_metrics(k as i32);
     }
 }
@@ -676,9 +721,10 @@ fn run_print_word_vectors(args: ModelPathArgs) {
         // Read one word per line (whitespace-split, use first token)
         for word in line.split_whitespace() {
             let vec = model.get_word_vector(word);
-            write!(out, "{}", word).unwrap_or_else(|_| process::exit(1));
+            write!(out, "{} ", word).unwrap_or_else(|_| process::exit(1));
             for &v in &vec {
-                write!(out, " {}", v).unwrap_or_else(|_| process::exit(1));
+                write!(out, "{} ", cpp_default_format(v as f64, 5))
+                    .unwrap_or_else(|_| process::exit(1));
             }
             writeln!(out).unwrap_or_else(|_| process::exit(1));
         }
@@ -703,13 +749,9 @@ fn run_print_sentence_vectors(args: ModelPathArgs) {
             process::exit(1);
         });
         let vec = model.get_sentence_vector(&line);
-        let mut first = true;
         for &v in &vec {
-            if !first {
-                write!(out, " ").unwrap_or_else(|_| process::exit(1));
-            }
-            write!(out, "{}", v).unwrap_or_else(|_| process::exit(1));
-            first = false;
+            write!(out, "{} ", cpp_default_format(v as f64, 5))
+                .unwrap_or_else(|_| process::exit(1));
         }
         writeln!(out).unwrap_or_else(|_| process::exit(1));
     }
@@ -728,9 +770,10 @@ fn run_print_ngrams(args: PrintNgramsArgs) {
 
     let ngram_vecs = model.get_ngram_vectors(&args.word);
     for (ngram_str, vec) in &ngram_vecs {
-        write!(out, "{}", ngram_str).unwrap_or_else(|_| process::exit(1));
+        write!(out, "{} ", ngram_str).unwrap_or_else(|_| process::exit(1));
         for &v in vec {
-            write!(out, " {}", v).unwrap_or_else(|_| process::exit(1));
+            write!(out, "{} ", cpp_default_format(v as f64, 5))
+                .unwrap_or_else(|_| process::exit(1));
         }
         writeln!(out).unwrap_or_else(|_| process::exit(1));
     }
@@ -748,6 +791,9 @@ fn run_nn(args: NnArgs) {
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
 
+    write!(out, "Query word? ").unwrap_or_else(|_| process::exit(1));
+    out.flush().unwrap_or_else(|_| process::exit(1));
+
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap_or_else(|e| {
@@ -760,11 +806,12 @@ fn run_nn(args: NnArgs) {
         }
         let neighbors = model.get_nn(query, k);
         for (similarity, word) in &neighbors {
-            writeln!(out, "{} {:.6}", word, similarity)
+            writeln!(out, "{} {}", word, cpp_default_format(*similarity as f64, 6))
                 .unwrap_or_else(|_| process::exit(1));
         }
+        write!(out, "Query word? ").unwrap_or_else(|_| process::exit(1));
+        out.flush().unwrap_or_else(|_| process::exit(1));
     }
-    out.flush().unwrap_or_else(|_| process::exit(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -772,11 +819,18 @@ fn run_nn(args: NnArgs) {
 // ---------------------------------------------------------------------------
 
 fn run_analogies(args: AnalogiesArgs) {
-    let model = load_model_or_exit(&args.model);
     let k = args.k;
 
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
+
+    writeln!(out, "Loading model {}", args.model).unwrap_or_else(|_| process::exit(1));
+    out.flush().unwrap_or_else(|_| process::exit(1));
+
+    let model = load_model_or_exit(&args.model);
+
+    write!(out, "Query triplet (A - B + C)? ").unwrap_or_else(|_| process::exit(1));
+    out.flush().unwrap_or_else(|_| process::exit(1));
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
@@ -786,17 +840,17 @@ fn run_analogies(args: AnalogiesArgs) {
         });
         let words: Vec<&str> = line.split_whitespace().collect();
         if words.len() < 3 {
-            // Skip lines that don't have 3 words.
             continue;
         }
         let (word_a, word_b, word_c) = (words[0], words[1], words[2]);
         let results = model.get_analogies(word_a, word_b, word_c, k);
         for (similarity, word) in &results {
-            writeln!(out, "{} {:.6}", word, similarity)
+            writeln!(out, "{} {}", word, cpp_default_format(*similarity as f64, 6))
                 .unwrap_or_else(|_| process::exit(1));
         }
+        write!(out, "Query triplet (A - B + C)? ").unwrap_or_else(|_| process::exit(1));
+        out.flush().unwrap_or_else(|_| process::exit(1));
     }
-    out.flush().unwrap_or_else(|_| process::exit(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -856,7 +910,7 @@ fn run_dump(args: DumpArgs) {
                     if !first {
                         write!(out, " ").unwrap_or_else(|_| process::exit(1));
                     }
-                    write!(out, "{}", v).unwrap_or_else(|_| process::exit(1));
+                    write!(out, "{}", cpp_default_format(v as f64, 6)).unwrap_or_else(|_| process::exit(1));
                     first = false;
                 }
                 writeln!(out).unwrap_or_else(|_| process::exit(1));
@@ -877,7 +931,7 @@ fn run_dump(args: DumpArgs) {
                     if !first {
                         write!(out, " ").unwrap_or_else(|_| process::exit(1));
                     }
-                    write!(out, "{}", v).unwrap_or_else(|_| process::exit(1));
+                    write!(out, "{}", cpp_default_format(v as f64, 6)).unwrap_or_else(|_| process::exit(1));
                     first = false;
                 }
                 writeln!(out).unwrap_or_else(|_| process::exit(1));
