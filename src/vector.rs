@@ -126,11 +126,8 @@ impl IndexMut<usize> for Vector {
 
 impl fmt::Display for Vector {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, val) in self.data.iter().enumerate() {
-            if i > 0 {
-                write!(f, " ")?;
-            }
-            write!(f, "{:.5}", val)?;
+        for val in self.data.iter() {
+            write!(f, "{:.5} ", val)?;
         }
         Ok(())
     }
@@ -798,9 +795,7 @@ mod tests {
         v[1] = 2.5;
         v[2] = -3.14;
         let s = format!("{}", v);
-        assert!(s.contains("1.00000"));
-        assert!(s.contains("2.50000"));
-        assert!(s.contains("-3.14000"));
+        assert_eq!(s, "1.00000 2.50000 -3.14000 ");
     }
 
     // --- Index ---

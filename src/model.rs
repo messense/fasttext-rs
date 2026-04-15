@@ -94,10 +94,11 @@ impl MinstdRng {
         }
     }
 
-    /// Return a uniform value in `[0, n)`.
+    /// Return a uniform value in `[0, n)` (half-open range).
     ///
-    /// Uses rejection sampling to avoid modulo bias, matching the behavior
-    /// of C++ `std::uniform_int_distribution`.
+    /// Distinct from [`uniform_int`] which returns `[0, n]` (closed range)
+    /// and uses a different scaling factor.  Both use rejection sampling
+    /// to avoid modulo bias.
     #[inline]
     pub fn uniform_usize(&mut self, n: usize) -> usize {
         if n <= 1 {

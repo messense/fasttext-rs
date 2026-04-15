@@ -252,8 +252,16 @@ impl Dictionary {
         self.word2int.fill(-1);
 
         for i in 0..self.words.len() {
-            let h = self.find_slot(&self.words[i].word.clone());
-            self.word2int[h] = i as i32;
+            // Inline hash-table probing to avoid the `&self` borrow from `find_slot`.
+            // Since `word2int` was just cleared to all -1, we only need to probe
+            // until we find an empty slot (no word comparisons needed).
+            let word_hash = hash(self.words[i].word.as_bytes());
+            let len = self.word2int.len();
+            let mut slot = (word_hash as usize) % len;
+            while self.word2int[slot] != -1 {
+                slot = (slot + 1) % len;
+            }
+            self.word2int[slot] = i as i32;
             self.size += 1;
             match self.words[i].entry_type {
                 EntryType::Word => self.nwords += 1,

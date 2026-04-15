@@ -41,7 +41,9 @@ pub const NEGATIVE_TABLE_SIZE: i64 = 10_000_000;
 
 /// `log(x + 1e-5)` — matches C++ `std_log` used in `findKBest` and HS DFS.
 ///
-/// The small addend prevents log(0) = -∞.
+/// The small addend prevents log(0) = -∞.  C++ uses `1e-5` (double literal)
+/// but the result is truncated to `real` (float); using `1e-5_f32` here
+/// produces the same output since the difference is below f32 epsilon.
 #[inline]
 pub fn std_log(x: f32) -> f32 {
     (x + 1e-5_f32).ln()
@@ -179,34 +181,52 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
     if k == 0 {
         return;
     }
-    // Collect all candidates above threshold, then keep the best k.
-    // We maintain a min-heap (smallest log-prob at top) of at most k elements
-    // using a sorted Vec.  For typical k values (1-100) this is efficient enough.
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // Wrapper for f32 ordering (NaN-safe, treats NaN as equal).
+    #[derive(PartialEq)]
+    struct OrdF32(f32);
+    impl Eq for OrdF32 {}
+    impl PartialOrd for OrdF32 {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for OrdF32 {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.0
+                .partial_cmp(&other.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    }
+
+    // Min-heap (smallest log-prob at top) via Reverse.
+    let mut min_heap: BinaryHeap<Reverse<(OrdF32, i32)>> = BinaryHeap::with_capacity(k + 1);
+
     for i in 0..output.len() {
         let score = output[i];
         if score < threshold {
             continue;
         }
         let log_score = std_log(score);
-        if heap.len() == k {
-            // If the current log-score is not better than the k-th best, skip.
-            if log_score < heap[0].0 {
+        if min_heap.len() == k {
+            if log_score < min_heap.peek().unwrap().0 .0 .0 {
                 continue;
             }
         }
-        heap.push((log_score, i as i32));
-        // Maintain sorted order (ascending by log_score) so heap[0] is the minimum.
-        let last = heap.len() - 1;
-        let mut j = last;
-        while j > 0 && heap[j].0 < heap[j - 1].0 {
-            heap.swap(j, j - 1);
-            j -= 1;
-        }
-        if heap.len() > k {
-            heap.remove(0);
+        min_heap.push(Reverse((OrdF32(log_score), i as i32)));
+        if min_heap.len() > k {
+            min_heap.pop(); // remove smallest
         }
     }
-    // Sort descending (best first) for the final result.
+
+    // Drain into heap and sort descending.
+    heap.extend(
+        min_heap
+            .into_iter()
+            .map(|Reverse((OrdF32(s), idx))| (s, idx)),
+    );
     heap.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 }
 
@@ -314,8 +334,9 @@ impl Loss for OneVsAllLoss {
     ) -> f32 {
         let mut loss = 0.0f32;
         let osz = self.base.wo.rows() as usize;
+        let target_set: std::collections::HashSet<i32> = targets.iter().copied().collect();
         for i in 0..osz {
-            let is_match = targets.contains(&(i as i32));
+            let is_match = target_set.contains(&(i as i32));
             loss += self.base.binary_logistic(i as i32, state, is_match, lr, backprop);
         }
         loss
@@ -377,14 +398,15 @@ impl NegativeSamplingLoss {
     /// normal case the table contains many distinct label indices, so a different
     /// one is found quickly.
     ///
-    /// # Infinite-loop protection
+    /// # Infinite-loop protection (divergence from C++)
     ///
-    /// In degenerate tables where every entry equals `target` (e.g., a
-    /// single-label corpus), an unbounded loop would never terminate.  To guard
-    /// against this, the method retries at most `MAX_RETRIES` (100) times and
-    /// then returns a fallback label index that is adjacent to `target` in the
-    /// output matrix (wrapping around if necessary).  This ensures the training
-    /// loop always makes progress even on pathological inputs.
+    /// C++ fastText uses an unbounded `do { … } while (target == negative)`
+    /// loop which hangs on degenerate single-label tables.  This Rust
+    /// implementation adds a `MAX_RETRIES` (100) guard: after 100 failed
+    /// draws it returns `(target + 1) % n_labels` as a fallback.  This is a
+    /// **known behavioral difference** — it prevents hangs at the cost of
+    /// training on a deterministic (rather than random) negative sample in
+    /// the degenerate case.
     fn get_negative(&self, target: i32, rng: &mut MinstdRng) -> i32 {
         const MAX_RETRIES: usize = 100;
         for _ in 0..MAX_RETRIES {
@@ -668,9 +690,8 @@ impl Loss for HierarchicalSoftmaxLoss {
 
     fn predict(&self, k: i32, threshold: f32, heap: &mut Predictions, state: &mut State) {
         let root = (2 * self.osz - 2) as usize;
-        // Clone hidden vector to pass it into the recursive DFS without borrowing state.
-        let hidden = state.hidden.clone();
-        self.dfs_with_hidden(k as usize, threshold, root, 0.0, heap, &hidden);
+        let hidden = &state.hidden;
+        self.dfs_with_hidden(k as usize, threshold, root, 0.0, heap, hidden);
         // Sort descending (highest log-prob first)
         heap.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     }

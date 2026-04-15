@@ -8,6 +8,7 @@ use std::convert::TryFrom;
 use std::io::{Read, Write};
 
 use crate::error::{FastTextError, Result};
+use crate::model::MinstdRng;
 use crate::utils;
 use crate::vector::Vector;
 
@@ -65,9 +66,17 @@ pub struct DenseMatrix {
     m: i64,
     /// Number of columns.
     n: i64,
+    /// Cached element count (m * n as usize) to avoid recomputation on hot paths.
+    size: usize,
 }
 
-// SAFETY: DenseMatrix owns its allocation and provides &/&mut access through safe methods.
+// SAFETY: DenseMatrix owns its allocation exclusively.  `Send` is sound
+// because the owned buffer can be transferred between threads.  `Sync` is
+// required for `Arc<DenseMatrix>` in the Hogwild! training path, where
+// concurrent unsynchronized writes to distinct (or overlapping) f32
+// elements are intentional.  The `add_vector_to_row_unsync` method uses
+// raw-pointer writes (not `&mut` references) so that Rust's aliasing
+// rules are not violated.
 unsafe impl Send for DenseMatrix {}
 unsafe impl Sync for DenseMatrix {}
 
@@ -100,6 +109,7 @@ impl DenseMatrix {
                 ptr: std::ptr::null_mut(),
                 m,
                 n,
+                size: 0,
             };
         }
         let layout = Layout::array::<f32>(size)
@@ -110,7 +120,7 @@ impl DenseMatrix {
         if ptr.is_null() {
             alloc::handle_alloc_error(layout);
         }
-        DenseMatrix { ptr, m, n }
+        DenseMatrix { ptr, m, n, size }
     }
 
     /// Create a `DenseMatrix` from existing data.
@@ -129,29 +139,21 @@ impl DenseMatrix {
     /// Return a slice of the entire matrix data in row-major order.
     #[inline]
     pub fn data(&self) -> &[f32] {
-        // Use checked arithmetic to compute element count.  The constructor
-        // guarantees m and n are non-negative and m*n fits in usize, so these
-        // operations will never fail for a properly constructed DenseMatrix.
-        let size = checked_dim_size(self.m, self.n);
-        if size == 0 {
+        if self.size == 0 {
             return &[];
         }
         // SAFETY: ptr is valid for `m*n` f32 elements and is properly aligned.
-        unsafe { std::slice::from_raw_parts(self.ptr, size) }
+        unsafe { std::slice::from_raw_parts(self.ptr, self.size) }
     }
 
     /// Return a mutable slice of the entire matrix data in row-major order.
     #[inline]
     pub fn data_mut(&mut self) -> &mut [f32] {
-        // Use checked arithmetic to compute element count.  The constructor
-        // guarantees m and n are non-negative and m*n fits in usize, so these
-        // operations will never fail for a properly constructed DenseMatrix.
-        let size = checked_dim_size(self.m, self.n);
-        if size == 0 {
+        if self.size == 0 {
             return &mut [];
         }
         // SAFETY: ptr is valid for `m*n` f32 elements and is properly aligned.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, size) }
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size) }
     }
 
     /// Access element at (i, j).
@@ -208,9 +210,15 @@ impl DenseMatrix {
     pub unsafe fn add_vector_to_row_unsync(&self, vec: &Vector, i: i64, scale: f32) {
         debug_assert!(i >= 0 && i < self.m, "Row index out of bounds");
         debug_assert_eq!(vec.len(), self.n as usize);
-        let start = (i as usize) * (self.n as usize);
-        let row = std::slice::from_raw_parts_mut(self.ptr.add(start), self.n as usize);
-        add_vector_impl(row, vec.data(), scale);
+        let n = self.n as usize;
+        let start = (i as usize) * n;
+        let src = vec.data();
+        // Use raw pointer writes instead of creating a &mut slice, which would
+        // be instant UB when called concurrently from Hogwild! threads.
+        for j in 0..n {
+            let p = self.ptr.add(start + j);
+            p.write(p.read() + scale * src[j]);
+        }
     }
 
     /// Set all elements to zero.
@@ -226,14 +234,13 @@ impl DenseMatrix {
     /// Uses the C++ fastText approach: divide data into 10 blocks,
     /// each seeded with `block_index + seed` using minstd_rand (LCG).
     pub fn uniform(&mut self, a: f32, seed: i32) {
-        let total = self.data().len(); // uses checked_dim_size internally
+        let total = self.data().len();
         if total == 0 {
             return;
         }
         let block_size = total / 10;
         let data = self.data_mut();
 
-        // Process blocks (matching C++ uniformThread with single thread)
         for block in 0..10 {
             let start = block_size * block;
             let end = if block == 9 {
@@ -241,17 +248,11 @@ impl DenseMatrix {
             } else {
                 (block_size * (block + 1)).min(total)
             };
-            // Use minstd_rand equivalent: LCG with a=48271, c=0, m=2^31-1
-            let mut rng_state = (block as u32).wrapping_add(seed as u32);
-            // Seed the LCG
-            if rng_state == 0 {
-                rng_state = 1;
-            }
+            // Seed matches C++: std::minstd_rand rng(block + seed)
+            let mut rng = MinstdRng::new((block as u64).wrapping_add(seed as u32 as u64));
             for item in data.iter_mut().take(end).skip(start) {
-                // minstd_rand: state = (state * 48271) % 2147483647
-                rng_state = ((rng_state as u64 * 48271) % 2147483647) as u32;
-                // Map to [-a, a]: uniform_real_distribution
-                let u = rng_state as f64 / 2147483647.0;
+                // uniform_real() returns [0, 1), map to [-a, a]
+                let u = rng.uniform_real();
                 *item = (u * 2.0 * a as f64 - a as f64) as f32;
             }
         }
@@ -322,22 +323,13 @@ impl Clone for DenseMatrix {
 
 impl Drop for DenseMatrix {
     fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            // Reconstruct the size using the same checked arithmetic as new().
-            // The constructor invariant ensures m,n >= 0 and m*n fits in usize,
-            // so these conversions cannot fail for a properly constructed DenseMatrix.
-            // Using unwrap_or to avoid a double-panic in drop.
-            let m_u = usize::try_from(self.m).unwrap_or(0);
-            let n_u = usize::try_from(self.n).unwrap_or(0);
-            let size = m_u.checked_mul(n_u).unwrap_or(0);
-            if size > 0 {
-                let layout = Layout::array::<f32>(size)
-                    .and_then(|l| l.align_to(ALIGNMENT))
-                    .expect("Invalid layout in Drop");
-                // SAFETY: ptr was allocated with this layout in new().
-                unsafe {
-                    alloc::dealloc(self.ptr as *mut u8, layout);
-                }
+        if !self.ptr.is_null() && self.size > 0 {
+            let layout = Layout::array::<f32>(self.size)
+                .and_then(|l| l.align_to(ALIGNMENT))
+                .expect("Invalid layout in Drop");
+            // SAFETY: ptr was allocated with this layout in new().
+            unsafe {
+                alloc::dealloc(self.ptr as *mut u8, layout);
             }
         }
     }
@@ -442,6 +434,9 @@ impl Matrix for DenseMatrix {
         average_rows_scalar(x, rows, self);
     }
 
+    /// **Note:** Values are written in little-endian byte order.  C++ fastText
+    /// writes in native byte order, which is identical on x86/ARM (the only
+    /// platforms fastText targets).  Big-endian platforms are not supported.
     fn save<W: Write>(&self, writer: &mut W) -> Result<()> {
         utils::write_i64(writer, self.m)?;
         utils::write_i64(writer, self.n)?;

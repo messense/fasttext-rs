@@ -149,6 +149,8 @@ pub struct FastText {
     /// Set by [`FastText::train`] and related functions.  `0.0` for models
     /// loaded from disk (no training history available).
     last_train_loss: f64,
+    /// Cached sigmoid/log lookup tables for quantized prediction.
+    loss_tables: LossTables,
 }
 
 impl FastText {
@@ -256,6 +258,7 @@ impl FastText {
             model,
             abort_flag: Arc::new(AtomicBool::new(false)),
             last_train_loss: 0.0,
+            loss_tables: LossTables::new(),
         })
     }
 
@@ -675,7 +678,7 @@ impl FastText {
         match self.args.loss {
             LossName::OVA => {
                 // One-vs-all: independent sigmoid per class.
-                let tables = LossTables::new();
+                let tables = &self.loss_tables;
                 for i in 0..osz {
                     state.output[i] = tables.sigmoid(state.output[i]);
                 }
@@ -1329,6 +1332,7 @@ impl FastText {
             model,
             abort_flag,
             last_train_loss: avg_loss,
+            loss_tables: LossTables::new(),
         })
     }
 
