@@ -729,6 +729,10 @@ impl FastText {
         let k_eff = if nlabels == 0 { 0i32 } else { k.min(nlabels) as i32 };
         let effective_threshold = if threshold < 0.0 { 0.0 } else { threshold };
 
+        if k_eff == 0 {
+            return Ok(Meter::new());
+        }
+
         // Rewind to the beginning, matching C++ `in.seekg(0, beg)`.
         reader.seek(SeekFrom::Start(0)).map_err(FastTextError::IoError)?;
         let mut buf_reader = BufReader::new(reader);
@@ -737,20 +741,17 @@ impl FastText {
         let mut words: Vec<i32> = Vec::new();
         let mut labels: Vec<i32> = Vec::new();
         let mut pending_newline = false;
+        let mut word_hashes: Vec<i32> = Vec::new();
+        let mut token = String::new();
+        let mut state = State::new(dim, nlabels, 0);
 
         loop {
-            words.clear();
-            labels.clear();
-            let ntokens = self.dict.get_line(&mut buf_reader, &mut words, &mut labels, &mut pending_newline);
+            let ntokens = self.dict.get_line_with_scratch(&mut buf_reader, &mut words, &mut labels, &mut word_hashes, &mut token, &mut pending_newline);
             if ntokens == 0 && words.is_empty() && labels.is_empty() {
-                // EOF: read_word_from_reader returned false with no tokens
-                // Check if we actually hit EOF by trying to read again.
-                // The dictionary returns 0 tokens on EOF.
                 break;
             }
 
-            if !labels.is_empty() && !words.is_empty() && k_eff > 0 {
-                let mut state = State::new(dim, nlabels, 0);
+            if !labels.is_empty() && !words.is_empty() {
                 let raw = if self.quant {
                     self.predict_raw_quantized(&words, k_eff, effective_threshold, &mut state)
                 } else {
@@ -923,38 +924,62 @@ impl FastText {
         k: usize,
         ban_words: &[&str],
     ) -> Vec<(f32, String)> {
-        let query_norm: f32 = query.iter().map(|&v| v * v).sum::<f32>().sqrt();
-        let query_norm = if query_norm.abs() < 1e-8 {
-            1.0
-        } else {
-            query_norm
-        };
+        if k == 0 {
+            return Vec::new();
+        }
+
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        #[derive(PartialEq)]
+        struct OrdF32(f32);
+        impl Eq for OrdF32 {}
+        impl PartialOrd for OrdF32 {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for OrdF32 {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.0
+                    .partial_cmp(&other.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        }
+
+        // Pre-normalize query so dot products directly give cosine similarity.
+        let norm: f32 = query.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        let inv_norm = if norm < 1e-8 { 1.0 } else { 1.0 / norm };
+        let normalized_query: Vec<f32> = query.iter().map(|&v| v * inv_norm).collect();
 
         let nwords = self.dict.nwords() as usize;
-        let mut similarities: Vec<(f32, usize)> = Vec::with_capacity(nwords);
+        let dim = word_vectors.cols() as usize;
+        let wv_data = word_vectors.data();
+        let mut heap: BinaryHeap<Reverse<(OrdF32, usize)>> = BinaryHeap::with_capacity(k + 1);
 
         for i in 0..nwords {
             let word = self.dict.get_word(i as i32);
             if ban_words.contains(&word) {
                 continue;
             }
-            let row = word_vectors.row(i as i64);
-            // row is already normalized; dot product = cosine similarity / query_norm
-            let dp: f32 = query.iter().zip(row.iter()).map(|(&q, &r)| q * r).sum();
-            let similarity = dp / query_norm;
-            similarities.push((similarity, i));
+            let row = &wv_data[i * dim..(i + 1) * dim];
+            let sim: f32 = normalized_query.iter().zip(row.iter()).map(|(&q, &r)| q * r).sum();
+
+            if heap.len() == k && sim <= heap.peek().unwrap().0 .0 .0 {
+                continue;
+            }
+            heap.push(Reverse((OrdF32(sim), i)));
+            if heap.len() > k {
+                heap.pop();
+            }
         }
 
-        // Sort by descending similarity.
-        similarities.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        similarities.truncate(k);
-
-        similarities
+        let mut results: Vec<(f32, String)> = heap
             .into_iter()
-            .map(|(sim, i)| (sim, self.dict.get_word(i as i32).to_string()))
-            .collect()
+            .map(|Reverse((OrdF32(sim), i))| (sim, self.dict.get_word(i as i32).to_string()))
+            .collect();
+        results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        results
     }
 
     // Quantization

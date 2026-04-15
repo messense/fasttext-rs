@@ -765,39 +765,52 @@ impl Dictionary {
     ) -> i32 {
         let mut word_hashes: Vec<i32> = Vec::new();
         let mut token = String::new();
+        self.get_line_with_scratch(reader, words, labels, &mut word_hashes, &mut token, pending_newline)
+    }
+
+    pub fn get_line_with_scratch<R: Read>(
+        &self,
+        reader: &mut R,
+        words: &mut Vec<i32>,
+        labels: &mut Vec<i32>,
+        word_hashes: &mut Vec<i32>,
+        token: &mut String,
+        pending_newline: &mut bool,
+    ) -> i32 {
+        word_hashes.clear();
         let mut ntokens: i32 = 0;
 
         words.clear();
         labels.clear();
 
         loop {
-            if !Self::read_word_from_reader(reader, pending_newline, &mut token) {
+            if !Self::read_word_from_reader(reader, pending_newline, token) {
                 break;
             }
 
             let h = crate::utils::hash(token.as_bytes());
-            let wid = self.get_id_with_hash(&token, h);
+            let wid = self.get_id_with_hash(token, h);
 
             let entry_type = if wid < 0 {
-                self.get_type_from_str(&token)
+                self.get_type_from_str(token)
             } else {
                 self.get_type_by_id(wid)
             };
 
             ntokens += 1;
             if entry_type == EntryType::Word {
-                self.add_subwords(words, &token, wid);
+                self.add_subwords(words, token, wid);
                 word_hashes.push(h as i32);
             } else if entry_type == EntryType::Label && wid >= 0 {
                 labels.push(wid - self.nwords);
             }
 
-            if token == EOS {
+            if *token == EOS {
                 break;
             }
         }
 
-        self.add_word_ngrams(words, &word_hashes, self.args.word_ngrams);
+        self.add_word_ngrams(words, word_hashes, self.args.word_ngrams);
         ntokens
     }
 

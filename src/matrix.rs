@@ -465,9 +465,15 @@ impl Matrix for DenseMatrix {
         })?;
         let mut mat = DenseMatrix::new(m, n);
         let data = mat.data_mut();
-        for val in data.iter_mut() {
-            *val = utils::read_f32(reader)?;
-        }
+        // Bulk-read the entire matrix as raw bytes, then reinterpret as f32.
+        // This is safe because f32 has no invalid bit patterns and the data
+        // is stored as little-endian (matching all supported platforms).
+        let byte_slice = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4)
+        };
+        reader.read_exact(byte_slice).map_err(FastTextError::IoError)?;
+        // On big-endian platforms we would need to byte-swap here, but
+        // fastText only targets little-endian (x86/ARM).
         Ok(mat)
     }
 }
