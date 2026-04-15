@@ -98,17 +98,17 @@ fn make_val_dataset() -> String {
 /// Build Args configured for fast supervised training.
 fn make_supervised_args(input: &str, output: &str) -> Args {
     let mut args = Args::default();
-    args.set_input(input.to_string());
-    args.set_output(output.to_string());
+    args.input = input.to_string();
+    args.output = output.to_string();
     args.apply_supervised_defaults();
-    args.set_dim(20);
-    args.set_epoch(10);
-    args.set_min_count(1);
-    args.set_lr(0.1);
-    args.set_bucket(100);
-    args.set_thread(1);
-    args.set_verbose(0);
-    args.set_seed(42);
+    args.dim = 20;
+    args.epoch = 10;
+    args.min_count = 1;
+    args.lr = 0.1;
+    args.bucket = 100;
+    args.thread = 1;
+    args.verbose = 0;
+    args.seed = 42;
     args
 }
 
@@ -382,9 +382,9 @@ fn test_cross_autotune_outperforms() {
     // standard parameters; autotune must match or improve upon the baseline.
     let mut autotune_args =
         make_supervised_args(train_path.to_str().unwrap(), "/dev/null");
-    autotune_args.set_autotune_validation_file(val_path.to_str().unwrap().to_string());
-    autotune_args.set_autotune_duration(5); // 5-second budget
-    autotune_args.set_autotune_metric("f1".to_string());
+    autotune_args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+    autotune_args.autotune_duration = 5; // 5-second budget
+    autotune_args.autotune_metric = "f1".to_string();
 
     let autotune_model = Autotune::run(autotune_args).expect("Autotune should succeed");
 

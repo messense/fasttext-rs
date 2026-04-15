@@ -157,7 +157,7 @@ fn test_cli_train_supervised() {
     let model = fasttext::FastText::load_model(model_bin.to_str().unwrap())
         .expect("Failed to load trained model");
     assert_eq!(
-        model.args().model(),
+        model.args().model,
         fasttext::args::ModelName::SUP,
         "supervised training must produce a supervised model"
     );
@@ -208,7 +208,7 @@ cats and dogs are both pets
     let model = fasttext::FastText::load_model(model_bin.to_str().unwrap())
         .expect("Failed to load skipgram model");
     assert_eq!(
-        model.args().model(),
+        model.args().model,
         fasttext::args::ModelName::SG,
         "skipgram training must produce a SG model"
     );
@@ -258,7 +258,7 @@ cats and dogs are both pets
     let model = fasttext::FastText::load_model(model_bin.to_str().unwrap())
         .expect("Failed to load cbow model");
     assert_eq!(
-        model.args().model(),
+        model.args().model,
         fasttext::args::ModelName::CBOW,
         "cbow training must produce a CBOW model"
     );
@@ -641,12 +641,12 @@ fn test_cli_flag_passthrough() {
         .expect("Failed to load model for flag passthrough test");
 
     assert_eq!(
-        model.args().epoch(),
+        model.args().epoch,
         2,
         "epoch flag should be passed through to Args"
     );
     assert_eq!(
-        model.args().dim(),
+        model.args().dim,
         20,
         "dim flag should be passed through to Args"
     );
@@ -693,12 +693,12 @@ fn test_cli_single_dash_flags() {
         .expect("Failed to load model for single-dash flag test");
 
     assert_eq!(
-        model.args().epoch(),
+        model.args().epoch,
         3,
         "-epoch flag should override default epoch"
     );
     assert_eq!(
-        model.args().dim(),
+        model.args().dim,
         15,
         "-dim flag should override default dim"
     );
