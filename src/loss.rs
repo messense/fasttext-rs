@@ -488,24 +488,29 @@ impl HierarchicalSoftmaxLoss {
     /// from highest index to lowest (ascending count order when input is sorted
     /// descending).  Internal nodes (osz..2*osz-2) are built in order.
     fn build_tree(&mut self, counts: &[i64]) {
+        self.build_huffman_nodes(counts);
+        self.build_paths_and_codes();
+    }
+
+    /// Build the Huffman tree nodes from frequency counts.
+    fn build_huffman_nodes(&mut self, counts: &[i64]) {
         let n = (2 * self.osz - 1) as usize;
         self.tree = vec![
             HsNode {
                 parent: -1,
                 left: -1,
                 right: -1,
-                count: 1_000_000_000_000_000_i64, // 1e15 as i64
+                count: 1_000_000_000_000_000_i64,
                 binary: false,
             };
             n
         ];
-        // Set leaf counts
         for (i, &c) in counts.iter().enumerate() {
             self.tree[i].count = c;
         }
 
-        let mut leaf = self.osz - 1; // pointer into leaves (high → low index)
-        let mut node = self.osz; // pointer into internal nodes (low → high index)
+        let mut leaf = self.osz - 1;
+        let mut node = self.osz;
 
         for i in self.osz..(2 * self.osz - 1) {
             let i = i as usize;
@@ -527,8 +532,10 @@ impl HierarchicalSoftmaxLoss {
             self.tree[mini[1] as usize].parent = i as i32;
             self.tree[mini[1] as usize].binary = true;
         }
+    }
 
-        // Build path and code for each leaf
+    /// Build the root-to-leaf path and binary code for each leaf node.
+    fn build_paths_and_codes(&mut self) {
         self.paths = vec![Vec::new(); self.osz as usize];
         self.codes = vec![Vec::new(); self.osz as usize];
         for i in 0..self.osz as usize {

@@ -433,21 +433,8 @@ fn load_model_or_exit(path: &str) -> FastText {
     }
 }
 
-/// Build `FTArgs` from a `TrainArgs`, applying model-specific defaults first.
-fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
-    let mut args = FTArgs::default();
-
-    // Apply model-specific defaults before user overrides.
-    if model_name == ModelName::Supervised {
-        args.apply_supervised_defaults();
-    } else {
-        args.model = model_name;
-    }
-
-    // Apply user-provided values (only when explicitly set).
-    args.input = train_args.input;
-    args.output = train_args.output.clone();
-
+/// Apply optional training argument overrides from CLI onto the base `FTArgs`.
+fn apply_train_overrides(args: &mut FTArgs, train_args: &TrainArgs) {
     if let Some(v) = train_args.lr {
         args.lr = v;
     }
@@ -502,14 +489,14 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
     if let Some(v) = train_args.t {
         args.t = v;
     }
-    if let Some(v) = train_args.label {
-        args.label = v;
+    if let Some(ref v) = train_args.label {
+        args.label = v.clone();
     }
     if let Some(v) = train_args.verbose {
         args.verbose = v;
     }
-    if let Some(v) = train_args.pretrained_vectors {
-        args.pretrained_vectors = v;
+    if let Some(ref v) = train_args.pretrained_vectors {
+        args.pretrained_vectors = v.clone();
     }
     if train_args.save_output {
         args.save_output = true;
@@ -517,6 +504,21 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
     if let Some(v) = train_args.seed {
         args.seed = v;
     }
+}
+
+/// Build `FTArgs` from a `TrainArgs`, applying model-specific defaults first.
+fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
+    let mut args = FTArgs::default();
+
+    if model_name == ModelName::Supervised {
+        args.apply_supervised_defaults();
+    } else {
+        args.model = model_name;
+    }
+
+    args.input = train_args.input.clone();
+    args.output = train_args.output.clone();
+    apply_train_overrides(&mut args, &train_args);
 
     args
 }
@@ -849,6 +851,23 @@ fn run_analogies(args: AnalogiesArgs) {
 
 // Dump
 
+/// Dump a DenseMatrix in text format: `rows cols\n` then one row per line.
+fn dump_matrix(out: &mut impl Write, m: &fasttext::matrix::DenseMatrix) {
+    writeln!(out, "{} {}", m.rows(), m.cols()).unwrap_or_else(|_| process::exit(1));
+    for i in 0..m.rows() {
+        let row = m.row(i);
+        let mut first = true;
+        for &v in row {
+            if !first {
+                write!(out, " ").unwrap_or_else(|_| process::exit(1));
+            }
+            write!(out, "{}", cpp_default_format(v as f64, 6)).unwrap_or_else(|_| process::exit(1));
+            first = false;
+        }
+        writeln!(out).unwrap_or_else(|_| process::exit(1));
+    }
+}
+
 fn run_dump(args: DumpArgs) {
     let model = load_model_or_exit(&args.model);
 
@@ -885,47 +904,17 @@ fn run_dump(args: DumpArgs) {
                     .unwrap_or_else(|_| process::exit(1));
             }
         }
-        "input" => {
+        "input" | "output" => {
             if model.is_quant() {
                 eprintln!("Not supported for quantized models.");
                 process::exit(1);
             }
-            let m = model.input_matrix();
-            writeln!(out, "{} {}", m.rows(), m.cols()).unwrap_or_else(|_| process::exit(1));
-            for i in 0..m.rows() {
-                let row = m.row(i);
-                let mut first = true;
-                for &v in row {
-                    if !first {
-                        write!(out, " ").unwrap_or_else(|_| process::exit(1));
-                    }
-                    write!(out, "{}", cpp_default_format(v as f64, 6))
-                        .unwrap_or_else(|_| process::exit(1));
-                    first = false;
-                }
-                writeln!(out).unwrap_or_else(|_| process::exit(1));
-            }
-        }
-        "output" => {
-            if model.is_quant() {
-                eprintln!("Not supported for quantized models.");
-                process::exit(1);
-            }
-            let m = model.output_matrix();
-            writeln!(out, "{} {}", m.rows(), m.cols()).unwrap_or_else(|_| process::exit(1));
-            for i in 0..m.rows() {
-                let row = m.row(i);
-                let mut first = true;
-                for &v in row {
-                    if !first {
-                        write!(out, " ").unwrap_or_else(|_| process::exit(1));
-                    }
-                    write!(out, "{}", cpp_default_format(v as f64, 6))
-                        .unwrap_or_else(|_| process::exit(1));
-                    first = false;
-                }
-                writeln!(out).unwrap_or_else(|_| process::exit(1));
-            }
+            let m = if args.option == "input" {
+                model.input_matrix()
+            } else {
+                model.output_matrix()
+            };
+            dump_matrix(&mut out, m);
         }
         other => {
             eprintln!(

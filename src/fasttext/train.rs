@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,6 +12,27 @@ use crate::matrix::{DenseMatrix, Matrix};
 use crate::model::{Model, State};
 
 use super::{build_loss, FastText, TrainThreadCtx, TrainingHandle};
+
+/// Scratch buffers reused across training iterations to avoid repeated allocation.
+struct TrainScratch {
+    line: Vec<i32>,
+    labels: Vec<i32>,
+    word_hashes: Vec<i32>,
+    token: String,
+    pending_newline: bool,
+}
+
+impl TrainScratch {
+    fn new() -> Self {
+        TrainScratch {
+            line: Vec::new(),
+            labels: Vec::new(),
+            word_hashes: Vec::new(),
+            token: String::new(),
+            pending_newline: false,
+        }
+    }
+}
 
 /// Atomically add a f64 value to an AtomicU64 (which stores f64 bits).
 ///
@@ -74,41 +95,22 @@ impl FastText {
         }
     }
 
-    /// Internal training implementation with optional epoch loss tracking.
+    /// Build the vocabulary dictionary from the training input file.
     ///
-    /// Called by `train`, `train_with_abort`, and `train_tracking_epoch_losses`.
-    /// When `epoch_loss_tracker` is `Some`, records the average loss after each
-    /// completed epoch (most accurate with `thread=1`).
-    fn train_internal(
-        args: Args,
-        abort_flag: Arc<AtomicBool>,
-        epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
-    ) -> Result<Self> {
-        let input_path = args.input.to_string();
-        if input_path.is_empty() {
-            return Err(FastTextError::InvalidArgument(
-                "Input file path is empty".to_string(),
-            ));
-        }
-
-        let args_arc = Arc::new(args.clone());
-
-        // Build vocabulary from input file.
-        let mut dict = Dictionary::new(Arc::clone(&args_arc));
+    /// Validates that the file is non-empty and, for supervised models,
+    /// that at least one label is present.
+    fn build_vocabulary(args: &Args, args_arc: &Arc<Args>) -> Result<Dictionary> {
+        let mut dict = Dictionary::new(Arc::clone(args_arc));
         {
-            let file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
+            let file = std::fs::File::open(&args.input).map_err(FastTextError::IoError)?;
             let mut reader = BufReader::new(file);
             dict.read_from_file(&mut reader)?;
         }
-
-        // Guard: empty training file.
         if dict.ntokens() == 0 {
             return Err(FastTextError::InvalidArgument(
                 "Training file is empty or contains no valid tokens".to_string(),
             ));
         }
-
-        // Guard: supervised mode requires at least one label.
         if args.model == ModelName::Supervised && dict.nlabels() == 0 {
             return Err(FastTextError::InvalidArgument(
                 "Supervised training requires at least one label, but none were found. \
@@ -116,75 +118,92 @@ impl FastText {
                     .to_string(),
             ));
         }
+        Ok(dict)
+    }
 
+    /// Initialize input and output matrices for training.
+    ///
+    /// Input matrix is uniform random in `[-1/dim, 1/dim]`, optionally
+    /// overwritten by pretrained vectors. Output matrix is zero-initialized.
+    fn initialize_matrices(
+        args: &Args,
+        dict: &Dictionary,
+    ) -> Result<(Arc<DenseMatrix>, Arc<DenseMatrix>)> {
         let nwords = dict.nwords() as i64;
         let bucket = args.bucket as i64;
         let dim = args.dim as i64;
 
-        // Initialize input matrix: (nwords + bucket) × dim, uniform in [-1/dim, 1/dim].
-        // If pretrained vectors are specified, load them after uniform initialization.
         let input = Arc::new({
             let mut m = DenseMatrix::new(nwords + bucket, dim);
             m.uniform(1.0 / args.dim as f32, args.seed);
             if !args.pretrained_vectors.is_empty() {
-                Self::load_pretrained_vectors(&args.pretrained_vectors, &args, &dict, &mut m)?;
+                Self::load_pretrained_vectors(&args.pretrained_vectors, args, dict, &mut m)?;
             }
             m
         });
 
-        // Initialize output matrix: (nlabels for supervised, nwords for unsupervised) × dim, zeros.
         let out_rows = if args.model == ModelName::Supervised {
             dict.nlabels() as i64
         } else {
             dict.nwords() as i64
         };
-        // DenseMatrix::new zeroes all values by default.
         let output = Arc::new(DenseMatrix::new(out_rows, dim));
-        let output_size = output.rows() as usize;
 
-        // Build target counts for loss construction.
+        Ok((input, output))
+    }
+
+    /// Compute average training loss from shared atomic counters.
+    fn compute_avg_loss(shared_loss: &AtomicU64, shared_loss_count: &AtomicI64) -> f64 {
+        let total_loss = f64::from_bits(shared_loss.load(Ordering::Relaxed));
+        let total_examples = shared_loss_count.load(Ordering::Relaxed);
+        if total_examples > 0 {
+            total_loss / total_examples as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Run parallel Hogwild! SGD training across `n_threads`.
+    ///
+    /// Returns the average training loss.
+    fn run_hogwild_training(
+        args: &Args,
+        dict: &Dictionary,
+        input: &Arc<DenseMatrix>,
+        output: &Arc<DenseMatrix>,
+        loss_tables: &Arc<LossTables>,
+        abort_flag: &Arc<AtomicBool>,
+        epoch_loss_tracker: &Option<Arc<Mutex<Vec<f32>>>>,
+    ) -> Result<f64> {
+        let output_size = output.rows() as usize;
         let target_counts = if args.model == ModelName::Supervised {
             dict.get_counts(EntryType::Label)
         } else {
             dict.get_counts(EntryType::Word)
         };
         let normalize_gradient = args.model == ModelName::Supervised;
-
-        // Number of threads (at least 1).
         let n_threads = (args.thread as usize).max(1);
+        let token_count = AtomicI64::new(0);
+        let shared_loss = AtomicU64::new(f64::to_bits(0.0));
+        let shared_loss_count = AtomicI64::new(0);
 
-        // Shared atomic token counter across all training threads.
-        let token_count = Arc::new(AtomicI64::new(0));
-
-        // Shared atomic loss accumulator (f64 bits) across all training threads.
-        // Each thread atomically adds its local total loss at the end of training.
-        let shared_loss = Arc::new(AtomicU64::new(f64::to_bits(0.0)));
-        // Shared example count (for computing average loss).
-        let shared_loss_count = Arc::new(AtomicI64::new(0));
-
-        // Create a single shared LossTables instance for all threads and the final model.
-        let loss_tables = Arc::new(LossTables::new());
-
-        // Run Hogwild! parallel training with rayon.
-        // Each thread creates its own Model (sharing the same Arc<DenseMatrix>),
-        // and updates weights concurrently without locks.
         let training_results: Vec<Result<()>> = (0..n_threads)
             .into_par_iter()
             .map(|thread_id| {
                 let loss = build_loss(
-                    &args,
-                    Arc::clone(&output),
+                    args,
+                    Arc::clone(output),
                     &target_counts,
-                    Arc::clone(&loss_tables),
+                    Arc::clone(loss_tables),
                 );
-                let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
+                let model = Model::new(Arc::clone(input), loss, normalize_gradient);
                 let ctx = TrainThreadCtx {
-                    args: &args,
-                    dict: &dict,
+                    args,
+                    dict,
                     model: &model,
                     output_size,
                     token_count: &token_count,
-                    abort_flag: &abort_flag,
+                    abort_flag,
                     shared_loss: &shared_loss,
                     epoch_loss_tracker: epoch_loss_tracker.clone(),
                 };
@@ -192,28 +211,41 @@ impl FastText {
             })
             .collect();
 
-        // Propagate the first training error, if any.
         for result in training_results {
             result?;
         }
 
-        // Compute average training loss across all threads.
-        let total_loss = f64::from_bits(shared_loss.load(Ordering::Relaxed));
-        let total_examples = shared_loss_count.load(Ordering::Relaxed);
-        let avg_loss = if total_examples > 0 {
-            total_loss / total_examples as f64
-        } else {
-            0.0
-        };
+        Ok(Self::compute_avg_loss(&shared_loss, &shared_loss_count))
+    }
 
-        // Build the inference model from the trained matrices.
-        let loss = build_loss(
+    /// Internal training implementation with optional epoch loss tracking.
+    fn train_internal(
+        args: Args,
+        abort_flag: Arc<AtomicBool>,
+        epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
+    ) -> Result<Self> {
+        if args.input.is_empty() {
+            return Err(FastTextError::InvalidArgument(
+                "Input file path is empty".to_string(),
+            ));
+        }
+
+        let args_arc = Arc::new(args.clone());
+        let dict = Self::build_vocabulary(&args, &args_arc)?;
+        let (input, output) = Self::initialize_matrices(&args, &dict)?;
+        let loss_tables = Arc::new(LossTables::new());
+
+        let avg_loss = Self::run_hogwild_training(
             &args,
-            Arc::clone(&output),
-            &target_counts,
-            Arc::clone(&loss_tables),
-        );
-        let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
+            &dict,
+            &input,
+            &output,
+            &loss_tables,
+            &abort_flag,
+            &epoch_loss_tracker,
+        )?;
+
+        let model = Self::build_inference_model(&args, &dict, &input, &output, &loss_tables);
 
         Ok(FastText {
             args: args_arc,
@@ -257,40 +289,12 @@ impl FastText {
         Ok((model, losses))
     }
 
-    /// Load pretrained word vectors from a `.vec` file into the input matrix.
+    /// Parse the header of a `.vec` pretrained vectors file.
     ///
-    /// The `.vec` format (same as C++ fastText output):
-    /// - First line: `<n_words> <dim>` (header)
-    /// - Each subsequent line: `<word> <val1> <val2> ... <val_dim>`
-    ///
-    /// For each word in the `.vec` file that is also in the vocabulary, its row
-    /// in the input matrix is overwritten with the pretrained vector.  Words not
-    /// in the `.vec` file retain their uniform random initialization.
-    ///
-    /// # Errors
-    /// - `FastTextError::IoError` if the file cannot be opened.
-    /// - `FastTextError::InvalidArgument` if the `.vec` dimension doesn't match `args.dim`.
-    /// - `FastTextError::InvalidModel` if the file is malformed.
-    fn load_pretrained_vectors(
-        path: &str,
-        args: &Args,
-        dict: &Dictionary,
-        input: &mut DenseMatrix,
-    ) -> Result<()> {
-        let file = std::fs::File::open(path).map_err(FastTextError::IoError)?;
-        let reader = std::io::BufReader::new(file);
-        let mut lines = reader.lines();
-
-        // Read header: "<n_words> <dim>"
-        let header = lines
-            .next()
-            .ok_or_else(|| {
-                FastTextError::InvalidModel("Empty pretrained vectors file".to_string())
-            })?
-            .map_err(FastTextError::IoError)?;
-
-        let mut header_parts = header.split_whitespace();
-        let n: i64 = header_parts
+    /// Returns `(n_words, dim)` from the first line.
+    fn parse_vec_header(header: &str, args_dim: i32) -> Result<(i64, i32)> {
+        let mut parts = header.split_whitespace();
+        let n: i64 = parts
             .next()
             .ok_or_else(|| {
                 FastTextError::InvalidModel(
@@ -303,7 +307,7 @@ impl FastText {
                     "Invalid word count in pretrained vectors header".to_string(),
                 )
             })?;
-        let vec_dim: i32 = header_parts
+        let vec_dim: i32 = parts
             .next()
             .ok_or_else(|| {
                 FastTextError::InvalidModel("Missing dim in pretrained vectors header".to_string())
@@ -312,20 +316,83 @@ impl FastText {
             .map_err(|_| {
                 FastTextError::InvalidModel("Invalid dim in pretrained vectors header".to_string())
             })?;
-
-        // Dimension must match the model dim.
-        if vec_dim != args.dim {
+        if vec_dim != args_dim {
             return Err(FastTextError::InvalidArgument(format!(
                 "Dimension of pretrained vectors ({}) does not match model dimension ({})",
-                vec_dim, args.dim
+                vec_dim, args_dim
             )));
         }
+        Ok((n, vec_dim))
+    }
 
+    /// Parse one line of a `.vec` file and write it into the input matrix.
+    ///
+    /// Returns `Ok(())` on success, propagating errors for malformed lines.
+    fn apply_pretrained_line(
+        line: &str,
+        dim: usize,
+        dict: &Dictionary,
+        input: &mut DenseMatrix,
+    ) -> Result<()> {
+        let mut parts = line.split_whitespace();
+        let word = parts.next().ok_or_else(|| {
+            FastTextError::InvalidModel("Missing word in pretrained vectors line".to_string())
+        })?;
+
+        let mut vec = Vec::with_capacity(dim);
+        for j in 0..dim {
+            let val: f32 = parts
+                .next()
+                .ok_or_else(|| {
+                    FastTextError::InvalidModel(format!(
+                        "Missing value {} in pretrained vectors for word '{}'",
+                        j, word
+                    ))
+                })?
+                .parse()
+                .map_err(|_| {
+                    FastTextError::InvalidModel(format!(
+                        "Invalid float at position {} in pretrained vectors for word '{}'",
+                        j, word
+                    ))
+                })?;
+            vec.push(val);
+        }
+
+        if let Some(idx) = dict.get_id(word) {
+            if idx < dict.nwords() {
+                let row = input.row_mut(idx as i64);
+                row.copy_from_slice(&vec);
+            }
+        }
+        Ok(())
+    }
+
+    /// Load pretrained word vectors from a `.vec` file into the input matrix.
+    ///
+    /// The `.vec` format (same as C++ fastText output):
+    /// - First line: `<n_words> <dim>` (header)
+    /// - Each subsequent line: `<word> <val1> <val2> ... <val_dim>`
+    fn load_pretrained_vectors(
+        path: &str,
+        args: &Args,
+        dict: &Dictionary,
+        input: &mut DenseMatrix,
+    ) -> Result<()> {
+        let file = std::fs::File::open(path).map_err(FastTextError::IoError)?;
+        let reader = std::io::BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let header = lines
+            .next()
+            .ok_or_else(|| {
+                FastTextError::InvalidModel("Empty pretrained vectors file".to_string())
+            })?
+            .map_err(FastTextError::IoError)?;
+
+        let (n, vec_dim) = Self::parse_vec_header(&header, args.dim)?;
         let dim = vec_dim as usize;
-        let nwords = dict.nwords();
 
-        // For each word in the pretrained file, update the input matrix if it
-        // is also in the vocabulary.
         for _ in 0..n {
             let line = lines
                 .next()
@@ -333,40 +400,7 @@ impl FastText {
                     FastTextError::InvalidModel("Pretrained vectors file is truncated".to_string())
                 })?
                 .map_err(FastTextError::IoError)?;
-
-            let mut parts = line.split_whitespace();
-            let word = parts.next().ok_or_else(|| {
-                FastTextError::InvalidModel("Missing word in pretrained vectors line".to_string())
-            })?;
-
-            // Parse all dim float values.
-            let mut vec = Vec::with_capacity(dim);
-            for j in 0..dim {
-                let val: f32 = parts
-                    .next()
-                    .ok_or_else(|| {
-                        FastTextError::InvalidModel(format!(
-                            "Missing value {} in pretrained vectors for word '{}'",
-                            j, word
-                        ))
-                    })?
-                    .parse()
-                    .map_err(|_| {
-                        FastTextError::InvalidModel(format!(
-                            "Invalid float at position {} in pretrained vectors for word '{}'",
-                            j, word
-                        ))
-                    })?;
-                vec.push(val);
-            }
-
-            // If the word is in the vocabulary, overwrite its input row.
-            if let Some(idx) = dict.get_id(word) {
-                if idx < nwords {
-                    let row = input.row_mut(idx as i64);
-                    row.copy_from_slice(&vec);
-                }
-            }
+            Self::apply_pretrained_line(&line, dim, dict, input)?;
         }
 
         Ok(())
@@ -395,11 +429,138 @@ impl FastText {
         self.last_train_loss
     }
 
-    /// Inner training loop for one thread (Hogwild! SGD).
+    /// Compute the learning rate based on current progress.
     ///
-    /// Opens the input file, seeks to `thread_id * file_size / n_threads`,
-    /// then loops reading lines and performing SGD updates until
-    /// `token_count >= epoch * ntokens` or `abort_flag` is set.
+    /// Linear decay from `base_lr` to 0 over the training run.
+    #[inline]
+    fn compute_lr(base_lr: f32, token_count: i64, epoch: i64, ntokens: i64) -> f32 {
+        let progress = token_count as f32 / (epoch as f32 * ntokens as f32);
+        (base_lr * (1.0 - progress)).max(0.0_f32)
+    }
+
+    /// Read one training line and apply the appropriate SGD update.
+    ///
+    /// Returns the number of tokens read (0 at EOF).
+    fn process_training_line<R: Read + Seek>(
+        reader: &mut BufReader<R>,
+        ctx: &TrainThreadCtx<'_>,
+        state: &mut State,
+        lr: f32,
+        scratch: &mut TrainScratch,
+    ) -> i32 {
+        let model_name = ctx.args.model;
+        let ntok = match model_name {
+            ModelName::Supervised => ctx.dict.get_line_with_scratch(
+                reader,
+                &mut scratch.line,
+                &mut scratch.labels,
+                &mut scratch.word_hashes,
+                &mut scratch.token,
+                &mut scratch.pending_newline,
+            ),
+            _ => ctx.dict.get_line_unsupervised_with_scratch(
+                reader,
+                &mut scratch.line,
+                &mut scratch.token,
+                &mut scratch.pending_newline,
+                &mut state.rng,
+            ),
+        };
+
+        if ntok > 0 {
+            let is_ova = ctx.args.loss == LossName::OneVsAll;
+            let ws = ctx.args.ws;
+            match model_name {
+                ModelName::Supervised => {
+                    Self::supervised_fn(
+                        ctx.model,
+                        state,
+                        lr,
+                        &scratch.line,
+                        &scratch.labels,
+                        is_ova,
+                    );
+                }
+                ModelName::Cbow => {
+                    Self::cbow_fn(ctx.model, ctx.dict, state, lr, &scratch.line, ws);
+                }
+                _ => {
+                    Self::skipgram_fn(ctx.model, ctx.dict, state, lr, &scratch.line, ws);
+                }
+            }
+        }
+
+        ntok
+    }
+
+    /// Flush accumulated loss from a thread into the shared atomic counters.
+    fn flush_thread_loss(state: &State, shared_loss: &AtomicU64, shared_loss_count: &AtomicI64) {
+        let examples = state.nexamples();
+        if examples > 0 {
+            let total_loss = state.get_loss() as f64 * examples as f64;
+            atomic_f64_add(shared_loss, total_loss);
+            shared_loss_count.fetch_add(examples, Ordering::Relaxed);
+        }
+    }
+
+    /// Open the training input file and seek to this thread's starting position.
+    fn open_thread_reader(
+        input_path: &str,
+        thread_id: usize,
+        n_threads: usize,
+    ) -> Result<BufReader<std::fs::File>> {
+        let mut file = std::fs::File::open(input_path).map_err(FastTextError::IoError)?;
+        let file_size = file
+            .seek(SeekFrom::End(0))
+            .map_err(FastTextError::IoError)?;
+        let start_pos = thread_id as u64 * file_size / n_threads as u64;
+        file.seek(SeekFrom::Start(start_pos))
+            .map_err(FastTextError::IoError)?;
+        Ok(BufReader::new(file))
+    }
+
+    /// Record per-epoch loss if a new epoch has been completed.
+    ///
+    /// Returns the updated `last_recorded_epoch` value.
+    fn maybe_record_epoch_loss(
+        tracker: &Option<Arc<Mutex<Vec<f32>>>>,
+        state: &mut State,
+        tc: i64,
+        ntokens: i64,
+        last_recorded_epoch: i64,
+    ) -> i64 {
+        if let Some(ref tracker) = tracker {
+            let current_epoch = if ntokens > 0 { tc / ntokens } else { 0 };
+            if current_epoch > last_recorded_epoch && state.nexamples() > 0 {
+                tracker.lock().unwrap().push(state.get_loss());
+                state.reset();
+                return current_epoch;
+            }
+        }
+        last_recorded_epoch
+    }
+
+    /// Finalize a training thread: flush remaining token count, record final
+    /// epoch loss, and flush accumulated loss to shared counters.
+    fn finalize_training_thread(
+        local_token_count: i64,
+        ctx: &TrainThreadCtx<'_>,
+        state: &State,
+        shared_loss_count: &AtomicI64,
+    ) {
+        if local_token_count > 0 {
+            ctx.token_count
+                .fetch_add(local_token_count, Ordering::Relaxed);
+        }
+        if let Some(ref tracker) = ctx.epoch_loss_tracker {
+            if state.nexamples() > 0 {
+                tracker.lock().unwrap().push(state.get_loss());
+            }
+        }
+        Self::flush_thread_loss(state, ctx.shared_loss, shared_loss_count);
+    }
+
+    /// Inner training loop for one thread (Hogwild! SGD).
     ///
     /// Matches C++ `FastText::trainThread`.
     pub(super) fn train_thread_inner(
@@ -413,109 +574,41 @@ impl FastText {
             return Ok(());
         }
 
-        let input_path = ctx.args.input.to_string();
-
-        // Open file and seek to this thread's starting position.
-        let mut file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
-        let file_size = file
-            .seek(SeekFrom::End(0))
-            .map_err(FastTextError::IoError)?;
-        let start_pos = thread_id as u64 * file_size / n_threads as u64;
-        file.seek(SeekFrom::Start(start_pos))
-            .map_err(FastTextError::IoError)?;
-        let mut reader = BufReader::new(file);
-
+        let mut reader = Self::open_thread_reader(&ctx.args.input, thread_id, n_threads)?;
         let seed = thread_id as u64 + ctx.args.seed as u64;
         let mut state = State::new(ctx.args.dim as usize, ctx.output_size, seed);
-
-        let model_name = ctx.args.model;
-        let is_ova = ctx.args.loss == LossName::OneVsAll;
-        let ws = ctx.args.ws;
         let lr_update_rate = ctx.args.lr_update_rate as i64;
         let base_lr = ctx.args.lr as f32;
         let epoch = ctx.args.epoch as i64;
 
-        let mut local_token_count: i64 = 0;
-        let mut line: Vec<i32> = Vec::new();
-        let mut labels: Vec<i32> = Vec::new();
-        let mut word_hashes: Vec<i32> = Vec::new();
-        let mut token = String::new();
-        let mut pending_newline = false;
-
-        // For per-epoch loss tracking: track which epoch we last recorded.
-        let mut last_recorded_epoch: i64 = 0;
+        let (mut local_token_count, mut last_recorded_epoch) = (0i64, 0i64);
+        let mut scratch = TrainScratch::new();
 
         loop {
-            // Check abort flag — exit early if set.
             if ctx.abort_flag.load(Ordering::Relaxed) {
                 break;
             }
-
-            // Load current global token count.
             let tc = ctx.token_count.load(Ordering::Relaxed);
-
-            // Per-epoch loss recording: check if we have completed a new epoch.
-            // Record the average loss for the completed epoch and reset state.
-            // Placed before the break check so the final epoch's loss is captured.
-            if let Some(ref tracker) = ctx.epoch_loss_tracker {
-                let current_epoch = if ntokens > 0 { tc / ntokens } else { 0 };
-                if current_epoch > last_recorded_epoch && state.nexamples() > 0 {
-                    let epoch_loss = state.get_loss();
-                    tracker.lock().unwrap().push(epoch_loss);
-                    state.reset();
-                    last_recorded_epoch = current_epoch;
-                }
-            }
-
-            // Check if training has reached the target token count.
+            last_recorded_epoch = Self::maybe_record_epoch_loss(
+                &ctx.epoch_loss_tracker,
+                &mut state,
+                tc,
+                ntokens,
+                last_recorded_epoch,
+            );
             if tc >= epoch * ntokens {
                 break;
             }
 
-            // Compute current progress and learning rate.
-            let progress = tc as f32 / (epoch as f32 * ntokens as f32);
-            let lr = (base_lr * (1.0 - progress)).max(0.0_f32);
-
-            let ntok = match model_name {
-                ModelName::Supervised => ctx.dict.get_line_with_scratch(
-                    &mut reader,
-                    &mut line,
-                    &mut labels,
-                    &mut word_hashes,
-                    &mut token,
-                    &mut pending_newline,
-                ),
-                _ => ctx.dict.get_line_unsupervised_with_scratch(
-                    &mut reader,
-                    &mut line,
-                    &mut token,
-                    &mut pending_newline,
-                    &mut state.rng,
-                ),
-            };
-
+            let lr = Self::compute_lr(base_lr, tc, epoch, ntokens);
+            let ntok = Self::process_training_line(&mut reader, ctx, &mut state, lr, &mut scratch);
             if ntok == 0 {
-                // EOF: wrap around to beginning for additional epoch passes.
-                if let Err(e) = reader.seek(SeekFrom::Start(0)) {
-                    return Err(FastTextError::IoError(e));
-                }
-                pending_newline = false;
+                reader
+                    .seek(SeekFrom::Start(0))
+                    .map_err(FastTextError::IoError)?;
+                scratch.pending_newline = false;
                 continue;
             }
-
-            match model_name {
-                ModelName::Supervised => {
-                    Self::supervised_fn(ctx.model, &mut state, lr, &line, &labels, is_ova);
-                }
-                ModelName::Cbow => {
-                    Self::cbow_fn(ctx.model, ctx.dict, &mut state, lr, &line, ws);
-                }
-                _ => {
-                    // Skip-gram
-                    Self::skipgram_fn(ctx.model, ctx.dict, &mut state, lr, &line, ws);
-                }
-            }
-
             local_token_count += ntok as i64;
             if local_token_count > lr_update_rate {
                 ctx.token_count
@@ -524,28 +617,7 @@ impl FastText {
             }
         }
 
-        // Flush any remaining local token count into the shared counter.
-        if local_token_count > 0 {
-            ctx.token_count
-                .fetch_add(local_token_count, Ordering::Relaxed);
-        }
-
-        // Record the final (partial) epoch's loss, if any examples remain unrecorded.
-        if let Some(ref tracker) = ctx.epoch_loss_tracker {
-            if state.nexamples() > 0 {
-                tracker.lock().unwrap().push(state.get_loss());
-            }
-        }
-
-        // Atomically flush this thread's total loss contribution to the shared counter.
-        // Uses a CAS loop (via atomic_f64_add) since there is no native atomic f64 add.
-        let examples = state.nexamples();
-        if examples > 0 {
-            let total_loss = state.get_loss() as f64 * examples as f64;
-            atomic_f64_add(ctx.shared_loss, total_loss);
-            shared_loss_count.fetch_add(examples, Ordering::Relaxed);
-        }
-
+        Self::finalize_training_thread(local_token_count, ctx, &state, shared_loss_count);
         Ok(())
     }
 

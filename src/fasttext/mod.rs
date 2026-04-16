@@ -122,6 +122,15 @@ pub(super) struct TrainThreadCtx<'a> {
     pub(super) epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
 }
 
+/// Result of loading input and output matrices from binary format.
+struct LoadedMatrices {
+    input_dense: DenseMatrix,
+    input_quant: Option<QuantMatrix>,
+    qout: bool,
+    output_dense: DenseMatrix,
+    output_quant: Option<QuantMatrix>,
+}
+
 /// A loaded fastText model.
 ///
 /// Contains the model arguments, dictionary, input matrix, output matrix,
@@ -161,19 +170,10 @@ pub struct FastText {
 }
 
 impl FastText {
-    /// Load a model from a binary reader.
+    /// Validate the binary model header (magic number and version).
     ///
-    /// Reads in this order:
-    /// 1. Magic number (i32) – must be 793712314
-    /// 2. Version (i32) – must be ≤ 12
-    /// 3. Args block (56 bytes)
-    /// 4. Dictionary block
-    /// 5. quant_input (bool)
-    /// 6. Input matrix (DenseMatrix if not quantized)
-    /// 7. qout (bool → stored in args.qout)
-    /// 8. Output matrix
-    pub fn load<R: Read>(reader: &mut R) -> Result<Self> {
-        // 1. Read and validate magic number
+    /// Returns the version number on success.
+    fn validate_header<R: Read>(reader: &mut R) -> Result<i32> {
         let magic = utils::read_i32(reader)?;
         if magic != FASTTEXT_FILEFORMAT_MAGIC_INT32 {
             return Err(FastTextError::InvalidModel(format!(
@@ -181,8 +181,6 @@ impl FastText {
                 magic, FASTTEXT_FILEFORMAT_MAGIC_INT32
             )));
         }
-
-        // 2. Read and validate version
         let version = utils::read_i32(reader)?;
         if version > FASTTEXT_VERSION {
             return Err(FastTextError::InvalidModel(format!(
@@ -190,31 +188,20 @@ impl FastText {
                 version, FASTTEXT_VERSION
             )));
         }
+        Ok(version)
+    }
 
-        // 3. Read Args block
-        let mut args = Args::default();
-        args.load(reader)?;
-
-        // Version 11 backward compatibility:
-        // Old supervised models do not use character n-grams.
-        if version == 11 && args.model == ModelName::Supervised {
-            args.maxn = 0;
-        }
-
-        // 4. Read Dictionary block
-        let args_arc = Arc::new(args.clone());
-        let dict = Dictionary::load_from_reader(reader, args_arc)?;
-
-        // 5. Read quant_input flag
+    /// Load input and output matrices from the binary format.
+    ///
+    /// Reads: quant_input flag, input matrix, qout flag, output matrix.
+    /// Returns `(input_dense, input_quant, qout, output_dense, output_quant)`.
+    fn load_matrices<R: Read>(reader: &mut R, dict: &Dictionary) -> Result<LoadedMatrices> {
         let quant_input = utils::read_bool(reader)?;
 
-        // 6. Load input matrix
         let (input_dense, input_quant) = if !quant_input {
-            let dense = DenseMatrix::load(reader)?;
-            (dense, None)
+            (DenseMatrix::load(reader)?, None)
         } else {
             let qm = QuantMatrix::load(reader)?;
-            // Use a zero-size placeholder for the dense input
             (DenseMatrix::new(0, 0), Some(qm))
         };
 
@@ -227,47 +214,90 @@ impl FastText {
             ));
         }
 
-        // 7. Read qout flag (stored in args)
         let qout = utils::read_bool(reader)?;
-        args.qout = qout;
 
-        // 8. Load output matrix
         let (output_dense, output_quant) = if quant_input && qout {
             let qm = QuantMatrix::load(reader)?;
             (DenseMatrix::new(0, 0), Some(qm))
         } else {
-            let dense = DenseMatrix::load(reader)?;
-            (dense, None)
+            (DenseMatrix::load(reader)?, None)
         };
 
-        // 9. Build the inference model.
-        let input_arc = Arc::new(input_dense);
-        let output_arc = Arc::new(output_dense);
-        let label_counts = dict.get_counts(EntryType::Label);
-        let word_counts = dict.get_counts(EntryType::Word);
+        Ok(LoadedMatrices {
+            input_dense,
+            input_quant,
+            qout,
+            output_dense,
+            output_quant,
+        })
+    }
+
+    /// Build the inference model from loaded matrices, args, and dictionary.
+    fn build_inference_model(
+        args: &Args,
+        dict: &Dictionary,
+        input: &Arc<DenseMatrix>,
+        output: &Arc<DenseMatrix>,
+        loss_tables: &Arc<LossTables>,
+    ) -> Model {
         let target_counts = if args.model == ModelName::Supervised {
-            label_counts
+            dict.get_counts(EntryType::Label)
         } else {
-            word_counts
+            dict.get_counts(EntryType::Word)
         };
-        let loss_tables = Arc::new(LossTables::new());
         let loss = build_loss(
-            &args,
-            Arc::clone(&output_arc),
+            args,
+            Arc::clone(output),
             &target_counts,
-            Arc::clone(&loss_tables),
+            Arc::clone(loss_tables),
         );
         let normalize_gradient = args.model == ModelName::Supervised;
-        let model = Model::new(Arc::clone(&input_arc), loss, normalize_gradient);
+        Model::new(Arc::clone(input), loss, normalize_gradient)
+    }
+
+    /// Load a model from a binary reader.
+    ///
+    /// Reads in this order:
+    /// 1. Magic number (i32) – must be 793712314
+    /// 2. Version (i32) – must be ≤ 12
+    /// 3. Args block (56 bytes)
+    /// 4. Dictionary block
+    /// 5. quant_input (bool)
+    /// 6. Input matrix (DenseMatrix if not quantized)
+    /// 7. qout (bool → stored in args.qout)
+    /// 8. Output matrix
+    pub fn load<R: Read>(reader: &mut R) -> Result<Self> {
+        let version = Self::validate_header(reader)?;
+
+        // Read Args block with backward compatibility
+        let mut args = Args::default();
+        args.load(reader)?;
+        if version == 11 && args.model == ModelName::Supervised {
+            args.maxn = 0;
+        }
+
+        // Read Dictionary block
+        let dict = Dictionary::load_from_reader(reader, Arc::new(args.clone()))?;
+
+        // Read matrices (input, output, quant flags)
+        let matrices = Self::load_matrices(reader, &dict)?;
+        args.qout = matrices.qout;
+        let quant = matrices.input_quant.is_some();
+
+        // Build inference model
+        let input = Arc::new(matrices.input_dense);
+        let output = Arc::new(matrices.output_dense);
+        let loss_tables = Arc::new(LossTables::new());
+        let model = Self::build_inference_model(&args, &dict, &input, &output, &loss_tables);
 
         Ok(FastText {
             args: Arc::new(args),
             dict,
-            input: input_arc,
-            output: output_arc,
-            quant: quant_input,
-            quant_input: input_quant,
-            quant_output: output_quant,
+            input,
+            output,
+            quant,
+            quant_input: matrices.input_quant,
+            quant_output: matrices.output_quant,
             model,
             abort_flag: Arc::new(AtomicBool::new(false)),
             last_train_loss: 0.0,
@@ -447,6 +477,70 @@ impl FastText {
         result
     }
 
+    /// Compute sentence vector for supervised models: sum input rows, average.
+    fn supervised_sentence_vector(&self, sentence: &str, out: &mut [f32]) {
+        let dim = self.args.dim as usize;
+        let mut words: Vec<i32> = Vec::new();
+        let mut labels: Vec<i32> = Vec::new();
+        self.dict
+            .get_line_from_str(sentence, &mut words, &mut labels);
+
+        if words.is_empty() {
+            return;
+        }
+
+        let eos_id = self.dict.get_id(EOS);
+        if let Some(eos_id) = eos_id {
+            words.push(eos_id);
+        }
+
+        let count = words.len() as f32;
+        if self.quant {
+            if let Some(ref qi) = self.quant_input {
+                let mut vec = Vector::new(dim);
+                for &id in &words {
+                    qi.add_row_to_vector(&mut vec, id, 1.0);
+                }
+                for (r, &v) in out.iter_mut().zip(vec.data().iter()) {
+                    *r = v / count;
+                }
+            }
+        } else {
+            for &id in &words {
+                let row = self.input.row(id as i64);
+                for (r, &v) in out.iter_mut().zip(row.iter()) {
+                    *r += v;
+                }
+            }
+            for r in out.iter_mut() {
+                *r /= count;
+            }
+        }
+    }
+
+    /// Compute sentence vector for unsupervised models: L2-normalize each word, average.
+    fn unsupervised_sentence_vector(&self, sentence: &str, out: &mut [f32]) {
+        let dim = self.args.dim as usize;
+        let mut word_buf = vec![0.0f32; dim];
+        let mut count = 0i32;
+        for word in sentence.split_whitespace() {
+            self.get_word_vector_into(word, &mut word_buf);
+            let norm: f32 = word_buf.iter().map(|&v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for (r, &v) in out.iter_mut().zip(word_buf.iter()) {
+                    *r += v / norm;
+                }
+                count += 1;
+            }
+        }
+        if count > 0 {
+            let scale = 1.0 / count as f32;
+            for r in out.iter_mut() {
+                *r *= scale;
+            }
+        }
+    }
+
     /// Write the sentence vector for `sentence` into `out`.
     ///
     /// Like [`get_sentence_vector`] but avoids allocation by writing into a
@@ -464,61 +558,9 @@ impl FastText {
         out.fill(0.0);
 
         if self.args.model == ModelName::Supervised {
-            let mut words: Vec<i32> = Vec::new();
-            let mut labels: Vec<i32> = Vec::new();
-            self.dict
-                .get_line_from_str(sentence, &mut words, &mut labels);
-
-            if words.is_empty() {
-                return;
-            }
-
-            let eos_id = self.dict.get_id(EOS);
-            if let Some(eos_id) = eos_id {
-                words.push(eos_id);
-            }
-
-            let count = words.len() as f32;
-            if self.quant {
-                if let Some(ref qi) = self.quant_input {
-                    let mut vec = Vector::new(dim);
-                    for &id in &words {
-                        qi.add_row_to_vector(&mut vec, id, 1.0);
-                    }
-                    for (r, &v) in out.iter_mut().zip(vec.data().iter()) {
-                        *r = v / count;
-                    }
-                }
-            } else {
-                for &id in &words {
-                    let row = self.input.row(id as i64);
-                    for (r, &v) in out.iter_mut().zip(row.iter()) {
-                        *r += v;
-                    }
-                }
-                for r in out.iter_mut() {
-                    *r /= count;
-                }
-            }
+            self.supervised_sentence_vector(sentence, out);
         } else {
-            let mut word_buf = vec![0.0f32; dim];
-            let mut count = 0i32;
-            for word in sentence.split_whitespace() {
-                self.get_word_vector_into(word, &mut word_buf);
-                let norm: f32 = word_buf.iter().map(|&v| v * v).sum::<f32>().sqrt();
-                if norm > 0.0 {
-                    for (r, &v) in out.iter_mut().zip(word_buf.iter()) {
-                        *r += v / norm;
-                    }
-                    count += 1;
-                }
-            }
-            if count > 0 {
-                let scale = 1.0 / count as f32;
-                for r in out.iter_mut() {
-                    *r *= scale;
-                }
-            }
+            self.unsupervised_sentence_vector(sentence, out);
         }
     }
 

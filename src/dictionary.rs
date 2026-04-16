@@ -354,14 +354,40 @@ impl Dictionary {
 
     // Stream-based word reader (for readFromFile)
 
+    /// Check if a byte is whitespace in the C++ fastText sense.
+    #[inline]
+    fn is_ws_byte(c: u8) -> bool {
+        matches!(c, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0')
+    }
+
+    /// Handle a whitespace byte during word reading.
+    ///
+    /// Returns `Some(true)` if a token was produced, `Some(false)` to continue,
+    /// or `None` if whitespace was consumed without producing a token.
+    fn handle_ws_byte(
+        c: u8,
+        buf: &[u8],
+        pending_newline: &mut bool,
+        word: &mut String,
+    ) -> Option<bool> {
+        if buf.is_empty() {
+            if c == b'\n' {
+                word.push_str(EOS);
+                return Some(true);
+            }
+            return None; // skip non-newline whitespace
+        }
+        if c == b'\n' {
+            *pending_newline = true;
+        }
+        *word = String::from_utf8_lossy(buf).into_owned();
+        Some(true)
+    }
+
     /// Read one word from a reader, following C++ `readWord` semantics.
     ///
     /// Returns `true` if a token was produced (written to `word`), `false` at EOF
-    /// with no remaining data. Uses `pending_newline` to simulate the C++ "ungetc"
-    /// behavior when a word is terminated by a newline character.
-    ///
-    /// The `pending_newline` flag should be initialized to `false` before the first call
-    /// and passed through subsequent calls on the same reader.
+    /// with no remaining data.
     pub fn read_word_from_reader<R: Read>(
         reader: &mut R,
         pending_newline: &mut bool,
@@ -369,7 +395,6 @@ impl Dictionary {
     ) -> bool {
         word.clear();
 
-        // If a newline was "put back" by the previous call, produce EOS now.
         if *pending_newline {
             *pending_newline = false;
             word.push_str(EOS);
@@ -380,8 +405,7 @@ impl Dictionary {
         let mut byte = [0u8; 1];
         loop {
             match reader.read(&mut byte) {
-                Ok(0) => {
-                    // EOF: return true if we accumulated a token.
+                Ok(0) | Err(_) => {
                     if !buf.is_empty() {
                         *word = String::from_utf8_lossy(&buf).into_owned();
                         return true;
@@ -390,34 +414,13 @@ impl Dictionary {
                 }
                 Ok(_) => {
                     let c = byte[0];
-                    let is_ws =
-                        matches!(c, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0');
-
-                    if is_ws {
-                        if buf.is_empty() {
-                            if c == b'\n' {
-                                word.push_str(EOS);
-                                return true;
-                            }
-                            // Skip non-newline whitespace when buffer is empty.
-                        } else {
-                            if c == b'\n' {
-                                // Put back the newline via the pending flag.
-                                *pending_newline = true;
-                            }
-                            *word = String::from_utf8_lossy(&buf).into_owned();
-                            return true;
+                    if Self::is_ws_byte(c) {
+                        if let Some(result) = Self::handle_ws_byte(c, &buf, pending_newline, word) {
+                            return result;
                         }
                     } else {
                         buf.push(c);
                     }
-                }
-                Err(_) => {
-                    if !buf.is_empty() {
-                        *word = String::from_utf8_lossy(&buf).into_owned();
-                        return true;
-                    }
-                    return false;
                 }
             }
         }
@@ -507,17 +510,18 @@ impl Dictionary {
         hashes.push(self.nwords + id);
     }
 
-    /// Compute character n-gram subwords for a word (already with BOW/EOW markers).
+    /// Iterate over all valid character n-grams of a word, calling `f` for each.
     ///
-    /// Extracts all n-grams of length [minn, maxn] (counted in Unicode characters).
-    /// UTF-8 continuation bytes (0x80–0xBF) are skipped for the outer position loop
-    /// but included within n-gram bytes.
+    /// The callback receives `(ngram_bytes, hash_bucket_id)` for each n-gram.
+    /// `word` must already include BOW/EOW markers.
     ///
-    /// Each n-gram is hashed via FNV-1a and mapped to `hash % bucket`. The resulting
-    /// subword ID (`nwords + (hash % bucket)`) is pushed via `push_hash`.
-    ///
-    /// No-op if `maxn == 0` or `bucket == 0`.
-    pub fn compute_subwords(&self, word: &str, ngrams: &mut Vec<i32>) {
+    /// This is the core n-gram iteration used by both `compute_subwords` (which
+    /// collects hash IDs) and `compute_subwords_with_strings` (which also records
+    /// the n-gram string).
+    fn for_each_ngram<F>(&self, word: &str, mut f: F)
+    where
+        F: FnMut(&[u8], i32),
+    {
         let minn = self.args.minn;
         let maxn = self.args.maxn;
         let bucket = self.args.bucket;
@@ -528,10 +532,9 @@ impl Dictionary {
 
         let bytes = word.as_bytes();
         let n_bytes = bytes.len();
-
         let mut i = 0usize;
+
         while i < n_bytes {
-            // Skip UTF-8 continuation bytes (0x80–0xBF) for the outer position.
             if (bytes[i] & 0xC0) == 0x80 {
                 i += 1;
                 continue;
@@ -542,22 +545,16 @@ impl Dictionary {
             let mut n: i32 = 1;
 
             while j < n_bytes && n <= maxn {
-                // Consume the leading byte of the current Unicode character.
                 ngram.push(bytes[j]);
                 j += 1;
-                // Consume any UTF-8 continuation bytes.
                 while j < n_bytes && (bytes[j] & 0xC0) == 0x80 {
                     ngram.push(bytes[j]);
                     j += 1;
                 }
 
-                // Include this n-gram if length meets minn and is not a BOW/EOW singleton.
-                // The exclusion condition skips:
-                //   - The BOW '<' alone (n==1 && i==0)
-                //   - The EOW '>' alone (n==1 && j==n_bytes, meaning we consumed the last char)
                 if n >= minn && !(n == 1 && (i == 0 || j == n_bytes)) {
                     let h = (crate::utils::hash(&ngram) % bucket as u32) as i32;
-                    self.push_hash(ngrams, h);
+                    f(&ngram, h);
                 }
 
                 n += 1;
@@ -565,6 +562,16 @@ impl Dictionary {
 
             i += 1;
         }
+    }
+
+    /// Compute character n-gram subword IDs for a word (with BOW/EOW markers).
+    ///
+    /// Each n-gram is hashed and mapped through `push_hash` to produce subword IDs.
+    /// No-op if `maxn == 0` or `bucket == 0`.
+    pub fn compute_subwords(&self, word: &str, ngrams: &mut Vec<i32>) {
+        self.for_each_ngram(word, |_ngram_bytes, h| {
+            self.push_hash(ngrams, h);
+        });
     }
 
     /// Initialize the subword n-gram vectors for all vocabulary entries.
@@ -705,61 +712,24 @@ impl Dictionary {
 
     /// Compute character n-gram subwords with their string representations.
     ///
-    /// Similar to `compute_subwords` but also records each n-gram string alongside its ID.
-    /// Only adds an entry when the n-gram's bucket ID is valid (not pruned).
+    /// Delegates to `for_each_ngram` with a callback that also records the
+    /// n-gram string alongside its ID. Only adds an entry when the n-gram's
+    /// bucket ID is valid (not pruned).
     fn compute_subwords_with_strings(&self, word: &str, result: &mut Vec<(i32, String)>) {
-        let minn = self.args.minn;
-        let maxn = self.args.maxn;
-        let bucket = self.args.bucket;
-
-        if maxn == 0 || bucket == 0 {
-            return;
-        }
-
-        let bytes = word.as_bytes();
-        let n_bytes = bytes.len();
-
-        let mut i = 0usize;
-        while i < n_bytes {
-            if (bytes[i] & 0xC0) == 0x80 {
-                i += 1;
-                continue;
-            }
-
-            let mut ngram: Vec<u8> = Vec::new();
-            let mut j = i;
-            let mut n: i32 = 1;
-
-            while j < n_bytes && n <= maxn {
-                ngram.push(bytes[j]);
-                j += 1;
-                while j < n_bytes && (bytes[j] & 0xC0) == 0x80 {
-                    ngram.push(bytes[j]);
-                    j += 1;
+        self.for_each_ngram(word, |ngram_bytes, h| {
+            // Replicate push_hash logic but also capture the ngram string.
+            if self.pruneidx_size != 0 && h >= 0 {
+                let bucket_id = if self.pruneidx_size > 0 {
+                    self.pruneidx.get(&h).map(|&mapped| self.nwords + mapped)
+                } else {
+                    Some(self.nwords + h)
+                };
+                if let Some(id) = bucket_id {
+                    let ngram_str = String::from_utf8(ngram_bytes.to_vec()).unwrap_or_default();
+                    result.push((id, ngram_str));
                 }
-
-                if n >= minn && !(n == 1 && (i == 0 || j == n_bytes)) {
-                    let h = (crate::utils::hash(&ngram) % bucket as u32) as i32;
-                    // Replicate push_hash logic but also capture the ngram string.
-                    if self.pruneidx_size != 0 && h >= 0 {
-                        let bucket_id = if self.pruneidx_size > 0 {
-                            self.pruneidx.get(&h).map(|&mapped| self.nwords + mapped)
-                        } else {
-                            // pruneidx_size < 0 means no pruning
-                            Some(self.nwords + h)
-                        };
-                        if let Some(id) = bucket_id {
-                            let ngram_str = String::from_utf8(ngram.clone()).unwrap_or_default();
-                            result.push((id, ngram_str));
-                        }
-                    }
-                }
-
-                n += 1;
             }
-
-            i += 1;
-        }
+        });
     }
 
     // getLine: read one line from a reader, separate words and labels
@@ -1096,16 +1066,55 @@ impl Dictionary {
         Ok(())
     }
 
+    /// Read one vocabulary entry (word + count + type) from binary format.
+    fn read_entry_from_reader<R: Read>(reader: &mut R) -> Result<Entry> {
+        let mut word_bytes: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 1];
+        loop {
+            reader.read_exact(&mut buf)?;
+            if buf[0] == 0 {
+                break;
+            }
+            word_bytes.push(buf[0]);
+        }
+        let word = String::from_utf8(word_bytes).map_err(|_| {
+            FastTextError::InvalidModel("Invalid UTF-8 in dictionary word".to_string())
+        })?;
+        let count = utils::read_i64(reader)?;
+        let mut type_buf = [0u8; 1];
+        reader.read_exact(&mut type_buf)?;
+        let entry_type = match type_buf[0] as i8 {
+            0 => EntryType::Word,
+            1 => EntryType::Label,
+            v => {
+                return Err(FastTextError::InvalidModel(format!(
+                    "Invalid entry type: {}",
+                    v
+                )))
+            }
+        };
+        Ok(Entry {
+            word,
+            count,
+            entry_type,
+            subwords: Vec::new(),
+        })
+    }
+
+    /// Read pruneidx pairs from binary format.
+    fn read_pruneidx<R: Read>(reader: &mut R, pruneidx_size: i64) -> Result<HashMap<i32, i32>> {
+        let mut pruneidx = HashMap::new();
+        if pruneidx_size > 0 {
+            for _ in 0..pruneidx_size {
+                let first = utils::read_i32(reader)?;
+                let second = utils::read_i32(reader)?;
+                pruneidx.insert(first, second);
+            }
+        }
+        Ok(pruneidx)
+    }
+
     /// Load a Dictionary from binary format (matching C++ Dictionary::load).
-    ///
-    /// Format:
-    /// - size: i32
-    /// - nwords: i32
-    /// - nlabels: i32
-    /// - ntokens: i64
-    /// - pruneidx_size: i64
-    /// - For each entry: null-terminated word string + count(i64) + type(i8)
-    /// - If pruneidx_size > 0: that many (i32, i32) pairs
     ///
     /// After loading, initializes discard table, n-grams, and rebuilds word2int.
     pub fn load_from_reader<R: Read>(reader: &mut R, args: Arc<Args>) -> Result<Self> {
@@ -1115,7 +1124,6 @@ impl Dictionary {
         let ntokens = utils::read_i64(reader)?;
         let pruneidx_size = utils::read_i64(reader)?;
 
-        // Validate dimensions
         if size < 0 || nwords < 0 || nlabels < 0 {
             return Err(FastTextError::InvalidModel(format!(
                 "Invalid dictionary dimensions: size={}, nwords={}, nlabels={}",
@@ -1123,54 +1131,13 @@ impl Dictionary {
             )));
         }
 
-        // Read vocabulary entries
         let mut words = Vec::with_capacity(size as usize);
         for _ in 0..size {
-            // Read null-terminated string
-            let mut word_bytes: Vec<u8> = Vec::new();
-            let mut buf = [0u8; 1];
-            loop {
-                reader.read_exact(&mut buf)?;
-                if buf[0] == 0 {
-                    break;
-                }
-                word_bytes.push(buf[0]);
-            }
-            let word = String::from_utf8(word_bytes).map_err(|_| {
-                FastTextError::InvalidModel("Invalid UTF-8 in dictionary word".to_string())
-            })?;
-            let count = utils::read_i64(reader)?;
-            let mut type_buf = [0u8; 1];
-            reader.read_exact(&mut type_buf)?;
-            let entry_type = match type_buf[0] as i8 {
-                0 => EntryType::Word,
-                1 => EntryType::Label,
-                v => {
-                    return Err(FastTextError::InvalidModel(format!(
-                        "Invalid entry type: {}",
-                        v
-                    )))
-                }
-            };
-            words.push(Entry {
-                word,
-                count,
-                entry_type,
-                subwords: Vec::new(),
-            });
+            words.push(Self::read_entry_from_reader(reader)?);
         }
 
-        // Read pruneidx pairs
-        let mut pruneidx = HashMap::new();
-        if pruneidx_size > 0 {
-            for _ in 0..pruneidx_size {
-                let first = utils::read_i32(reader)?;
-                let second = utils::read_i32(reader)?;
-                pruneidx.insert(first, second);
-            }
-        }
+        let pruneidx = Self::read_pruneidx(reader, pruneidx_size)?;
 
-        // Build the dictionary with a tiny placeholder (will be resized by rebuild)
         let mut dict = Dictionary::new_with_capacity(args, 1);
         dict.words = words;
         dict.size = size;
@@ -1180,11 +1147,8 @@ impl Dictionary {
         dict.pruneidx_size = pruneidx_size;
         dict.pruneidx = pruneidx;
 
-        // Initialize discard table and n-grams (matching C++ Dictionary::load order)
         dict.init_table_discard();
         dict.init_ngrams();
-
-        // Rebuild word2int hash table with size = ceil(size / 0.7)
         dict.rebuild_word2int_after_load();
 
         Ok(dict)
@@ -1195,88 +1159,65 @@ impl Dictionary {
         self.pruneidx_size >= 0
     }
 
-    /// Prune the dictionary to keep only the embeddings specified by `idx`.
+    /// Partition prune indices into word indices and ngram indices.
     ///
-    /// Matches C++ `Dictionary::prune`. The `idx` slice contains mixed word-row
-    /// indices and bucket (ngram) row indices.  Word indices are `< nwords`;
-    /// ngram indices are `>= nwords`.
-    ///
-    /// After pruning:
-    /// - Only the words whose indices appear in `idx` are kept (labels are always kept).
-    /// - Bucket n-gram rows are remapped via `pruneidx` so downstream code can
-    ///   still look up their new positions in the pruned input matrix.
-    /// - `nwords`, `size`, and `word2int` are updated accordingly.
-    /// - `init_ngrams()` is called to recompute subwords with the new vocabulary.
-    pub fn prune(&mut self, idx: &[i32]) {
+    /// Returns `(words_idx_sorted, ngrams_idx)` where `words_idx` is sorted.
+    fn partition_prune_indices(idx: &[i32], nwords: i32) -> (Vec<i32>, Vec<i32>) {
         let mut words_idx: Vec<i32> = Vec::new();
         let mut ngrams_idx: Vec<i32> = Vec::new();
-
         for &i in idx {
-            if i < self.nwords {
+            if i < nwords {
                 words_idx.push(i);
             } else {
                 ngrams_idx.push(i);
             }
         }
         words_idx.sort_unstable();
+        (words_idx, ngrams_idx)
+    }
+
+    /// Compact the words array: keep only selected words + all labels,
+    /// ordered with words first then labels.
+    fn compact_words(words: &[Entry], words_idx: &[i32], nlabels: i32) -> Vec<Entry> {
+        let mut words_part: Vec<Entry> = Vec::new();
+        let mut labels_part: Vec<Entry> = Vec::new();
+        let mut word_ptr = 0usize;
+
+        for (i, entry) in words.iter().enumerate() {
+            if entry.entry_type == EntryType::Label {
+                labels_part.push(entry.clone());
+            } else if word_ptr < words_idx.len() && words_idx[word_ptr] == i as i32 {
+                words_part.push(entry.clone());
+                word_ptr += 1;
+            }
+        }
+
+        let _ = nlabels; // used only for documentation context
+        words_part.extend(labels_part);
+        words_part
+    }
+
+    /// Prune the dictionary to keep only the embeddings specified by `idx`.
+    ///
+    /// Matches C++ `Dictionary::prune`. The `idx` slice contains mixed word-row
+    /// indices and bucket (ngram) row indices.
+    pub fn prune(&mut self, idx: &[i32]) {
+        let (words_idx, ngrams_idx) = Self::partition_prune_indices(idx, self.nwords);
 
         // Build pruneidx: maps original bucket-relative ngram index to new position.
-        // Ngram IDs in the input matrix are stored as nwords + relative_idx.
-        // After pruning, bucket rows start after the pruned word rows.
-        // pruneidx maps (original_ngram_id - nwords) → new_position_in_ngram_block
         self.pruneidx.clear();
         for (j, &ngram) in ngrams_idx.iter().enumerate() {
             self.pruneidx.insert(ngram - self.nwords, j as i32);
         }
         self.pruneidx_size = self.pruneidx.len() as i64;
 
-        // Compact the words array: keep only selected words + all labels.
-        // The C++ algorithm iterates words_ in order; word i is kept if its
-        // original index appears in words_idx (sorted), or if it is a label.
-        let mut new_words: Vec<Entry> = Vec::with_capacity(words_idx.len() + self.nlabels as usize);
-        let mut word_ptr = 0usize; // pointer into words_idx (sorted)
-        for i in 0..self.words.len() {
-            let entry_type = self.words[i].entry_type;
-            if entry_type == EntryType::Label {
-                // Labels are always kept.
-                new_words.push(self.words[i].clone());
-            } else if word_ptr < words_idx.len() && words_idx[word_ptr] == i as i32 {
-                // This word index was selected.
-                new_words.push(self.words[i].clone());
-                word_ptr += 1;
-            }
-        }
+        // Compact: keep only selected words + all labels
+        self.words = Self::compact_words(&self.words, &words_idx, self.nlabels);
+        self.nwords = words_idx.len() as i32;
+        self.size = self.nwords + self.nlabels;
 
-        // Reorder so that words come first, then labels (matching C++).
-        let new_nwords = words_idx.len() as i32;
-        let new_nlabels = self.nlabels;
-        // Separate words and labels from new_words (labels were pushed after words above).
-        let mut words_part: Vec<Entry> = Vec::new();
-        let mut labels_part: Vec<Entry> = Vec::new();
-        for e in new_words {
-            if e.entry_type == EntryType::Word {
-                words_part.push(e);
-            } else {
-                labels_part.push(e);
-            }
-        }
-        // Words must be in sorted index order (already are since words_idx is sorted and we
-        // iterated words_ in order).
-        self.words = words_part;
-        self.words.extend(labels_part);
-
-        self.nwords = new_nwords;
-        self.size = self.nwords + new_nlabels;
-
-        // Rebuild word2int hash table.
-        let word2int_size = ((self.size as f64 / 0.7).ceil() as usize).max(1);
-        self.word2int = vec![HASH_EMPTY; word2int_size];
-        for i in 0..self.size as usize {
-            let w = self.words[i].word.clone();
-            let h = hash(w.as_bytes());
-            let slot = self.find_slot_with_hash(&w, h);
-            self.word2int[slot] = i as i32;
-        }
+        // Rebuild word2int hash table
+        self.rebuild_word2int_after_load();
 
         // Recompute subwords for the pruned vocabulary.
         self.init_ngrams();

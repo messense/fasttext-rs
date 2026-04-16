@@ -204,6 +204,85 @@ impl Meter {
     /// non-decreases.
     ///
     /// Returns an empty vector if the label is unknown or has no gold examples.
+    /// Build cumulative (TP, FP) counts from sorted scores (highest first).
+    ///
+    /// Matches C++ `getPositiveCounts`. Tied scores are squeezed into one entry.
+    fn compute_positive_counts(score_vs_true: &[(f32, f32)]) -> Vec<(u64, u64)> {
+        let mut counts: Vec<(u64, u64)> = Vec::new();
+        let mut tp = 0u64;
+        let mut fp = 0u64;
+        let mut last_score = f32::INFINITY;
+
+        for &(score, gold_flag) in score_vs_true.iter().rev() {
+            if score < 0.0 {
+                break;
+            }
+            if gold_flag == 1.0 {
+                tp += 1;
+            } else {
+                fp += 1;
+            }
+            if score == last_score && !counts.is_empty() {
+                *counts.last_mut().unwrap() = (tp, fp);
+            } else {
+                counts.push((tp, fp));
+            }
+            last_score = score;
+        }
+        counts
+    }
+
+    /// Collect distinct thresholds from sorted scores (highest first).
+    fn collect_thresholds(score_vs_true: &[(f32, f32)]) -> Vec<f64> {
+        let mut thresholds: Vec<f64> = Vec::new();
+        let mut last_th = f32::INFINITY;
+        for &(score, _) in score_vs_true.iter().rev() {
+            if score < 0.0 {
+                break;
+            }
+            if (score - last_th).abs() >= f32::EPSILON || last_th.is_infinite() {
+                thresholds.push(score as f64);
+                last_th = score;
+            }
+        }
+        thresholds
+    }
+
+    /// Build the precision-recall curve from positive counts and thresholds.
+    fn build_pr_curve(
+        positive_counts: &[(u64, u64)],
+        thresholds: &[f64],
+        golds: u64,
+    ) -> Vec<(f64, f64, f64)> {
+        let full_recall_idx = positive_counts
+            .iter()
+            .position(|&(tp_count, _)| tp_count >= golds)
+            .map(|idx| idx + 1)
+            .unwrap_or(positive_counts.len());
+
+        positive_counts[..full_recall_idx]
+            .iter()
+            .enumerate()
+            .map(|(i, &(tp_count, fp_count))| {
+                let precision = if tp_count + fp_count == 0 {
+                    0.0
+                } else {
+                    tp_count as f64 / (tp_count + fp_count) as f64
+                };
+                let recall = tp_count as f64 / golds as f64;
+                let threshold = thresholds.get(i).copied().unwrap_or(0.0);
+                (threshold, precision, recall)
+            })
+            .collect()
+    }
+
+    /// Returns the precision-recall curve for a specific label.
+    ///
+    /// Each element is `(threshold, precision, recall)` where `threshold` is the
+    /// probability score at which the decision boundary was evaluated.
+    ///
+    /// The curve is sorted by **decreasing threshold** (highest threshold first).
+    /// Returns an empty vector if the label is unknown or has no gold examples.
     pub fn precision_recall_curve_for_label(&self, label_id: i32) -> Vec<(f64, f64, f64)> {
         let lm = match self.label_metrics.get(&label_id) {
             Some(lm) => lm,
@@ -215,76 +294,16 @@ impl Meter {
             return Vec::new();
         }
 
-        // Sort (score, gold_flag) ascending by score (C++ `sort(ret.begin(), ret.end())`).
         let mut score_vs_true = lm.score_vs_true.clone();
         score_vs_true.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Build cumulative (TP, FP) counts iterating from highest score.
-        // Matches C++ `getPositiveCounts`.
-        let mut positive_counts: Vec<(u64, u64)> = Vec::new();
-        let mut tp = 0u64;
-        let mut fp = 0u64;
-        let mut last_score = f32::INFINITY;
-
-        for &(score, gold_flag) in score_vs_true.iter().rev() {
-            if score < 0.0 {
-                // Sentinel value for false negatives; stop here.
-                break;
-            }
-            if gold_flag == 1.0 {
-                tp += 1;
-            } else {
-                fp += 1;
-            }
-            // Squeeze tied scores: update the last entry rather than adding a new one.
-            if score == last_score && !positive_counts.is_empty() {
-                *positive_counts.last_mut().unwrap() = (tp, fp);
-            } else {
-                positive_counts.push((tp, fp));
-            }
-            last_score = score;
-        }
-
+        let positive_counts = Self::compute_positive_counts(&score_vs_true);
         if positive_counts.is_empty() {
             return Vec::new();
         }
 
-        // Find the point of full recall (first where TP >= golds) and advance one
-        // past it, matching C++ `std::next(lower_bound(...))`.
-        let full_recall_idx = positive_counts
-            .iter()
-            .position(|&(tp_count, _)| tp_count >= golds)
-            .map(|idx| idx + 1)
-            .unwrap_or(positive_counts.len());
-
-        // Reconstruct the threshold (score) for each distinct step by re-iterating
-        // score_vs_true in reverse and collecting unique scores.
-        let mut thresholds: Vec<f64> = Vec::new();
-        let mut last_th = f32::INFINITY;
-        for &(score, _gold_flag) in score_vs_true.iter().rev() {
-            if score < 0.0 {
-                break;
-            }
-            if (score - last_th).abs() >= f32::EPSILON || last_th.is_infinite() {
-                thresholds.push(score as f64);
-                last_th = score;
-            }
-        }
-
-        // Build the PR curve from the first entry up to `full_recall_idx` (exclusive).
-        let mut curve: Vec<(f64, f64, f64)> = Vec::new();
-        for (i, &(tp_count, fp_count)) in positive_counts[..full_recall_idx].iter().enumerate() {
-            let precision = if tp_count + fp_count == 0 {
-                0.0
-            } else {
-                tp_count as f64 / (tp_count + fp_count) as f64
-            };
-            let recall = tp_count as f64 / golds as f64;
-            let threshold = thresholds.get(i).copied().unwrap_or(0.0);
-            curve.push((threshold, precision, recall));
-        }
-
-        curve
+        let thresholds = Self::collect_thresholds(&score_vs_true);
+        Self::build_pr_curve(&positive_counts, &thresholds, golds)
     }
 
     // Reporting
