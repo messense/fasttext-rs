@@ -33,13 +33,17 @@ jobs:
           submodules: 'recursive'
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
-      - name: Run cargo-tarpaulin
+      - name: Install cargo-llvm-cov
         if: matrix.os == 'ubuntu-latest'
-        uses: actions-rs/tarpaulin@v0.1
-        continue-on-error: true
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate code coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload to codecov.io
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
 
   fmt:
     name: Rustfmt

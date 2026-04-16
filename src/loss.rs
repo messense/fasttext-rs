@@ -587,18 +587,6 @@ impl HierarchicalSoftmaxLoss {
         self.dfs_with_hidden(k, threshold, right, score + std_log(f), heap, hidden);
     }
 
-    /// Return the path (internal-node output-matrix row indices) for leaf `i`.
-    #[cfg(test)]
-    pub(crate) fn path(&self, i: usize) -> &[i32] {
-        &self.paths[i]
-    }
-
-    /// Return the code (left/right branch) for leaf `i`.
-    #[cfg(test)]
-    pub(crate) fn code(&self, i: usize) -> &[bool] {
-        &self.codes[i]
-    }
-
     /// Return the code length (tree depth) for leaf `i`.
     #[cfg(test)]
     pub(crate) fn depth(&self, i: usize) -> usize {
