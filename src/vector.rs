@@ -72,7 +72,7 @@ impl Vector {
             self.len(),
             source.len()
         );
-        add_vector_impl(self.data_mut(), source.data(), scale);
+        crate::simd::add_vector_impl(self.data_mut(), source.data(), scale);
     }
 
     /// Compute the dot (inner) product with another vector.
@@ -88,7 +88,7 @@ impl Vector {
             self.len(),
             other.len()
         );
-        dot_impl(self.data(), other.data())
+        crate::simd::dot_impl(self.data(), other.data())
     }
 
     /// Return the index of the maximum element.
@@ -133,260 +133,12 @@ impl fmt::Display for Vector {
     }
 }
 
-// SIMD / scalar implementations
-
-/// Scalar fallback for dot product.
-#[allow(dead_code)]
-#[inline]
-fn dot_scalar(a: &[f32], b: &[f32]) -> f32 {
-    let mut sum = 0.0f32;
-    for i in 0..a.len() {
-        sum += a[i] * b[i];
-    }
-    sum
-}
-
-/// Scalar fallback for add_vector (dest += scale * src).
-#[allow(dead_code)]
-#[inline]
-fn add_vector_scalar(dest: &mut [f32], src: &[f32], scale: f32) {
-    for i in 0..dest.len() {
-        dest[i] += scale * src[i];
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline]
-fn dot_simd_neon(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::aarch64::*;
-    let n = a.len();
-    let chunks = n / 16; // Process 16 floats at a time (4 NEON registers)
-    let remainder = n % 16;
-
-    unsafe {
-        let mut sum0 = vdupq_n_f32(0.0);
-        let mut sum1 = vdupq_n_f32(0.0);
-        let mut sum2 = vdupq_n_f32(0.0);
-        let mut sum3 = vdupq_n_f32(0.0);
-
-        let a_ptr = a.as_ptr();
-        let b_ptr = b.as_ptr();
-
-        for i in 0..chunks {
-            let offset = i * 16;
-            let a0 = vld1q_f32(a_ptr.add(offset));
-            let a1 = vld1q_f32(a_ptr.add(offset + 4));
-            let a2 = vld1q_f32(a_ptr.add(offset + 8));
-            let a3 = vld1q_f32(a_ptr.add(offset + 12));
-            let b0 = vld1q_f32(b_ptr.add(offset));
-            let b1 = vld1q_f32(b_ptr.add(offset + 4));
-            let b2 = vld1q_f32(b_ptr.add(offset + 8));
-            let b3 = vld1q_f32(b_ptr.add(offset + 12));
-            sum0 = vfmaq_f32(sum0, a0, b0);
-            sum1 = vfmaq_f32(sum1, a1, b1);
-            sum2 = vfmaq_f32(sum2, a2, b2);
-            sum3 = vfmaq_f32(sum3, a3, b3);
-        }
-
-        // Combine accumulators
-        sum0 = vaddq_f32(sum0, sum1);
-        sum2 = vaddq_f32(sum2, sum3);
-        sum0 = vaddq_f32(sum0, sum2);
-
-        let mut result = vaddvq_f32(sum0);
-
-        // Handle remainder
-        let rem_start = chunks * 16;
-        for i in 0..remainder {
-            result += a[rem_start + i] * b[rem_start + i];
-        }
-
-        result
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline]
-fn add_vector_simd_neon(dest: &mut [f32], src: &[f32], scale: f32) {
-    use std::arch::aarch64::*;
-    let n = dest.len();
-    let chunks = n / 16;
-    let remainder = n % 16;
-
-    unsafe {
-        let scale_v = vdupq_n_f32(scale);
-        let d_ptr = dest.as_mut_ptr();
-        let s_ptr = src.as_ptr();
-
-        for i in 0..chunks {
-            let offset = i * 16;
-            let d0 = vld1q_f32(d_ptr.add(offset));
-            let d1 = vld1q_f32(d_ptr.add(offset + 4));
-            let d2 = vld1q_f32(d_ptr.add(offset + 8));
-            let d3 = vld1q_f32(d_ptr.add(offset + 12));
-            let s0 = vld1q_f32(s_ptr.add(offset));
-            let s1 = vld1q_f32(s_ptr.add(offset + 4));
-            let s2 = vld1q_f32(s_ptr.add(offset + 8));
-            let s3 = vld1q_f32(s_ptr.add(offset + 12));
-            vst1q_f32(d_ptr.add(offset), vfmaq_f32(d0, scale_v, s0));
-            vst1q_f32(d_ptr.add(offset + 4), vfmaq_f32(d1, scale_v, s1));
-            vst1q_f32(d_ptr.add(offset + 8), vfmaq_f32(d2, scale_v, s2));
-            vst1q_f32(d_ptr.add(offset + 12), vfmaq_f32(d3, scale_v, s3));
-        }
-
-        // Handle remainder
-        let rem_start = chunks * 16;
-        for i in 0..remainder {
-            dest[rem_start + i] += scale * src[rem_start + i];
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline]
-fn dot_simd_sse2(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::x86_64::*;
-    let n = a.len();
-    let chunks = n / 16;
-    let remainder = n % 16;
-
-    unsafe {
-        let mut sum0 = _mm_setzero_ps();
-        let mut sum1 = _mm_setzero_ps();
-        let mut sum2 = _mm_setzero_ps();
-        let mut sum3 = _mm_setzero_ps();
-
-        let a_ptr = a.as_ptr();
-        let b_ptr = b.as_ptr();
-
-        for i in 0..chunks {
-            let offset = i * 16;
-            let a0 = _mm_loadu_ps(a_ptr.add(offset));
-            let a1 = _mm_loadu_ps(a_ptr.add(offset + 4));
-            let a2 = _mm_loadu_ps(a_ptr.add(offset + 8));
-            let a3 = _mm_loadu_ps(a_ptr.add(offset + 12));
-            let b0 = _mm_loadu_ps(b_ptr.add(offset));
-            let b1 = _mm_loadu_ps(b_ptr.add(offset + 4));
-            let b2 = _mm_loadu_ps(b_ptr.add(offset + 8));
-            let b3 = _mm_loadu_ps(b_ptr.add(offset + 12));
-            sum0 = _mm_add_ps(sum0, _mm_mul_ps(a0, b0));
-            sum1 = _mm_add_ps(sum1, _mm_mul_ps(a1, b1));
-            sum2 = _mm_add_ps(sum2, _mm_mul_ps(a2, b2));
-            sum3 = _mm_add_ps(sum3, _mm_mul_ps(a3, b3));
-        }
-
-        // Combine accumulators
-        sum0 = _mm_add_ps(sum0, sum1);
-        sum2 = _mm_add_ps(sum2, sum3);
-        sum0 = _mm_add_ps(sum0, sum2);
-
-        // Horizontal sum of 4-lane SSE register
-        let hi = _mm_movehl_ps(sum0, sum0);
-        let s = _mm_add_ps(sum0, hi);
-        let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
-        let mut result = _mm_cvtss_f32(s);
-
-        // Handle remainder
-        let rem_start = chunks * 16;
-        for i in 0..remainder {
-            result += a[rem_start + i] * b[rem_start + i];
-        }
-
-        result
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline]
-fn add_vector_simd_sse2(dest: &mut [f32], src: &[f32], scale: f32) {
-    use std::arch::x86_64::*;
-    let n = dest.len();
-    let chunks = n / 16;
-    let remainder = n % 16;
-
-    unsafe {
-        let scale_v = _mm_set1_ps(scale);
-        let d_ptr = dest.as_mut_ptr();
-        let s_ptr = src.as_ptr();
-
-        for i in 0..chunks {
-            let offset = i * 16;
-            let d0 = _mm_loadu_ps(d_ptr.add(offset));
-            let d1 = _mm_loadu_ps(d_ptr.add(offset + 4));
-            let d2 = _mm_loadu_ps(d_ptr.add(offset + 8));
-            let d3 = _mm_loadu_ps(d_ptr.add(offset + 12));
-            let s0 = _mm_loadu_ps(s_ptr.add(offset));
-            let s1 = _mm_loadu_ps(s_ptr.add(offset + 4));
-            let s2 = _mm_loadu_ps(s_ptr.add(offset + 8));
-            let s3 = _mm_loadu_ps(s_ptr.add(offset + 12));
-            vst(d_ptr.add(offset), _mm_add_ps(d0, _mm_mul_ps(scale_v, s0)));
-            vst(
-                d_ptr.add(offset + 4),
-                _mm_add_ps(d1, _mm_mul_ps(scale_v, s1)),
-            );
-            vst(
-                d_ptr.add(offset + 8),
-                _mm_add_ps(d2, _mm_mul_ps(scale_v, s2)),
-            );
-            vst(
-                d_ptr.add(offset + 12),
-                _mm_add_ps(d3, _mm_mul_ps(scale_v, s3)),
-            );
-        }
-
-        // Handle remainder
-        let rem_start = chunks * 16;
-        for i in 0..remainder {
-            dest[rem_start + i] += scale * src[rem_start + i];
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline]
-unsafe fn vst(ptr: *mut f32, val: std::arch::x86_64::__m128) {
-    std::arch::x86_64::_mm_storeu_ps(ptr, val);
-}
-
-/// Dispatch dot product to best available implementation.
-#[inline]
-fn dot_impl(a: &[f32], b: &[f32]) -> f32 {
-    #[cfg(target_arch = "aarch64")]
-    {
-        dot_simd_neon(a, b)
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        dot_simd_sse2(a, b)
-    }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-    {
-        dot_scalar(a, b)
-    }
-}
-
-/// Dispatch add_vector to best available implementation.
-#[inline]
-fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
-    #[cfg(target_arch = "aarch64")]
-    {
-        add_vector_simd_neon(dest, src, scale)
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        add_vector_simd_sse2(dest, src, scale)
-    }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-    {
-        add_vector_scalar(dest, src, scale)
-    }
-}
-
 // Tests
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simd::{add_vector_scalar, dot_scalar};
 
     #[test]
     fn test_vector_new() {

@@ -9,6 +9,7 @@ pub mod meter;
 pub(crate) mod model;
 pub(crate) mod product_quantizer;
 pub(crate) mod quant_matrix;
+pub(crate) mod simd;
 pub mod utils;
 pub(crate) mod vector;
 
