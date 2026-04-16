@@ -19,7 +19,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 cli = ["clap"]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 cfasttext-sys = { path = "cfasttext-sys" }
 expect-test = "1"
 
