@@ -722,7 +722,7 @@ impl Loss for SoftmaxLoss {
             }
             *out_i = d;
         }
-        utils::softmax_in_place(out, osz);
+        utils::softmax_in_place(&mut out[..osz]);
     }
 }
 

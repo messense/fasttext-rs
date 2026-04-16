@@ -274,10 +274,11 @@ impl DenseMatrix {
     /// Multiply rows by the corresponding values in `nums`.
     ///
     /// Rows from `ib` to `ie` (exclusive) are scaled: `row[i] *= nums[i - ib]`.
+    /// If `ie` is `None`, all rows from `ib` to the end of the matrix are processed.
     /// If a value in `nums` is 0, the row is skipped (left unchanged).
     /// Matches C++ `DenseMatrix::multiplyRow`.
-    pub fn multiply_row(&mut self, nums: &[f32], ib: i64, ie: i64) {
-        let ie = if ie == -1 { self.m } else { ie };
+    pub fn multiply_row(&mut self, nums: &[f32], ib: i64, ie: Option<i64>) {
+        let ie = ie.unwrap_or(self.m);
         for i in ib..ie {
             let n = nums[(i - ib) as usize];
             if n != 0.0 {
@@ -292,10 +293,11 @@ impl DenseMatrix {
     /// Divide rows by the corresponding values in `denoms`.
     ///
     /// Rows from `ib` to `ie` (exclusive) are divided: `row[i] /= denoms[i - ib]`.
+    /// If `ie` is `None`, all rows from `ib` to the end of the matrix are processed.
     /// If a value in `denoms` is 0, the row is left unchanged.
     /// Matches C++ `DenseMatrix::divideRow`.
-    pub fn divide_row(&mut self, denoms: &[f32], ib: i64, ie: i64) {
-        let ie = if ie == -1 { self.m } else { ie };
+    pub fn divide_row(&mut self, denoms: &[f32], ib: i64, ie: Option<i64>) {
+        let ie = ie.unwrap_or(self.m);
         for i in ib..ie {
             let n = denoms[(i - ib) as usize];
             if n != 0.0 {
@@ -912,7 +914,7 @@ mod tests {
         *m.at_mut(2, 1) = 6.0;
 
         let nums = [2.0, 3.0, 0.5];
-        m.multiply_row(&nums, 0, 3);
+        m.multiply_row(&nums, 0, Some(3));
 
         assert!((m.at(0, 0) - 2.0).abs() < 1e-6);
         assert!((m.at(0, 1) - 4.0).abs() < 1e-6);
@@ -932,7 +934,7 @@ mod tests {
 
         // Zero value should leave row unchanged
         let nums = [0.0, 2.0];
-        m.multiply_row(&nums, 0, 2);
+        m.multiply_row(&nums, 0, Some(2));
 
         assert_eq!(m.at(0, 0), 1.0); // unchanged
         assert_eq!(m.at(0, 1), 2.0); // unchanged
@@ -948,9 +950,9 @@ mod tests {
         *m.at_mut(1, 0) = 3.0;
         *m.at_mut(1, 1) = 4.0;
 
-        // ie = -1 means use m_ (all rows)
+        // ie = None means use m_ (all rows)
         let nums = [2.0, 3.0];
-        m.multiply_row(&nums, 0, -1);
+        m.multiply_row(&nums, 0, None);
 
         assert!((m.at(0, 0) - 2.0).abs() < 1e-6);
         assert!((m.at(0, 1) - 4.0).abs() < 1e-6);
@@ -967,7 +969,7 @@ mod tests {
         *m.at_mut(1, 1) = 10.0;
 
         let denoms = [2.0, 5.0];
-        m.divide_row(&denoms, 0, 2);
+        m.divide_row(&denoms, 0, Some(2));
 
         assert!((m.at(0, 0) - 2.0).abs() < 1e-6);
         assert!((m.at(0, 1) - 3.0).abs() < 1e-6);
@@ -985,7 +987,7 @@ mod tests {
 
         // Zero denominator should leave the row unchanged
         let denoms = [0.0, 2.0];
-        m.divide_row(&denoms, 0, 2);
+        m.divide_row(&denoms, 0, Some(2));
 
         assert_eq!(m.at(0, 0), 4.0); // unchanged
         assert_eq!(m.at(0, 1), 6.0); // unchanged
@@ -1002,7 +1004,7 @@ mod tests {
         *m.at_mut(1, 1) = 10.0;
 
         let denoms = [2.0, 4.0];
-        m.divide_row(&denoms, 0, -1);
+        m.divide_row(&denoms, 0, None);
 
         assert!((m.at(0, 0) - 2.0).abs() < 1e-6);
         assert!((m.at(0, 1) - 3.0).abs() < 1e-6);
@@ -1346,7 +1348,7 @@ mod tests {
 
         // Multiply rows 1..3 with nums [2.0, 3.0]
         let nums = [2.0, 3.0];
-        m.multiply_row(&nums, 1, 3);
+        m.multiply_row(&nums, 1, Some(3));
 
         // Row 0: unchanged [1, 10]
         assert_eq!(m.at(0, 0), 1.0);
@@ -1372,7 +1374,7 @@ mod tests {
 
         // Divide rows 2..4 with denoms [5.0, 10.0]
         let denoms = [5.0, 10.0];
-        m.divide_row(&denoms, 2, 4);
+        m.divide_row(&denoms, 2, Some(4));
 
         // Row 0: unchanged [10, 20]
         assert_eq!(m.at(0, 0), 10.0);

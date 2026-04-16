@@ -21,6 +21,22 @@ pub const MAX_VOCAB_SIZE: usize = 30_000_000;
 /// Maximum tokens per line.
 pub const MAX_LINE_SIZE: usize = 1024;
 
+/// Sentinel value used in the `word2int` open-addressing hash table to mark empty slots.
+///
+/// The hash table stores `i32` word indices; a slot containing this value means no word
+/// is hashed there. This is a performance-critical open-addressing sentinel and must
+/// remain as `i32` (not `Option`) for cache-line density.
+const HASH_EMPTY: i32 = -1;
+
+/// Sentinel value for `pruneidx_size` indicating no pruning has been applied.
+///
+/// This value is serialized in the binary model format (`.bin` / `.ftz`), so it must
+/// remain as `i64` to preserve format compatibility with C++ fastText.
+/// - `-1` (this constant): dictionary has not been pruned.
+/// - `0`: all subwords have been pruned.
+/// - `> 0`: the number of entries in the `pruneidx` mapping.
+const PRUNEIDX_NONE: i64 = -1;
+
 /// Word entry type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i8)]
@@ -52,7 +68,7 @@ pub struct Entry {
 pub struct Dictionary {
     /// Args reference (shared with caller).
     args: Arc<Args>,
-    /// Open-addressing hash table: index → word index (-1 if empty).
+    /// Open-addressing hash table: index → word index (`HASH_EMPTY` if empty).
     word2int: Vec<i32>,
     /// Vocabulary entries in order.
     words: Vec<Entry>,
@@ -66,7 +82,7 @@ pub struct Dictionary {
     nlabels: i32,
     /// Total number of tokens seen during vocabulary building.
     ntokens: i64,
-    /// Prune index size (-1 = no pruning, 0+ = pruned).
+    /// Prune index size (`PRUNEIDX_NONE` = no pruning, 0+ = pruned).
     pruneidx_size: i64,
     /// Prune index mapping (for quantization).
     pruneidx: HashMap<i32, i32>,
@@ -85,14 +101,14 @@ impl Dictionary {
     /// For testing with small vocabularies, a smaller capacity (e.g., 1024) is sufficient.
     pub fn new_with_capacity(args: Arc<Args>, capacity: usize) -> Self {
         Dictionary {
-            word2int: vec![-1i32; capacity],
+            word2int: vec![HASH_EMPTY; capacity],
             words: Vec::new(),
             pdiscard: Vec::new(),
             size: 0,
             nwords: 0,
             nlabels: 0,
             ntokens: 0,
-            pruneidx_size: -1,
+            pruneidx_size: PRUNEIDX_NONE,
             pruneidx: HashMap::new(),
             args,
         }
@@ -108,12 +124,12 @@ impl Dictionary {
     /// Find the hash table slot for a word given its precomputed hash.
     ///
     /// Returns the slot index where either:
-    /// - `word2int[slot] == -1` (empty slot, word not in table), or
+    /// - `word2int[slot] == HASH_EMPTY` (empty slot, word not in table), or
     /// - `words[word2int[slot]].word == w` (found the word).
     pub fn find_slot_with_hash(&self, w: &str, h: u32) -> usize {
         let len = self.word2int.len();
         let mut id = (h as usize) % len;
-        while self.word2int[id] != -1 && self.words[self.word2int[id] as usize].word != w {
+        while self.word2int[id] != HASH_EMPTY && self.words[self.word2int[id] as usize].word != w {
             id = (id + 1) % len;
         }
         id
@@ -127,7 +143,7 @@ impl Dictionary {
     pub fn add(&mut self, w: &str) {
         let h = self.find_slot(w);
         self.ntokens += 1;
-        if self.word2int[h] == -1 {
+        if self.word2int[h] == HASH_EMPTY {
             let entry_type = self.get_type_from_str(w);
             let entry = Entry {
                 word: w.to_string(),
@@ -247,20 +263,20 @@ impl Dictionary {
         });
         self.words.shrink_to_fit();
 
-        // Rebuild hash table (keep same capacity, fill with -1, re-insert).
+        // Rebuild hash table (keep same capacity, fill with HASH_EMPTY, re-insert).
         self.size = 0;
         self.nwords = 0;
         self.nlabels = 0;
-        self.word2int.fill(-1);
+        self.word2int.fill(HASH_EMPTY);
 
         for i in 0..self.words.len() {
             // Inline hash-table probing to avoid the `&self` borrow from `find_slot`.
-            // Since `word2int` was just cleared to all -1, we only need to probe
+            // Since `word2int` was just cleared to all HASH_EMPTY, we only need to probe
             // until we find an empty slot (no word comparisons needed).
             let word_hash = hash(self.words[i].word.as_bytes());
             let len = self.word2int.len();
             let mut slot = (word_hash as usize) % len;
-            while self.word2int[slot] != -1 {
+            while self.word2int[slot] != HASH_EMPTY {
                 slot = (slot + 1) % len;
             }
             self.word2int[slot] = i as i32;
@@ -1029,7 +1045,7 @@ impl Dictionary {
     /// and reinserts all current entries.
     pub fn rebuild_word2int_after_load(&mut self) {
         let word2int_size = ((self.size as f64 / 0.7).ceil() as usize).max(1);
-        self.word2int = vec![-1i32; word2int_size];
+        self.word2int = vec![HASH_EMPTY; word2int_size];
         for i in 0..self.size as usize {
             let w = self.words[i].word.clone();
             let h = hash(w.as_bytes());
@@ -1254,7 +1270,7 @@ impl Dictionary {
 
         // Rebuild word2int hash table.
         let word2int_size = ((self.size as f64 / 0.7).ceil() as usize).max(1);
-        self.word2int = vec![-1i32; word2int_size];
+        self.word2int = vec![HASH_EMPTY; word2int_size];
         for i in 0..self.size as usize {
             let w = self.words[i].word.clone();
             let h = hash(w.as_bytes());

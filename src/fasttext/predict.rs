@@ -168,7 +168,7 @@ impl FastText {
             }
             _ => {
                 // Softmax (and NS, which also uses softmax for prediction).
-                utils::softmax_in_place(state.output.data_mut(), osz);
+                utils::softmax_in_place(&mut state.output.data_mut()[..osz]);
             }
         }
 
