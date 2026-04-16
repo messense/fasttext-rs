@@ -162,13 +162,21 @@ impl FastText {
         // Shared example count (for computing average loss).
         let shared_loss_count = Arc::new(AtomicI64::new(0));
 
+        // Create a single shared LossTables instance for all threads and the final model.
+        let loss_tables = Arc::new(LossTables::new());
+
         // Run Hogwild! parallel training with rayon.
         // Each thread creates its own Model (sharing the same Arc<DenseMatrix>),
         // and updates weights concurrently without locks.
         let training_results: Vec<Result<()>> = (0..n_threads)
             .into_par_iter()
             .map(|thread_id| {
-                let loss = build_loss(&args, Arc::clone(&output), &target_counts);
+                let loss = build_loss(
+                    &args,
+                    Arc::clone(&output),
+                    &target_counts,
+                    Arc::clone(&loss_tables),
+                );
                 let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
                 let ctx = TrainThreadCtx {
                     args: &args,
@@ -199,7 +207,12 @@ impl FastText {
         };
 
         // Build the inference model from the trained matrices.
-        let loss = build_loss(&args, Arc::clone(&output), &target_counts);
+        let loss = build_loss(
+            &args,
+            Arc::clone(&output),
+            &target_counts,
+            Arc::clone(&loss_tables),
+        );
         let model = Model::new(Arc::clone(&input), loss, normalize_gradient);
 
         Ok(FastText {
@@ -213,7 +226,7 @@ impl FastText {
             model,
             abort_flag,
             last_train_loss: avg_loss,
-            loss_tables: LossTables::new(),
+            loss_tables,
         })
     }
 

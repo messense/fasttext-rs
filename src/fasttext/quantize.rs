@@ -189,7 +189,12 @@ impl FastText {
         let training_results: Vec<Result<()>> = (0..n_threads)
             .into_par_iter()
             .map(|thread_id| {
-                let loss = build_loss(&retrain_args, Arc::clone(&output), &target_counts);
+                let loss = build_loss(
+                    &retrain_args,
+                    Arc::clone(&output),
+                    &target_counts,
+                    Arc::clone(&self.loss_tables),
+                );
                 let model = Model::new(Arc::clone(&pruned_input), loss, normalize_gradient);
                 let ctx = TrainThreadCtx {
                     args: &retrain_args,

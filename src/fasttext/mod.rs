@@ -74,18 +74,27 @@ pub struct Prediction {
 /// - `NegativeSamplingLoss` — negative sampling (skipgram/CBOW)
 /// - `HierarchicalSoftmaxLoss` — Huffman-tree hierarchical softmax
 /// - `OneVsAllLoss` — one-vs-all binary logistic
+///
+/// All loss types share a single `Arc<LossTables>` instance for precomputed
+/// sigmoid/log lookup tables, avoiding redundant allocations.
 pub(super) fn build_loss(
     args: &Args,
     wo: Arc<DenseMatrix>,
     target_counts: &[i64],
+    tables: Arc<LossTables>,
 ) -> Box<dyn Loss> {
     match args.loss {
-        LossName::HierarchicalSoftmax => Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts)),
-        LossName::NegativeSampling => {
-            Box::new(NegativeSamplingLoss::new(wo, args.neg, target_counts))
+        LossName::HierarchicalSoftmax => {
+            Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts, tables))
         }
-        LossName::OneVsAll => Box::new(OneVsAllLoss::new(wo)),
-        LossName::Softmax => Box::new(SoftmaxLoss::new(wo)),
+        LossName::NegativeSampling => Box::new(NegativeSamplingLoss::new(
+            wo,
+            args.neg,
+            target_counts,
+            tables,
+        )),
+        LossName::OneVsAll => Box::new(OneVsAllLoss::new(wo, tables)),
+        LossName::Softmax => Box::new(SoftmaxLoss::new(wo, tables)),
     }
 }
 
@@ -147,7 +156,8 @@ pub struct FastText {
     /// loaded from disk (no training history available).
     pub(super) last_train_loss: f64,
     /// Cached sigmoid/log lookup tables for quantized prediction.
-    pub(super) loss_tables: LossTables,
+    /// Shared with loss instances via `Arc` to avoid redundant allocations.
+    pub(super) loss_tables: Arc<LossTables>,
 }
 
 impl FastText {
@@ -240,7 +250,13 @@ impl FastText {
         } else {
             word_counts
         };
-        let loss = build_loss(&args, Arc::clone(&output_arc), &target_counts);
+        let loss_tables = Arc::new(LossTables::new());
+        let loss = build_loss(
+            &args,
+            Arc::clone(&output_arc),
+            &target_counts,
+            Arc::clone(&loss_tables),
+        );
         let normalize_gradient = args.model == ModelName::Supervised;
         let model = Model::new(Arc::clone(&input_arc), loss, normalize_gradient);
 
@@ -255,7 +271,7 @@ impl FastText {
             model,
             abort_flag: Arc::new(AtomicBool::new(false)),
             last_train_loss: 0.0,
-            loss_tables: LossTables::new(),
+            loss_tables,
         })
     }
 
@@ -1422,7 +1438,7 @@ mod tests {
     /// the input weights change after one gradient step.
     #[test]
     fn test_train_sgd_update() {
-        use crate::loss::SoftmaxLoss;
+        use crate::loss::{LossTables, SoftmaxLoss};
         use crate::matrix::DenseMatrix;
         use crate::model::{Model, State};
 
@@ -1436,7 +1452,10 @@ mod tests {
         *wo.at_mut(1, 1) = 1.0;
         let wo = Arc::new(wo);
 
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
         let mut state = State::new(3, 2, 0);
 
@@ -1463,13 +1482,16 @@ mod tests {
     /// Test supervised_fn with empty line or labels is a no-op.
     #[test]
     fn test_train_supervised_fn_empty_noop() {
-        use crate::loss::SoftmaxLoss;
+        use crate::loss::{LossTables, SoftmaxLoss};
         use crate::matrix::DenseMatrix;
         use crate::model::{Model, State};
 
         let wi = Arc::new(DenseMatrix::new(2, 3));
         let wo = Arc::new(DenseMatrix::new(2, 3));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
         let mut state = State::new(3, 2, 0);
 

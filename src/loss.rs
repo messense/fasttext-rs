@@ -211,17 +211,14 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
 /// Matches C++ `BinaryLogisticLoss`.
 #[derive(Debug)]
 pub struct BinaryLogisticBase {
-    pub tables: LossTables,
+    pub tables: Arc<LossTables>,
     pub wo: Arc<DenseMatrix>,
 }
 
 impl BinaryLogisticBase {
-    /// Create a new BinaryLogisticBase with precomputed tables.
-    pub fn new(wo: Arc<DenseMatrix>) -> Self {
-        BinaryLogisticBase {
-            tables: LossTables::new(),
-            wo,
-        }
+    /// Create a new BinaryLogisticBase with shared precomputed tables.
+    pub fn new(wo: Arc<DenseMatrix>, tables: Arc<LossTables>) -> Self {
+        BinaryLogisticBase { tables, wo }
     }
 
     /// Compute the binary logistic loss for one node/target.
@@ -285,10 +282,10 @@ pub struct OneVsAllLoss {
 }
 
 impl OneVsAllLoss {
-    /// Create a new OVA loss with the given output weight matrix.
-    pub fn new(wo: Arc<DenseMatrix>) -> Self {
+    /// Create a new OVA loss with the given output weight matrix and shared tables.
+    pub fn new(wo: Arc<DenseMatrix>, tables: Arc<LossTables>) -> Self {
         OneVsAllLoss {
-            base: BinaryLogisticBase::new(wo),
+            base: BinaryLogisticBase::new(wo, tables),
         }
     }
 }
@@ -345,7 +342,12 @@ impl NegativeSamplingLoss {
     /// * `wo` — shared output weight matrix
     /// * `neg` — number of negative samples per example
     /// * `target_counts` — label (or word) frequency counts
-    pub fn new(wo: Arc<DenseMatrix>, neg: i32, target_counts: &[i64]) -> Self {
+    pub fn new(
+        wo: Arc<DenseMatrix>,
+        neg: i32,
+        target_counts: &[i64],
+        tables: Arc<LossTables>,
+    ) -> Self {
         let z: f64 = target_counts.iter().map(|&c| (c as f64).sqrt()).sum();
         let mut negatives: Vec<i32> = Vec::with_capacity(NEGATIVE_TABLE_SIZE as usize);
         for (i, &count) in target_counts.iter().enumerate() {
@@ -356,7 +358,7 @@ impl NegativeSamplingLoss {
             }
         }
         NegativeSamplingLoss {
-            base: BinaryLogisticBase::new(wo),
+            base: BinaryLogisticBase::new(wo, tables),
             neg,
             negatives,
         }
@@ -467,10 +469,10 @@ impl HierarchicalSoftmaxLoss {
     ///
     /// `counts` must be sorted in **descending** order (most frequent first),
     /// matching C++ fastText's label ordering.
-    pub fn new(wo: Arc<DenseMatrix>, counts: &[i64]) -> Self {
+    pub fn new(wo: Arc<DenseMatrix>, counts: &[i64], tables: Arc<LossTables>) -> Self {
         let osz = counts.len() as i32;
         let mut hs = HierarchicalSoftmaxLoss {
-            base: BinaryLogisticBase::new(wo),
+            base: BinaryLogisticBase::new(wo, tables),
             osz,
             paths: Vec::new(),
             codes: Vec::new(),
@@ -659,17 +661,14 @@ impl Loss for HierarchicalSoftmaxLoss {
 /// Matches C++ `SoftmaxLoss`.
 #[derive(Debug)]
 pub struct SoftmaxLoss {
-    pub tables: LossTables,
+    pub tables: Arc<LossTables>,
     pub wo: Arc<DenseMatrix>,
 }
 
 impl SoftmaxLoss {
-    /// Create a new SoftmaxLoss with the given output weight matrix.
-    pub fn new(wo: Arc<DenseMatrix>) -> Self {
-        SoftmaxLoss {
-            tables: LossTables::new(),
-            wo,
-        }
+    /// Create a new SoftmaxLoss with the given output weight matrix and shared tables.
+    pub fn new(wo: Arc<DenseMatrix>, tables: Arc<LossTables>) -> Self {
+        SoftmaxLoss { tables, wo }
     }
 }
 
@@ -842,7 +841,7 @@ mod tests {
     fn test_ns_table_size() {
         let wo = Arc::new(DenseMatrix::new(4, 10));
         let counts = vec![100i64, 200, 50, 150];
-        let loss = NegativeSamplingLoss::new(wo, 5, &counts);
+        let loss = NegativeSamplingLoss::new(wo, 5, &counts, Arc::new(LossTables::new()));
         let size = loss.negatives().len();
         // Allow up to 100 entries of slack from floating-point truncation
         assert!(
@@ -859,7 +858,7 @@ mod tests {
         let wo = Arc::new(DenseMatrix::new(4, 10));
         // counts = [4, 1]: sqrt ratios = [2, 1], so label 0 should have ~2/3 of entries
         let counts = vec![4i64, 1];
-        let loss = NegativeSamplingLoss::new(wo, 5, &counts);
+        let loss = NegativeSamplingLoss::new(wo, 5, &counts, Arc::new(LossTables::new()));
         let negs = loss.negatives();
         let count_0 = negs.iter().filter(|&&x| x == 0).count();
         let count_1 = negs.iter().filter(|&&x| x == 1).count();
@@ -880,7 +879,7 @@ mod tests {
         let nlabels = 3usize;
         let wo = Arc::new(DenseMatrix::new(nlabels as i64, dim as i64));
         let counts = vec![100i64, 50, 25];
-        let loss = NegativeSamplingLoss::new(wo, 2, &counts);
+        let loss = NegativeSamplingLoss::new(wo, 2, &counts, Arc::new(LossTables::new()));
 
         let mut state = State::new(dim, nlabels, 42);
         state.hidden[0] = 1.0;
@@ -906,7 +905,7 @@ mod tests {
         let wo = Arc::new(DenseMatrix::new((osz - 1) as i64, 10));
         // Counts sorted DESCENDING: most frequent first
         let counts = vec![100i64, 80, 60, 20, 10];
-        let loss = HierarchicalSoftmaxLoss::new(wo, &counts);
+        let loss = HierarchicalSoftmaxLoss::new(wo, &counts, Arc::new(LossTables::new()));
 
         // Tree should have 2*osz - 1 nodes
         assert_eq!(loss.tree_size(), 2 * osz - 1);
@@ -927,7 +926,7 @@ mod tests {
         let osz = 2usize;
         let wo = Arc::new(DenseMatrix::new((osz - 1) as i64, 4));
         let counts = vec![100i64, 50];
-        let loss = HierarchicalSoftmaxLoss::new(wo, &counts);
+        let loss = HierarchicalSoftmaxLoss::new(wo, &counts, Arc::new(LossTables::new()));
 
         // With 2 labels, each should have path length 1
         assert_eq!(loss.depth(0), 1);
@@ -944,7 +943,7 @@ mod tests {
         // internal nodes = osz - 1 = 3 rows in wo
         let wo = Arc::new(DenseMatrix::new((osz - 1) as i64, dim as i64));
         let counts = vec![100i64, 80, 40, 20];
-        let loss = HierarchicalSoftmaxLoss::new(wo, &counts);
+        let loss = HierarchicalSoftmaxLoss::new(wo, &counts, Arc::new(LossTables::new()));
 
         let mut state = State::new(dim, osz, 1);
         state.hidden[0] = 1.0;
@@ -989,7 +988,7 @@ mod tests {
         // Right child (node 5): score ≈ std_log(0) ≈ -11.5 (low)
         *wo.at_mut(2, 0) = -10.0;
         let wo = Arc::new(wo);
-        let loss = HierarchicalSoftmaxLoss::new(wo, &counts);
+        let loss = HierarchicalSoftmaxLoss::new(wo, &counts, Arc::new(LossTables::new()));
 
         let mut state = State::new(dim, osz, 0);
         state.hidden[0] = 1.0; // unit vector along dim 0
@@ -1077,7 +1076,7 @@ mod tests {
             }
         }
         let wo = Arc::new(wo);
-        let loss = SoftmaxLoss::new(wo);
+        let loss = SoftmaxLoss::new(wo, Arc::new(LossTables::new()));
         let mut state = State::new(dim, nlabels, 0);
         for i in 0..dim {
             state.hidden[i] = (i as f32 + 1.0) * 0.5;
@@ -1112,7 +1111,7 @@ mod tests {
         *wo.at_mut(1, 0) = -1000.0;
         *wo.at_mut(2, 0) = 0.0;
         let wo = Arc::new(wo);
-        let loss = SoftmaxLoss::new(wo);
+        let loss = SoftmaxLoss::new(wo, Arc::new(LossTables::new()));
         let mut state = State::new(dim, nlabels, 0);
         state.hidden[0] = 1.0;
 
@@ -1145,7 +1144,7 @@ mod tests {
         let nlabels = 3usize;
         let dim = 2usize;
         let wo = Arc::new(DenseMatrix::new(nlabels as i64, dim as i64));
-        let loss = SoftmaxLoss::new(wo);
+        let loss = SoftmaxLoss::new(wo, Arc::new(LossTables::new()));
         let mut state = State::new(dim, nlabels, 0);
 
         let targets = vec![1i32];
@@ -1166,7 +1165,7 @@ mod tests {
         let nlabels = 4usize;
         let dim = 3usize;
         let wo = Arc::new(DenseMatrix::new(nlabels as i64, dim as i64));
-        let loss = OneVsAllLoss::new(wo);
+        let loss = OneVsAllLoss::new(wo, Arc::new(LossTables::new()));
         let mut state = State::new(dim, nlabels, 0);
         state.hidden[0] = 1.0;
         state.hidden[1] = 0.5;
@@ -1193,7 +1192,7 @@ mod tests {
         *wo.at_mut(2, 0) = 1.0;
         *wo.at_mut(2, 1) = 1.0;
         let wo = Arc::new(wo);
-        let loss = OneVsAllLoss::new(wo);
+        let loss = OneVsAllLoss::new(wo, Arc::new(LossTables::new()));
 
         let mut state = State::new(dim, nlabels, 0);
         state.hidden[0] = 2.0;
@@ -1253,7 +1252,7 @@ mod tests {
         *wo.at_mut(2, 0) = 0.5;
         *wo.at_mut(2, 1) = 0.5;
         let wo = Arc::new(wo);
-        let loss = OneVsAllLoss::new(wo);
+        let loss = OneVsAllLoss::new(wo, Arc::new(LossTables::new()));
 
         let lr = 0.1f32;
         let mut state = State::new(dim, nlabels, 0);
@@ -1390,7 +1389,7 @@ mod tests {
     fn test_binary_logistic_positive_label() {
         let dim = 2usize;
         let wo = Arc::new(DenseMatrix::new(1, dim as i64));
-        let base = BinaryLogisticBase::new(wo);
+        let base = BinaryLogisticBase::new(wo, Arc::new(LossTables::new()));
         let mut state = State::new(dim, 1, 0);
         // All zeros: score = sigmoid(0) = 0.5
         // loss_positive = -log(0.5) > 0
@@ -1406,7 +1405,7 @@ mod tests {
     fn test_binary_logistic_negative_label() {
         let dim = 2usize;
         let wo = Arc::new(DenseMatrix::new(1, dim as i64));
-        let base = BinaryLogisticBase::new(wo);
+        let base = BinaryLogisticBase::new(wo, Arc::new(LossTables::new()));
         let mut state = State::new(dim, 1, 0);
         // All zeros: score = sigmoid(0) = 0.5
         // loss_negative = -log(1 - 0.5) = -log(0.5) > 0
@@ -1434,7 +1433,7 @@ mod tests {
         // Give label 1 a count of 0; the table builder skips labels with
         // zero entries, so the table ends up all-zeros (all entries == 0).
         let counts = vec![1_000_000i64, 0];
-        let loss = NegativeSamplingLoss::new(wo, 5, &counts);
+        let loss = NegativeSamplingLoss::new(wo, 5, &counts, Arc::new(LossTables::new()));
 
         // All entries in negatives should be label 0.
         assert!(
@@ -1462,7 +1461,7 @@ mod tests {
     fn test_ns_get_negative_returns_different_label() {
         let wo = Arc::new(DenseMatrix::new(4, 8));
         let counts = vec![100i64, 80, 60, 40];
-        let loss = NegativeSamplingLoss::new(wo, 5, &counts);
+        let loss = NegativeSamplingLoss::new(wo, 5, &counts, Arc::new(LossTables::new()));
 
         let mut rng = MinstdRng::new(123);
         // For target = 0, every returned negative should be != 0.

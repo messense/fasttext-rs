@@ -414,7 +414,7 @@ mod tests {
 
     // ── Model ─────────────────────────────────────────────────────────────
 
-    use crate::loss::SoftmaxLoss;
+    use crate::loss::{LossTables, SoftmaxLoss};
     use crate::matrix::DenseMatrix;
 
     /// Build a `DenseMatrix` with the given `rows × cols` filled row-by-row.
@@ -443,7 +443,10 @@ mod tests {
         ];
         let wi = Arc::new(make_matrix(3, 4, &wi_data));
         let wo = Arc::new(DenseMatrix::new(2, 4)); // 2 labels
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
 
         let mut state = State::new(4, 2, 0);
@@ -474,7 +477,10 @@ mod tests {
         ];
         let wi = Arc::new(make_matrix(2, 4, &wi_data));
         let wo = Arc::new(DenseMatrix::new(2, 4));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
 
         let mut state = State::new(4, 2, 0);
@@ -499,7 +505,10 @@ mod tests {
     fn test_compute_hidden_empty_input() {
         let wi = Arc::new(DenseMatrix::new(5, 4));
         let wo = Arc::new(DenseMatrix::new(3, 4));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
 
         // Pre-fill hidden with non-zero values.
@@ -540,7 +549,10 @@ mod tests {
             1.0, 0.0, 0.0,
         ];
         let wo = Arc::new(make_matrix(4, 3, &wo_data));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let mut state = State::new(3, 4, 0);
         let model = Model::new(Arc::clone(&wi), loss, false);
 
@@ -572,7 +584,10 @@ mod tests {
     fn test_predict_k_zero_returns_empty() {
         let wi = Arc::new(DenseMatrix::new(3, 4));
         let wo = Arc::new(DenseMatrix::new(2, 4));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, false);
         let mut state = State::new(4, 2, 0);
 
@@ -588,7 +603,10 @@ mod tests {
     fn test_predict_negative_k_returns_empty() {
         let wi = Arc::new(DenseMatrix::new(3, 4));
         let wo = Arc::new(DenseMatrix::new(2, 4));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, false);
         let mut state = State::new(4, 2, 0);
 
@@ -603,7 +621,10 @@ mod tests {
     fn test_predict_empty_input_returns_empty() {
         let wi = Arc::new(DenseMatrix::new(3, 4));
         let wo = Arc::new(DenseMatrix::new(2, 4));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, false);
         let mut state = State::new(4, 2, 0);
 
@@ -626,7 +647,10 @@ mod tests {
         ];
         let wi = Arc::new(make_matrix(2, 2, &wi_data.clone()));
         let wo = Arc::new(DenseMatrix::new(1, 2));
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
         let mut state = State::new(2, 1, 0);
 
@@ -653,7 +677,10 @@ mod tests {
         let wo = Arc::new(wo_mat);
 
         // Test with normalize_gradient = true, 2 input tokens
-        let loss_norm = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss_norm = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model_norm = Model::new(Arc::clone(&wi), loss_norm, true);
         let mut state_norm = State::new(2, 2, 0);
         model_norm.update(&[0i32, 1], &[0i32], 0, 0.1, &mut state_norm);
@@ -661,7 +688,10 @@ mod tests {
 
         // Test with normalize_gradient = false, same setup
         let wi2 = Arc::new(DenseMatrix::new(2, 2));
-        let loss_no_norm = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss_no_norm = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model_no_norm = Model::new(Arc::clone(&wi2), loss_no_norm, false);
         let mut state_no_norm = State::new(2, 2, 0);
         model_no_norm.update(&[0i32, 1], &[0i32], 0, 0.1, &mut state_no_norm);
@@ -699,7 +729,10 @@ mod tests {
         wo_mat.data_mut()[3] = 1.0; // wo[1][1]
         let wo = Arc::new(wo_mat);
 
-        let loss = Box::new(SoftmaxLoss::new(Arc::clone(&wo)));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
         let model = Model::new(Arc::clone(&wi), loss, true);
         let mut state = State::new(2, 2, 0);
 
