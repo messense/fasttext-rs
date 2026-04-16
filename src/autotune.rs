@@ -298,6 +298,16 @@ fn parse_size_to_bytes(s: &str) -> Option<u64> {
     Some((num * multiplier as f64) as u64)
 }
 
+/// Outcome of a single training trial spawned by [`Autotune::run`].
+enum TrialOutcome {
+    /// The time budget expired during training; the search loop should stop.
+    TimedOut,
+    /// Training completed but failed (NaN loss, panic, etc.); skip to the next trial.
+    Failed,
+    /// Training completed successfully.
+    Success(Box<FastText>),
+}
+
 /// Time-boxed hyperparameter search for fastText supervised models.
 ///
 /// Runs multiple training trials within the configured duration, evaluates
@@ -330,147 +340,129 @@ impl Autotune {
                 "autotune validation file is not set".to_string(),
             ));
         }
-
-        // Verify validation file is accessible up-front.
-        {
-            let _ = std::fs::File::open(&val_path).map_err(FastTextError::IoError)?;
-        }
+        let _ = std::fs::File::open(&val_path).map_err(FastTextError::IoError)?;
 
         let seed = autotune_args.seed as u64;
         let duration_secs = autotune_args.autotune_duration as f64;
         let k = autotune_args.autotune_predictions.max(1) as usize;
         let metric = autotune_args.autotune_metric.to_string();
+        let model_size_bytes = parse_size_to_bytes(&autotune_args.autotune_model_size);
 
-        // Parse the model-size constraint once before the loop.
-        let model_size_bytes: Option<u64> = {
-            let size_str = &autotune_args.autotune_model_size;
-            if size_str.is_empty() {
-                None
-            } else {
-                parse_size_to_bytes(size_str)
-            }
-        };
-
-        // Mute verbose output during the search phase.
         let mut search_args = autotune_args.clone();
         search_args.verbose = 0;
-
         let mut strategy = AutotuneStrategy::new(&search_args, seed);
-
         let start = Instant::now();
         let mut best_args: Option<Args> = None;
         let mut best_score = UNKNOWN_BEST_SCORE;
 
-        // Search loop: run trials until the time budget is exhausted.
         loop {
             let elapsed = start.elapsed().as_secs_f64();
             if elapsed >= duration_secs {
                 break;
             }
-
-            // Ask strategy for the next candidate args.
             let trial_args = strategy.ask(elapsed);
-            let trial_args_copy = trial_args.clone();
-
-            // Create per-trial abort flag.
-            let abort_flag = Arc::new(AtomicBool::new(false));
-            let abort_clone = Arc::clone(&abort_flag);
-
-            // Spawn training in a background thread so we can abort it.
-            let handle =
-                std::thread::spawn(move || FastText::train_with_abort(trial_args, abort_clone));
-
-            // Wait for training to finish or the time budget to expire.
-            let mut timed_out = false;
-            loop {
-                if handle.is_finished() {
-                    break;
-                }
-                let now_elapsed = start.elapsed().as_secs_f64();
-                if now_elapsed >= duration_secs {
-                    // Time is up: abort the in-flight training.
-                    abort_flag.store(true, Ordering::Relaxed);
-                    timed_out = true;
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-
-            // Wait for the training thread to terminate.
-            let model_result = handle.join();
-
-            if timed_out {
-                // Training was aborted because the time budget expired.
-                // Matches C++ behaviour: TimeoutError / AbortError → break.
-                break;
-            }
-
-            // Unwrap the thread result (skip on training errors or panics).
-            let mut model = match model_result {
-                Ok(Ok(m)) => m,
-                Ok(Err(_e)) => {
-                    // Training diverged (e.g., NaN loss) — skip this trial.
-                    continue;
-                }
-                Err(_) => {
-                    // Thread panic — skip this trial.
-                    continue;
-                }
+            let model = match Self::train_trial(trial_args.clone(), &start, duration_secs) {
+                TrialOutcome::TimedOut => break,
+                TrialOutcome::Failed => continue,
+                TrialOutcome::Success(m) => *m,
             };
-
-            // If model_size constraint is set, quantize the candidate and verify it fits.
-            if let Some(max_bytes) = model_size_bytes {
-                // Check remaining time before attempting potentially slow quantization.
-                if start.elapsed().as_secs_f64() >= duration_secs {
-                    break; // Time budget already exhausted.
+            let model = if let Some(max_bytes) = model_size_bytes {
+                match Self::check_model_size(model, max_bytes, &start, duration_secs) {
+                    Some(m) => m,
+                    None => continue,
                 }
-                let qargs = Args::default();
-                // Use standard quantization defaults for size checking
-                // (no cutoff, no retrain, no qout, no qnorm).
-                if model.quantize(&qargs).is_err() {
-                    continue;
-                }
-                // If quantization itself ran over the budget, stop the search.
-                if start.elapsed().as_secs_f64() >= duration_secs {
-                    break;
-                }
-                // Save the quantized model to a temp file and measure its size.
-                let tmp_path = std::env::temp_dir().join(format!(
-                    "fasttext_autotune_size_{}_{}.ftz",
-                    std::process::id(),
-                    SIZE_CHECK_COUNTER.fetch_add(1, Ordering::Relaxed)
-                ));
-                let tmp_str = tmp_path.to_string_lossy().to_string();
-                if model.save_model(&tmp_str).is_err() {
-                    std::fs::remove_file(&tmp_path).ok();
-                    continue;
-                }
-                let ftz_size = std::fs::metadata(&tmp_path)
-                    .map(|m| m.len())
-                    .unwrap_or(u64::MAX);
-                std::fs::remove_file(&tmp_path).ok();
-                if ftz_size > max_bytes {
-                    // Quantized model exceeds the size constraint — skip this trial.
-                    continue;
-                }
-                // Model fits: evaluate the quantized model.
-            }
-
-            // Evaluate on the validation file.
-            let score = match Self::evaluate(&model, &val_path, k, &metric) {
-                Ok(s) => s,
-                Err(_) => continue,
+            } else {
+                model
             };
-
-            // Update best if this trial's score is an improvement.
-            if best_args.is_none() || score > best_score {
-                best_score = score;
-                best_args = Some(trial_args_copy.clone());
-                strategy.update_best(&trial_args_copy);
+            if let Ok(score) = Self::evaluate(&model, &val_path, k, &metric) {
+                if best_args.is_none() || score > best_score {
+                    best_score = score;
+                    strategy.update_best(&trial_args);
+                    best_args = Some(trial_args);
+                }
             }
         }
 
-        // Final retrain with the best-found args.
+        Self::finish_with_best(best_args, autotune_args.verbose)
+    }
+
+    /// Spawn a training trial in a background thread and wait for it to finish or time out.
+    ///
+    /// Returns [`TrialOutcome::TimedOut`] if the time budget expires while training,
+    /// [`TrialOutcome::Failed`] if training diverged or panicked, or
+    /// [`TrialOutcome::Success`] with the trained model on success.
+    fn train_trial(trial_args: Args, start: &Instant, duration_secs: f64) -> TrialOutcome {
+        let abort_flag = Arc::new(AtomicBool::new(false));
+        let abort_clone = Arc::clone(&abort_flag);
+        let handle =
+            std::thread::spawn(move || FastText::train_with_abort(trial_args, abort_clone));
+
+        // Poll until training finishes or the time budget expires.
+        let timed_out = loop {
+            if handle.is_finished() {
+                break false;
+            }
+            if start.elapsed().as_secs_f64() >= duration_secs {
+                abort_flag.store(true, Ordering::Relaxed);
+                break true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        let model_result = handle.join();
+        if timed_out {
+            return TrialOutcome::TimedOut;
+        }
+        match model_result {
+            Ok(Ok(m)) => TrialOutcome::Success(Box::new(m)),
+            Ok(Err(_)) | Err(_) => TrialOutcome::Failed,
+        }
+    }
+
+    /// Quantize `model`, measure its serialized size, and return it if within `max_bytes`.
+    ///
+    /// Returns `None` if quantization fails, the model is too large, or the time
+    /// budget expires before or after quantization.
+    fn check_model_size(
+        mut model: FastText,
+        max_bytes: u64,
+        start: &Instant,
+        duration_secs: f64,
+    ) -> Option<FastText> {
+        if start.elapsed().as_secs_f64() >= duration_secs {
+            return None;
+        }
+        let qargs = Args::default();
+        if model.quantize(&qargs).is_err() {
+            return None;
+        }
+        if start.elapsed().as_secs_f64() >= duration_secs {
+            return None;
+        }
+        let tmp_path = std::env::temp_dir().join(format!(
+            "fasttext_autotune_size_{}_{}.ftz",
+            std::process::id(),
+            SIZE_CHECK_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let tmp_str = tmp_path.to_string_lossy().to_string();
+        if model.save_model(&tmp_str).is_err() {
+            std::fs::remove_file(&tmp_path).ok();
+            return None;
+        }
+        let ftz_size = std::fs::metadata(&tmp_path)
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        std::fs::remove_file(&tmp_path).ok();
+        if ftz_size > max_bytes {
+            None
+        } else {
+            Some(model)
+        }
+    }
+
+    /// Retrain from scratch using the best-found args, or return an error if no
+    /// trial completed successfully within the time budget.
+    fn finish_with_best(best_args: Option<Args>, original_verbose: i32) -> Result<FastText> {
         match best_args {
             None => Err(FastTextError::InvalidArgument(
                 "Autotune: no trial completed successfully within the time budget. \
@@ -478,8 +470,7 @@ impl Autotune {
                     .to_string(),
             )),
             Some(mut final_args) => {
-                // Restore the original verbose level for the final training run.
-                final_args.verbose = autotune_args.verbose;
+                final_args.verbose = original_verbose;
                 FastText::train(final_args)
             }
         }

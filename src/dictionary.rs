@@ -239,15 +239,9 @@ impl Dictionary {
 
     // Sorting and thresholding
 
-    /// Filter vocabulary by minimum count and rebuild the hash table.
-    ///
-    /// After this call:
-    /// - Words with count < `t` are removed.
-    /// - Labels with count < `tl` are removed.
-    /// - Remaining entries sorted: words before labels, descending count within each type.
-    /// - Hash table rebuilt with the same capacity.
-    pub fn threshold(&mut self, t: i64, tl: i64) {
-        // Sort: words (type 0) before labels (type 1), descending count within type.
+    /// Sort vocabulary entries: words (type 0) before labels (type 1),
+    /// descending count within each type.
+    fn sort_vocab(&mut self) {
         self.words.sort_unstable_by(|a, b| {
             if a.entry_type != b.entry_type {
                 (a.entry_type as i8).cmp(&(b.entry_type as i8))
@@ -255,15 +249,25 @@ impl Dictionary {
                 b.count.cmp(&a.count)
             }
         });
+    }
 
-        // Remove entries below threshold.
+    /// Remove vocabulary entries whose count falls below the frequency threshold.
+    ///
+    /// Words with `count < t` and labels with `count < tl` are dropped.
+    fn filter_below_threshold(&mut self, t: i64, tl: i64) {
         self.words.retain(|e| match e.entry_type {
             EntryType::Word => e.count >= t,
             EntryType::Label => e.count >= tl,
         });
         self.words.shrink_to_fit();
+    }
 
-        // Rebuild hash table (keep same capacity, fill with HASH_EMPTY, re-insert).
+    /// Rebuild the `word2int` hash table from the current `words` array,
+    /// resetting and recomputing `size`, `nwords`, and `nlabels` counters.
+    ///
+    /// The existing hash table capacity is kept; slots are filled with
+    /// `HASH_EMPTY` and all entries re-inserted using linear probing.
+    fn rebuild_counts_and_hash_table(&mut self) {
         self.size = 0;
         self.nwords = 0;
         self.nlabels = 0;
@@ -286,6 +290,19 @@ impl Dictionary {
                 EntryType::Label => self.nlabels += 1,
             }
         }
+    }
+
+    /// Filter vocabulary by minimum count and rebuild the hash table.
+    ///
+    /// After this call:
+    /// - Words with count < `t` are removed.
+    /// - Labels with count < `tl` are removed.
+    /// - Remaining entries sorted: words before labels, descending count within each type.
+    /// - Hash table rebuilt with the same capacity.
+    pub fn threshold(&mut self, t: i64, tl: i64) {
+        self.sort_vocab();
+        self.filter_below_threshold(t, tl);
+        self.rebuild_counts_and_hash_table();
     }
 
     // Tokenization
