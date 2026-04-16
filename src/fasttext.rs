@@ -1,6 +1,7 @@
 // FastText: train, predict, quantize, autotune, save/load, word/sentence vectors
 
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +15,7 @@ use crate::matrix::{DenseMatrix, Matrix};
 use crate::meter::Meter;
 use crate::model::{Model, Predictions, State};
 use crate::quant_matrix::QuantMatrix;
-use crate::utils;
+use crate::utils::{self, OrdF32};
 use crate::vector::Vector;
 
 /// Magic number identifying a valid fastText binary model file.
@@ -135,9 +136,9 @@ pub struct FastText {
     /// Whether the model uses quantized (QuantMatrix) input.
     quant: bool,
     /// Quantized input matrix. Present when `quant=true`.
-    pub quant_input: Option<QuantMatrix>,
+    quant_input: Option<QuantMatrix>,
     /// Quantized output matrix. Present when `quant=true` and `args.qout=true`.
-    pub quant_output: Option<QuantMatrix>,
+    quant_output: Option<QuantMatrix>,
     /// Pre-built inference model (uses dense matrices; bypassed when quant=true).
     model: Model,
     /// Atomic flag for aborting an in-progress training run.
@@ -263,7 +264,7 @@ impl FastText {
     }
 
     /// Load a model from a file path.
-    pub fn load_model(path: &str) -> Result<Self> {
+    pub fn load_model(path: impl AsRef<Path>) -> Result<Self> {
         let file = std::fs::File::open(path).map_err(FastTextError::IoError)?;
         let mut reader = BufReader::new(file);
         Self::load(&mut reader)
@@ -321,7 +322,7 @@ impl FastText {
     }
 
     /// Save the model to a file path.
-    pub fn save_model(&self, path: &str) -> Result<()> {
+    pub fn save_model(&self, path: impl AsRef<Path>) -> Result<()> {
         let file = std::fs::File::create(path).map_err(FastTextError::IoError)?;
         let mut writer = BufWriter::new(file);
         self.save(&mut writer)?;
@@ -357,6 +358,16 @@ impl FastText {
         self.quant
     }
 
+    /// Get a reference to the quantized input matrix, if present.
+    pub fn quant_input(&self) -> Option<&QuantMatrix> {
+        self.quant_input.as_ref()
+    }
+
+    /// Get a reference to the quantized output matrix, if present.
+    pub fn quant_output(&self) -> Option<&QuantMatrix> {
+        self.quant_output.as_ref()
+    }
+
     /// Return the word vector for a given word.
     ///
     /// For in-vocabulary words the vector is the average of all stored subword
@@ -366,29 +377,42 @@ impl FastText {
     pub fn get_word_vector(&self, word: &str) -> Vec<f32> {
         let dim = self.args.dim as usize;
         let mut result = vec![0.0f32; dim];
+        self.get_word_vector_into(word, &mut result);
+        result
+    }
+
+    /// Write the word vector for `word` into `out`.
+    ///
+    /// Like [`get_word_vector`] but avoids allocation by writing into a
+    /// caller-provided buffer. `out` must have length equal to `self.get_dimension()`.
+    ///
+    /// # Panics
+    /// Panics if `out.len() != self.get_dimension() as usize`.
+    pub fn get_word_vector_into(&self, word: &str, out: &mut [f32]) {
+        let dim = self.args.dim as usize;
+        assert_eq!(out.len(), dim, "output buffer length must equal model dimension");
+        out.fill(0.0);
         let ids = self.dict.get_subwords_for_string(word);
         if ids.is_empty() {
-            return result;
+            return;
         }
         let scale = 1.0 / ids.len() as f32;
         if self.quant {
-            // Quantized path: use QuantMatrix reconstruction.
             if let Some(ref qi) = self.quant_input {
                 let mut vec = Vector::new(dim);
                 for &id in &ids {
                     qi.add_row_to_vector(&mut vec, id, scale);
                 }
-                result.copy_from_slice(vec.data());
+                out.copy_from_slice(vec.data());
             }
         } else {
             for &id in &ids {
                 let row = self.input.row(id as i64);
-                for (r, &v) in result.iter_mut().zip(row.iter()) {
+                for (r, &v) in out.iter_mut().zip(row.iter()) {
                     *r += v * scale;
                 }
             }
         }
-        result
     }
 
     /// Compute the sentence vector for the given text.
@@ -403,59 +427,66 @@ impl FastText {
     pub fn get_sentence_vector(&self, sentence: &str) -> Vec<f32> {
         let dim = self.args.dim as usize;
         let mut result = vec![0.0f32; dim];
+        self.get_sentence_vector_into(sentence, &mut result);
+        result
+    }
+
+    /// Write the sentence vector for `sentence` into `out`.
+    ///
+    /// Like [`get_sentence_vector`] but avoids allocation by writing into a
+    /// caller-provided buffer. `out` must have length equal to `self.get_dimension()`.
+    ///
+    /// # Panics
+    /// Panics if `out.len() != self.get_dimension() as usize`.
+    pub fn get_sentence_vector_into(&self, sentence: &str, out: &mut [f32]) {
+        let dim = self.args.dim as usize;
+        assert_eq!(out.len(), dim, "output buffer length must equal model dimension");
+        out.fill(0.0);
 
         if self.args.model == ModelName::SUP {
-            // Supervised: use dictionary tokenization (subwords included).
-            // Append EOS to match C++ getSentenceVector behavior: the C++
-            // stream-based getLine includes an EOS token produced by the
-            // trailing newline, so we explicitly append it here.
             let mut words: Vec<i32> = Vec::new();
             let mut labels: Vec<i32> = Vec::new();
             self.dict.get_line_from_str(sentence, &mut words, &mut labels);
 
-            // Return zero vector for empty/whitespace-only input.
             if words.is_empty() {
-                return result;
+                return;
             }
 
-            // Append EOS to match C++ stream-based getLine behavior (trailing newline → EOS).
             let eos_id = self.dict.get_id(EOS);
-            if eos_id >= 0 {
+            if let Some(eos_id) = eos_id {
                 words.push(eos_id);
             }
 
             let count = words.len() as f32;
             if self.quant {
-                // Quantized path: use QuantMatrix reconstruction.
                 if let Some(ref qi) = self.quant_input {
                     let mut vec = Vector::new(dim);
                     for &id in &words {
                         qi.add_row_to_vector(&mut vec, id, 1.0);
                     }
-                    for (r, &v) in result.iter_mut().zip(vec.data().iter()) {
+                    for (r, &v) in out.iter_mut().zip(vec.data().iter()) {
                         *r = v / count;
                     }
                 }
             } else {
                 for &id in &words {
                     let row = self.input.row(id as i64);
-                    for (r, &v) in result.iter_mut().zip(row.iter()) {
+                    for (r, &v) in out.iter_mut().zip(row.iter()) {
                         *r += v;
                     }
                 }
-                for r in &mut result {
+                for r in out.iter_mut() {
                     *r /= count;
                 }
             }
         } else {
-            // Unsupervised: split whitespace, get word vector, L2-normalize, average.
-            // get_word_vector() already handles the quant path internally.
+            let mut word_buf = vec![0.0f32; dim];
             let mut count = 0i32;
             for word in sentence.split_whitespace() {
-                let vec = self.get_word_vector(word);
-                let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
+                self.get_word_vector_into(word, &mut word_buf);
+                let norm: f32 = word_buf.iter().map(|&v| v * v).sum::<f32>().sqrt();
                 if norm > 0.0 {
-                    for (r, &v) in result.iter_mut().zip(vec.iter()) {
+                    for (r, &v) in out.iter_mut().zip(word_buf.iter()) {
                         *r += v / norm;
                     }
                     count += 1;
@@ -463,12 +494,11 @@ impl FastText {
             }
             if count > 0 {
                 let scale = 1.0 / count as f32;
-                for r in &mut result {
+                for r in out.iter_mut() {
                     *r *= scale;
                 }
             }
         }
-        result
     }
 
     /// Tokenize text by splitting on whitespace.
@@ -520,8 +550,8 @@ impl FastText {
         self.args.dim
     }
 
-    /// Return the word ID for the given word, or `-1` if not in vocabulary.
-    pub fn get_word_id(&self, word: &str) -> i32 {
+    /// Return the word ID for the given word, or `None` if not in vocabulary.
+    pub fn get_word_id(&self, word: &str) -> Option<i32> {
         self.dict.get_id(word)
     }
 
@@ -557,7 +587,7 @@ impl FastText {
         // from a stream the newline character produces an EOS token that is
         // included in the hidden-representation average.
         let eos_id = self.dict.get_id(EOS);
-        if eos_id >= 0 {
+        if let Some(eos_id) = eos_id {
             words.push(eos_id);
         }
 
@@ -577,7 +607,7 @@ impl FastText {
     ///
     /// ```text
     /// let eos_id = model.dict().get_id("</s>");
-    /// if eos_id >= 0 { words.push(eos_id); }
+    /// if let Some(eos_id) = eos_id { words.push(eos_id); }
     /// let preds = model.predict_on_words(&words, k, threshold);
     /// ```
     ///
@@ -659,14 +689,14 @@ impl FastText {
         match &self.quant_output {
             Some(qout) => {
                 for i in 0..osz {
-                    let dot = qout.dot_row(&state.hidden, i as i64).unwrap_or(0.0);
+                    let dot = qout.dot_row(&state.hidden, i as i64);
                     state.output[i] = dot;
                 }
             }
             None => {
                 // Use dense output matrix (qout=false).
                 for i in 0..osz {
-                    let dot = self.output.dot_row(&state.hidden, i as i64).unwrap_or(0.0);
+                    let dot = self.output.dot_row(&state.hidden, i as i64);
                     state.output[i] = dot;
                 }
             }
@@ -858,11 +888,30 @@ impl FastText {
     /// Returns a vec of `(similarity, word)` pairs sorted by descending similarity.
     ///
     /// This mirrors the C++ `FastText::getNN`.
+    ///
+    /// For repeated queries, use [`precompute_word_vectors`] once and then
+    /// call [`get_nn_with_word_vectors`] to avoid recomputing on every call.
     pub fn get_nn(&self, word: &str, k: usize) -> Vec<(f32, String)> {
         let query = self.get_word_vector(word);
         let word_vectors = self.precompute_word_vectors();
         let ban_words = vec![word];
         self.nn_from_word_vectors(&word_vectors, &query, k, &ban_words)
+    }
+
+    /// Find the `k` nearest neighbors using precomputed word vectors.
+    ///
+    /// Like [`get_nn`] but takes a precomputed `DenseMatrix` from
+    /// [`precompute_word_vectors`], avoiding the O(nwords × dim) recomputation
+    /// on every call.
+    pub fn get_nn_with_word_vectors(
+        &self,
+        word_vectors: &DenseMatrix,
+        word: &str,
+        k: usize,
+    ) -> Vec<(f32, String)> {
+        let query = self.get_word_vector(word);
+        let ban_words = vec![word];
+        self.nn_from_word_vectors(word_vectors, &query, k, &ban_words)
     }
 
     /// Find the `k` nearest neighbors to `word_a - word_b + word_c`.
@@ -874,8 +923,28 @@ impl FastText {
     /// Returns a vec of `(similarity, word)` pairs sorted by descending similarity.
     ///
     /// This mirrors the C++ `FastText::getAnalogies`.
+    ///
+    /// For repeated queries, use [`precompute_word_vectors`] once and then
+    /// call [`get_analogies_with_word_vectors`] to avoid recomputing on every call.
     pub fn get_analogies(
         &self,
+        word_a: &str,
+        word_b: &str,
+        word_c: &str,
+        k: usize,
+    ) -> Vec<(f32, String)> {
+        let word_vectors = self.precompute_word_vectors();
+        self.get_analogies_with_word_vectors(&word_vectors, word_a, word_b, word_c, k)
+    }
+
+    /// Find analogies using precomputed word vectors.
+    ///
+    /// Like [`get_analogies`] but takes a precomputed `DenseMatrix` from
+    /// [`precompute_word_vectors`], avoiding the O(nwords × dim) recomputation
+    /// on every call.
+    pub fn get_analogies_with_word_vectors(
+        &self,
+        word_vectors: &DenseMatrix,
         word_a: &str,
         word_b: &str,
         word_c: &str,
@@ -905,9 +974,8 @@ impl FastText {
             *q += v / norm;
         }
 
-        let word_vectors = self.precompute_word_vectors();
         let ban_words = vec![word_a, word_b, word_c];
-        self.nn_from_word_vectors(&word_vectors, &query, k, &ban_words)
+        self.nn_from_word_vectors(word_vectors, &query, k, &ban_words)
     }
 
     /// Internal: linear scan for top-k nearest neighbors given precomputed word vectors.
@@ -930,22 +998,6 @@ impl FastText {
 
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
-
-        #[derive(PartialEq)]
-        struct OrdF32(f32);
-        impl Eq for OrdF32 {}
-        impl PartialOrd for OrdF32 {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-        impl Ord for OrdF32 {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.0
-                    .partial_cmp(&other.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
-        }
 
         // Pre-normalize query so dot products directly give cosine similarity.
         let norm: f32 = query.iter().map(|&v| v * v).sum::<f32>().sqrt();
@@ -1002,13 +1054,13 @@ impl FastText {
         let mut idx: Vec<i32> = (0..nrows as i32).collect();
         idx.sort_unstable_by(|&i1, &i2| {
             // EOS always comes first.
-            if i1 == eos_id && i2 == eos_id {
+            if Some(i1) == eos_id && Some(i2) == eos_id {
                 return std::cmp::Ordering::Equal;
             }
-            if i1 == eos_id {
+            if Some(i1) == eos_id {
                 return std::cmp::Ordering::Less;
             }
-            if i2 == eos_id {
+            if Some(i2) == eos_id {
                 return std::cmp::Ordering::Greater;
             }
             norms[i2 as usize]
@@ -1496,10 +1548,11 @@ impl FastText {
             }
 
             // If the word is in the vocabulary, overwrite its input row.
-            let idx = dict.get_id(word);
-            if idx >= 0 && idx < nwords {
-                let row = input.row_mut(idx as i64);
-                row.copy_from_slice(&vec);
+            if let Some(idx) = dict.get_id(word) {
+                if idx < nwords {
+                    let row = input.row_mut(idx as i64);
+                    row.copy_from_slice(&vec);
+                }
             }
         }
 
@@ -1981,9 +2034,9 @@ mod tests {
         assert_eq!(words[1].entry_type, crate::dictionary::EntryType::Label);
 
         // Verify word lookup works
-        assert_eq!(dict.get_id("</s>"), 0);
-        assert_eq!(dict.get_id("__label__test"), 1);
-        assert_eq!(dict.get_id("unknown"), -1);
+        assert_eq!(dict.get_id("</s>"), Some(0));
+        assert_eq!(dict.get_id("__label__test"), Some(1));
+        assert_eq!(dict.get_id("unknown"), None);
     }
 
     // VAL-DICT-012: Matrix blocks

@@ -103,23 +103,23 @@ fn test_load_cooking_model_word_lookup() {
     let dict = model.dict();
 
     // EOS should be at index 0
-    assert_eq!(dict.get_id("</s>"), 0, "EOS should be at index 0");
+    assert_eq!(dict.get_id("</s>"), Some(0), "EOS should be at index 0");
 
     // Known words should be findable
     assert!(
-        dict.get_id("baking") >= 0,
+        dict.get_id("baking").is_some(),
         "'baking' should be in vocabulary"
     );
     assert!(
-        dict.get_id("banana") >= 0,
+        dict.get_id("banana").is_some(),
         "'banana' should be in vocabulary"
     );
 
-    // Unknown words should return -1
+    // Unknown words should return None
     assert_eq!(
         dict.get_id("xyzzy_definitely_not_a_word"),
-        -1,
-        "Unknown word should return -1"
+        None,
+        "Unknown word should return None"
     );
 }
 

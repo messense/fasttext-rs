@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::matrix::{DenseMatrix, Matrix};
 use crate::model::{MinstdRng, Predictions, State};
+use crate::utils::OrdF32;
 use crate::vector::Vector;
 
 // Constants
@@ -174,23 +175,6 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
 
-    // Wrapper for f32 ordering (NaN-safe, treats NaN as equal).
-    #[derive(PartialEq)]
-    struct OrdF32(f32);
-    impl Eq for OrdF32 {}
-    impl PartialOrd for OrdF32 {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-    impl Ord for OrdF32 {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.0
-                .partial_cmp(&other.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
-    }
-
     // Min-heap keyed on raw probability (smallest at top) via Reverse.
     // Since std_log is monotonically increasing, ordering by raw score
     // gives the same top-k as ordering by log-score. We only compute
@@ -202,10 +186,8 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
         if score < threshold {
             continue;
         }
-        if min_heap.len() == k {
-            if score < min_heap.peek().unwrap().0 .0 .0 {
-                continue;
-            }
+        if min_heap.len() == k && score < min_heap.peek().unwrap().0 .0 .0 {
+            continue;
         }
         min_heap.push(Reverse((OrdF32(score), i as i32)));
         if min_heap.len() > k {
@@ -263,7 +245,7 @@ impl BinaryLogisticBase {
         lr: f32,
         backprop: bool,
     ) -> f32 {
-        let dot = self.wo.dot_row(&state.hidden, target as i64).unwrap_or(0.0);
+        let dot = self.wo.dot_row(&state.hidden, target as i64);
         let score = self.tables.sigmoid(dot);
         if backprop {
             let alpha = lr * (label_is_positive as i32 as f32 - score);
@@ -286,7 +268,7 @@ impl BinaryLogisticBase {
     pub fn compute_output_sigmoid(&self, state: &mut State) {
         let osz = self.wo.rows() as usize;
         for i in 0..osz {
-            let dot = self.wo.dot_row(&state.hidden, i as i64).unwrap_or(0.0);
+            let dot = self.wo.dot_row(&state.hidden, i as i64);
             state.output[i] = self.tables.sigmoid(dot);
         }
     }
@@ -415,7 +397,8 @@ impl NegativeSamplingLoss {
     }
 
     /// Return a reference to the negative sampling table (for testing).
-    pub fn negatives(&self) -> &[i32] {
+    #[cfg(test)]
+    pub(crate) fn negatives(&self) -> &[i32] {
         &self.negatives
     }
 }
@@ -595,8 +578,7 @@ impl HierarchicalSoftmaxLoss {
         let f_raw = self
             .base
             .wo
-            .dot_row(hidden, matrix_row as i64)
-            .unwrap_or(0.0);
+            .dot_row(hidden, matrix_row as i64);
         let f = 1.0_f32 / (1.0 + (-f_raw).exp()); // exact sigmoid
 
         let left = self.tree[node].left as usize;
@@ -607,22 +589,26 @@ impl HierarchicalSoftmaxLoss {
     }
 
     /// Return the path (internal-node output-matrix row indices) for leaf `i`.
-    pub fn path(&self, i: usize) -> &[i32] {
+    #[cfg(test)]
+    pub(crate) fn path(&self, i: usize) -> &[i32] {
         &self.paths[i]
     }
 
     /// Return the code (left/right branch) for leaf `i`.
-    pub fn code(&self, i: usize) -> &[bool] {
+    #[cfg(test)]
+    pub(crate) fn code(&self, i: usize) -> &[bool] {
         &self.codes[i]
     }
 
     /// Return the code length (tree depth) for leaf `i`.
-    pub fn depth(&self, i: usize) -> usize {
+    #[cfg(test)]
+    pub(crate) fn depth(&self, i: usize) -> usize {
         self.codes[i].len()
     }
 
     /// Return the total number of nodes in the tree (leaves + internal).
-    pub fn tree_size(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn tree_size(&self) -> usize {
         self.tree.len()
     }
 }
@@ -659,8 +645,7 @@ impl Loss for HierarchicalSoftmaxLoss {
                 let dot = self
                     .base
                     .wo
-                    .dot_row(&state.hidden, node as i64)
-                    .unwrap_or(0.0);
+                    .dot_row(&state.hidden, node as i64);
                 let f = 1.0_f32 / (1.0 + (-dot).exp()); // exact sigmoid
                 if code[j] {
                     log_prob += std_log(f);
@@ -741,31 +726,31 @@ impl Loss for SoftmaxLoss {
         let wo_data = self.wo.data();
         let out = state.output.data_mut();
         // Compute raw logits: output[i] = wo[i] · hidden
-        for i in 0..osz {
+        for (i, out_i) in out[..osz].iter_mut().enumerate() {
             let row_start = i * cols;
             let row = &wo_data[row_start..row_start + cols];
             let mut d = 0.0f32;
             for (a, b) in row.iter().zip(hidden.iter()) {
                 d += a * b;
             }
-            out[i] = d;
+            *out_i = d;
         }
         // Max-subtraction for numerical stability
         let mut max = f32::NEG_INFINITY;
-        for i in 0..osz {
-            if out[i] > max {
-                max = out[i];
+        for out_i in &out[..osz] {
+            if *out_i > max {
+                max = *out_i;
             }
         }
         let mut z = 0.0f32;
-        for i in 0..osz {
-            out[i] = (out[i] - max).exp();
-            z += out[i];
+        for out_i in out[..osz].iter_mut() {
+            *out_i = (*out_i - max).exp();
+            z += *out_i;
         }
         if z > 0.0 {
             let inv_z = 1.0 / z;
-            for i in 0..osz {
-                out[i] *= inv_z;
+            for out_i in out[..osz].iter_mut() {
+                *out_i *= inv_z;
             }
         }
     }

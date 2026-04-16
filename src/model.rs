@@ -215,15 +215,6 @@ impl std::fmt::Debug for Model {
 }
 
 impl Model {
-    /// Sentinel value for "predict all labels" (matching C++ `kUnlimitedPredictions = -1`).
-    ///
-    /// **Note:** This constant is retained for documentation / API symmetry with C++.
-    /// However, `Model::predict` treats *all* non-positive `k` (including this value)
-    /// as "return nothing".  Callers that want all labels should pass
-    /// `self.dict.nlabels() as i32` or use the higher-level `FastText::predict`
-    /// API, which always clamps `k` to at most `nlabels`.
-    pub const K_UNLIMITED_PREDICTIONS: i32 = -1;
-
     /// Construct a new `Model`.
     ///
     /// # Arguments

@@ -297,7 +297,7 @@ impl Meter {
             let s = format!("{:.2e}", val);
             let e_pos = s.find('e').unwrap();
             let exp: i32 = s[e_pos + 1..].parse().unwrap();
-            if exp >= -4 && exp < 3 {
+            if (-4..3).contains(&exp) {
                 let dec = if exp >= 0 {
                     2usize.saturating_sub(exp as usize)
                 } else {

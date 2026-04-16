@@ -355,7 +355,7 @@ fn test_predict_on_words_matches_predict() {
     assert!(!words.is_empty(), "Should produce word IDs");
     // Add EOS just like predict() does
     let eos_id = model.dict().get_id(EOS);
-    if eos_id >= 0 {
+    if let Some(eos_id) = eos_id {
         words.push(eos_id);
     }
 
@@ -774,35 +774,35 @@ fn test_get_dimension() {
     expect!["10"].assert_eq(&model.get_dimension().to_string());
 }
 
-/// get_word_id() returns correct ID for known words and -1 for unknown.
+/// get_word_id() returns correct ID for known words and None for unknown.
 #[test]
 fn test_get_word_id_known() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
 
     // EOS should be at index 0
     let eos_id = model.get_word_id("</s>");
-    assert_eq!(eos_id, 0, "EOS should be at index 0, got {}", eos_id);
+    assert_eq!(eos_id, Some(0), "EOS should be at index 0, got {:?}", eos_id);
 
     // Known words should be in vocabulary
     let banana_id = model.get_word_id("banana");
     assert!(
-        banana_id >= 0,
-        "'banana' should be in vocabulary, got id={}", banana_id
+        banana_id.is_some(),
+        "'banana' should be in vocabulary, got id={:?}", banana_id
     );
 
     let baking_id = model.get_word_id("baking");
     assert!(
-        baking_id >= 0,
-        "'baking' should be in vocabulary, got id={}", baking_id
+        baking_id.is_some(),
+        "'baking' should be in vocabulary, got id={:?}", baking_id
     );
 }
 
-/// get_word_id() returns -1 for unknown words.
+/// get_word_id() returns None for unknown words.
 #[test]
 fn test_get_word_id_unknown() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
     let id = model.get_word_id("xyzzy_definitely_not_in_vocabulary_42");
-    assert_eq!(id, -1, "Unknown word should return -1, got {}", id);
+    assert_eq!(id, None, "Unknown word should return None, got {:?}", id);
 }
 
 /// get_dimension() matches args.dim.

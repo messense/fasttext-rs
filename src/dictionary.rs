@@ -143,16 +143,18 @@ impl Dictionary {
         }
     }
 
-    /// Get the vocabulary index of a word, or -1 if not found (OOV).
-    pub fn get_id(&self, w: &str) -> i32 {
+    /// Get the vocabulary index of a word, or `None` if not found (OOV).
+    pub fn get_id(&self, w: &str) -> Option<i32> {
         let h = self.find_slot(w);
-        self.word2int[h]
+        let id = self.word2int[h];
+        if id >= 0 { Some(id) } else { None }
     }
 
-    /// Get the vocabulary index of a word given its hash, or -1 if not found.
-    pub fn get_id_with_hash(&self, w: &str, h: u32) -> i32 {
+    /// Get the vocabulary index of a word given its hash, or `None` if not found.
+    pub fn get_id_with_hash(&self, w: &str, h: u32) -> Option<i32> {
         let idx = self.find_slot_with_hash(w, h);
-        self.word2int[idx]
+        let id = self.word2int[idx];
+        if id >= 0 { Some(id) } else { None }
     }
 
     /// Get the entry type (Word or Label) for a word by its vocabulary index.
@@ -350,20 +352,25 @@ impl Dictionary {
             return true;
         }
 
-        let mut buf = [0u8; 1];
+        let mut buf: Vec<u8> = Vec::new();
+        let mut byte = [0u8; 1];
         loop {
-            match reader.read(&mut buf) {
+            match reader.read(&mut byte) {
                 Ok(0) => {
                     // EOF: return true if we accumulated a token.
-                    return !word.is_empty();
+                    if !buf.is_empty() {
+                        *word = String::from_utf8_lossy(&buf).into_owned();
+                        return true;
+                    }
+                    return false;
                 }
                 Ok(_) => {
-                    let c = buf[0];
+                    let c = byte[0];
                     let is_ws =
                         matches!(c, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c' | b'\0');
 
                     if is_ws {
-                        if word.is_empty() {
+                        if buf.is_empty() {
                             if c == b'\n' {
                                 word.push_str(EOS);
                                 return true;
@@ -374,21 +381,19 @@ impl Dictionary {
                                 // Put back the newline via the pending flag.
                                 *pending_newline = true;
                             }
+                            *word = String::from_utf8_lossy(&buf).into_owned();
                             return true;
                         }
                     } else {
-                        // Push byte directly into the String.
-                        // fastText data is ASCII; for non-ASCII bytes, push the
-                        // Unicode replacement char to match from_utf8_lossy behavior.
-                        if c.is_ascii() {
-                            word.push(c as char);
-                        } else {
-                            word.push(char::REPLACEMENT_CHARACTER);
-                        }
+                        buf.push(c);
                     }
                 }
                 Err(_) => {
-                    return !word.is_empty();
+                    if !buf.is_empty() {
+                        *word = String::from_utf8_lossy(&buf).into_owned();
+                        return true;
+                    }
+                    return false;
                 }
             }
         }
@@ -646,8 +651,7 @@ impl Dictionary {
     /// - OOV: computes n-grams on-the-fly (no word ID prepended).
     /// - EOS: returns empty vec if OOV.
     pub fn get_subwords_for_string(&self, word: &str) -> Vec<i32> {
-        let id = self.get_id(word);
-        if id >= 0 {
+        if let Some(id) = self.get_id(word) {
             return self.words[id as usize].subwords.clone();
         }
         let mut ngrams = Vec::new();
@@ -668,8 +672,7 @@ impl Dictionary {
     /// and is used by the `print-ngrams` CLI command.
     pub fn get_ngram_strings(&self, word: &str) -> Vec<(i32, String)> {
         let mut result = Vec::new();
-        let id = self.get_id(word);
-        if id >= 0 {
+        if let Some(id) = self.get_id(word) {
             result.push((id, self.words[id as usize].word.clone()));
         }
         if word != EOS {
@@ -789,7 +792,7 @@ impl Dictionary {
             }
 
             let h = crate::utils::hash(token.as_bytes());
-            let wid = self.get_id_with_hash(token, h);
+            let wid = self.get_id_with_hash(token, h).unwrap_or(-1);
 
             let entry_type = if wid < 0 {
                 self.get_type_from_str(token)
@@ -840,7 +843,7 @@ impl Dictionary {
             }
 
             let h = crate::utils::hash(token.as_bytes());
-            let wid = self.get_id_with_hash(token, h);
+            let wid = self.get_id_with_hash(token, h).unwrap_or(-1);
 
             let entry_type = if wid < 0 {
                 self.get_type_from_str(token)
@@ -924,11 +927,10 @@ impl Dictionary {
             }
 
             let h = utils::hash(token.as_bytes());
-            let wid = self.get_id_with_hash(token, h);
-
-            if wid < 0 {
-                continue;
-            }
+            let wid = match self.get_id_with_hash(token, h) {
+                Some(id) => id,
+                None => continue,
+            };
 
             ntokens += 1;
             if self.get_type_by_id(wid) == EntryType::Word {

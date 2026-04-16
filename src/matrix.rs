@@ -27,8 +27,8 @@ pub trait Matrix {
 
     /// Compute the dot product of a vector with a specific matrix row.
     ///
-    /// Returns `Err(EncounteredNaN)` if the result is NaN.
-    fn dot_row(&self, vec: &Vector, i: i64) -> Result<f32>;
+    /// Returns the dot product value. NaN results are passed through as-is.
+    fn dot_row(&self, vec: &Vector, i: i64) -> f32;
 
     /// Add `scale * vec` to row `i` of the matrix.
     fn add_vector_to_row(&mut self, vec: &Vector, i: i64, scale: f32);
@@ -187,22 +187,23 @@ impl DenseMatrix {
         &mut self.data_mut()[start..end]
     }
 
-    /// Add `scale * vec` to row `i` without requiring `&mut self`.
+    /// Performs a lock-free (Hogwild!) SGD update: `row[i] += scale * vec`.
+    ///
+    /// This method takes `&self` (not `&mut self`) and writes to the matrix data
+    /// through raw pointers, deliberately circumventing Rust's aliasing rules so
+    /// that multiple threads can update shared weight matrices concurrently —
+    /// exactly as C++ fastText does.
     ///
     /// # Safety
     ///
-    /// This method implements the Hogwild! algorithm (Recht et al., 2011), which
-    /// intentionally allows concurrent, unsynchronized writes to shared weight
-    /// matrices during multi-threaded SGD training — exactly as C++ fastText does.
-    ///
-    /// The caller must ensure:
-    /// 1. The matrix is alive (held via `Arc`) for the duration of the call.
-    /// 2. Only `f32` element writes occur — no structural mutations (resize, etc.).
-    /// 3. The caller accepts that concurrent writes to the same element produce
-    ///    benign numerical noise (proven convergent by Hogwild! theory).
-    ///
-    /// Individual `f32` writes are atomic on all platforms we target (x86_64, aarch64),
-    /// so no torn reads can occur.
+    /// * The caller must ensure that concurrent writes to overlapping rows are
+    ///   acceptable (as in Hogwild! SGD, where occasional data races on
+    ///   individual `f32` values are tolerated for performance).
+    /// * `i` must be a valid row index: `0 <= i < self.rows()`.
+    /// * `vec.len()` must equal `self.cols()`.
+    /// * The matrix must be alive (held via `Arc`) for the duration of the call.
+    /// * Only `f32` element writes may occur — no structural mutations (resize,
+    ///   etc.).
     pub unsafe fn add_vector_to_row_unsync(&self, vec: &Vector, i: i64, scale: f32) {
         debug_assert!(i >= 0 && i < self.m, "Row index out of bounds");
         debug_assert_eq!(vec.len(), self.n as usize);
@@ -211,9 +212,9 @@ impl DenseMatrix {
         let src = vec.data();
         // Use raw pointer writes instead of creating a &mut slice, which would
         // be instant UB when called concurrently from Hogwild! threads.
-        for j in 0..n {
+        for (j, &s) in src[..n].iter().enumerate() {
             let p = self.ptr.add(start + j);
-            p.write(p.read() + scale * src[j]);
+            p.write(p.read() + scale * s);
         }
     }
 
@@ -344,7 +345,7 @@ impl Matrix for DenseMatrix {
         self.n
     }
 
-    fn dot_row(&self, vec: &Vector, i: i64) -> Result<f32> {
+    fn dot_row(&self, vec: &Vector, i: i64) -> f32 {
         assert!(i >= 0 && i < self.m, "Row index out of bounds");
         assert_eq!(
             vec.len(),
@@ -354,11 +355,7 @@ impl Matrix for DenseMatrix {
             self.n
         );
         let row = self.row(i);
-        let d = dot_impl(row, vec.data());
-        if d.is_nan() {
-            return Err(FastTextError::EncounteredNaN);
-        }
-        Ok(d)
+        dot_impl(row, vec.data())
     }
 
     fn add_vector_to_row(&mut self, vec: &Vector, i: i64, scale: f32) {
@@ -1197,9 +1194,9 @@ mod tests {
         v[2] = 1.0;
 
         // dot(row0, v) = 1+2+3 = 6
-        assert!((m.dot_row(&v, 0).unwrap() - 6.0).abs() < 1e-6);
+        assert!((m.dot_row(&v, 0) - 6.0).abs() < 1e-6);
         // dot(row1, v) = 4+5+6 = 15
-        assert!((m.dot_row(&v, 1).unwrap() - 15.0).abs() < 1e-6);
+        assert!((m.dot_row(&v, 1) - 15.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1217,7 +1214,7 @@ mod tests {
         v[3] = 4.0;
 
         // 2*1 + 3*2 + 4*3 + 5*4 = 2 + 6 + 12 + 20 = 40
-        assert!((m.dot_row(&v, 0).unwrap() - 40.0).abs() < 1e-6);
+        assert!((m.dot_row(&v, 0) - 40.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1228,7 +1225,7 @@ mod tests {
         *m.at_mut(0, 2) = 3.0;
 
         let v = Vector::new(3); // all zeros
-        assert_eq!(m.dot_row(&v, 0).unwrap(), 0.0);
+        assert_eq!(m.dot_row(&v, 0), 0.0);
     }
 
     #[test]
@@ -1243,10 +1240,7 @@ mod tests {
         v[1] = 1.0;
         v[2] = 1.0;
 
-        match m.dot_row(&v, 0) {
-            Err(FastTextError::EncounteredNaN) => {} // expected
-            other => panic!("Expected EncounteredNaN, got {:?}", other),
-        }
+        assert!(m.dot_row(&v, 0).is_nan());
     }
 
 
@@ -1570,7 +1564,7 @@ mod tests {
             }
 
             // Test dot_row: compare against scalar
-            let simd_dot = m.dot_row(&v, 1).unwrap();
+            let simd_dot = m.dot_row(&v, 1);
             let row1 = m.row(1);
             let scalar_dot = dot_scalar(row1, v.data());
 
@@ -1949,10 +1943,7 @@ mod tests {
         v[1] = f32::NAN;
         v[2] = 1.0;
 
-        match m.dot_row(&v, 0) {
-            Err(FastTextError::EncounteredNaN) => {} // expected
-            other => panic!("Expected EncounteredNaN, got {:?}", other),
-        }
+        assert!(m.dot_row(&v, 0).is_nan());
     }
 
 
@@ -1970,7 +1961,7 @@ mod tests {
             v[j] = 1.0;
         }
         // dot of 100 ones with 100 ones = 100
-        assert!((m.dot_row(&v, 0).unwrap() - 100.0).abs() < 0.01);
+        assert!((m.dot_row(&v, 0) - 100.0).abs() < 0.01);
     }
 
 

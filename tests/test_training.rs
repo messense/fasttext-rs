@@ -163,7 +163,7 @@ fn test_train_cbow() {
     let test_words = ["the", "fox", "data", "neural"];
     for word in &test_words {
         let wid = model.get_word_id(word);
-        if wid >= 0 {
+        if wid.is_some() {
             let vec = model.get_word_vector(word);
             assert_eq!(
                 vec.len(),
@@ -214,7 +214,7 @@ fn test_train_skipgram() {
     let test_words = ["the", "fox", "data", "neural"];
     for word in &test_words {
         let wid = model.get_word_id(word);
-        if wid >= 0 {
+        if wid.is_some() {
             let vec = model.get_word_vector(word);
             assert_eq!(
                 vec.len(),
@@ -741,13 +741,13 @@ fn test_min_count_filtering() {
     let model = FastText::train(args).expect("Training with min_count=3 should succeed");
     std::fs::remove_file(&path).ok();
 
-    assert!(model.get_word_id("common_word") >= 0,
+    assert!(model.get_word_id("common_word").is_some(),
         "common_word (count=20) should be in vocabulary");
-    assert_eq!(model.get_word_id("rare_word"), -1,
+    assert_eq!(model.get_word_id("rare_word"), None,
         "rare_word (count=1) should be excluded with min_count=3");
-    assert_eq!(model.get_word_id("unique_token"), -1,
+    assert_eq!(model.get_word_id("unique_token"), None,
         "unique_token (count=1) should be excluded with min_count=3");
-    assert_eq!(model.get_word_id("also_rare"), -1,
+    assert_eq!(model.get_word_id("also_rare"), None,
         "also_rare (count=2) should be excluded with min_count=3");
 
     let (vocab_words, vocab_freqs) = model.get_vocab();
@@ -839,16 +839,16 @@ fn test_pretrained_vectors() {
     std::fs::remove_file(&vec_path).ok();
 
     let basketball_id = model.get_word_id("basketball");
-    assert!(basketball_id >= 0, "'basketball' should be in vocabulary");
-    let row = model.input_matrix().row(basketball_id as i64);
+    assert!(basketball_id.is_some(), "'basketball' should be in vocabulary");
+    let row = model.input_matrix().row(basketball_id.unwrap() as i64);
     for (j, (&got, &exp)) in row.iter().zip(vec_basketball.iter()).enumerate() {
         assert!((got - exp).abs() < 1e-5,
             "basketball[{}]: expected={}, got={}", j, exp, got);
     }
 
     let apple_id = model.get_word_id("apple");
-    assert!(apple_id >= 0, "'apple' should be in vocabulary");
-    let row = model.input_matrix().row(apple_id as i64);
+    assert!(apple_id.is_some(), "'apple' should be in vocabulary");
+    let row = model.input_matrix().row(apple_id.unwrap() as i64);
     for (j, (&got, &exp)) in row.iter().zip(vec_apple.iter()).enumerate() {
         assert!((got - exp).abs() < 1e-5,
             "apple[{}]: expected={}, got={}", j, exp, got);
@@ -856,7 +856,7 @@ fn test_pretrained_vectors() {
 
     // Word not in pretrained file should have non-zero random init.
     let game_id = model.get_word_id("game");
-    if game_id >= 0 {
+    if let Some(game_id) = game_id {
         let row = model.input_matrix().row(game_id as i64);
         let norm: f32 = row.iter().map(|&v| v * v).sum::<f32>().sqrt();
         assert!(norm.is_finite() && norm > 0.0,

@@ -146,7 +146,7 @@ impl Matrix for QuantMatrix {
     ///
     /// When `qnorm=true`, the result is scaled by the quantized norm of the row.
     /// Matches C++ `QuantMatrix::dotRow`.
-    fn dot_row(&self, vec: &Vector, i: i64) -> Result<f32> {
+    fn dot_row(&self, vec: &Vector, i: i64) -> f32 {
         assert!(i >= 0 && i < self.m, "Row index out of bounds: {}", i);
         assert_eq!(
             vec.len(),
@@ -156,11 +156,7 @@ impl Matrix for QuantMatrix {
             self.n
         );
         let norm = self.norm_for_row(i as usize);
-        let result = self.pq.mulcode(vec, &self.codes, i as i32, norm);
-        if result.is_nan() {
-            return Err(FastTextError::EncounteredNaN);
-        }
-        Ok(result)
+        self.pq.mulcode(vec, &self.codes, i as i32, norm)
     }
 
     /// **Not permitted on quantized matrices. Always panics.**
@@ -387,7 +383,7 @@ mod tests {
         let qm = make_test_qm();
         let mut x = Vector::new(4);
         x[0] = 1.0;
-        let result = qm.dot_row(&x, 0).expect("dot_row should succeed");
+        let result = qm.dot_row(&x, 0);
         assert!((result - 1.0).abs() < 1e-6, "expected 1.0, got {}", result);
     }
 
@@ -399,7 +395,7 @@ mod tests {
         let qm = make_test_qm();
         let mut x = Vector::new(4);
         x[3] = 1.0;
-        let result = qm.dot_row(&x, 1).expect("dot_row should succeed");
+        let result = qm.dot_row(&x, 1);
         assert!((result - 2.0).abs() < 1e-6, "expected 2.0, got {}", result);
     }
 
@@ -419,7 +415,7 @@ mod tests {
         x[3] = 1.0;
 
         for i in 0..4i64 {
-            let result = qm.dot_row(&x, i).expect("dot_row should succeed");
+            let result = qm.dot_row(&x, i);
             assert!(
                 (result - 3.0).abs() < 1e-6,
                 "row {}: expected 3.0, got {}",
@@ -544,7 +540,7 @@ mod tests {
         let qm = make_qnorm_qm();
         let mut x = Vector::new(4);
         x[0] = 1.0;
-        let result = qm.dot_row(&x, 0).expect("dot_row should succeed");
+        let result = qm.dot_row(&x, 0);
         assert!((result - 2.0).abs() < 1e-6, "expected 2.0, got {}", result);
     }
 
@@ -555,7 +551,7 @@ mod tests {
         let qm = make_qnorm_qm();
         let mut x = Vector::new(4);
         x[3] = 1.0;
-        let result = qm.dot_row(&x, 1).expect("dot_row should succeed");
+        let result = qm.dot_row(&x, 1);
         assert!((result - 1.0).abs() < 1e-6, "expected 1.0, got {}", result);
     }
 
@@ -640,8 +636,8 @@ mod tests {
         x[3] = 0.125;
 
         for i in 0..4i64 {
-            let r1 = qm.dot_row(&x, i).unwrap();
-            let r2 = qm2.dot_row(&x, i).unwrap();
+            let r1 = qm.dot_row(&x, i);
+            let r2 = qm2.dot_row(&x, i);
             assert_eq!(r1.to_bits(), r2.to_bits(), "row {}: dot_row mismatch", i);
         }
     }
@@ -678,7 +674,7 @@ mod tests {
         }
 
         for i in 0..4i64 {
-            let dot_result = qm.dot_row(&x, i).unwrap();
+            let dot_result = qm.dot_row(&x, i);
 
             let mut recon = Vector::new(4);
             qm.add_row_to_vector(&mut recon, i as i32, 1.0);

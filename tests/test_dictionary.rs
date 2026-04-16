@@ -235,15 +235,17 @@ fn test_vocab_lookup() {
     let world_id = dict.get_id("world");
     let oov_id = dict.get_id("foo");
 
-    assert!(hello_id >= 0, "hello should be in vocab");
-    assert!(world_id >= 0, "world should be in vocab");
+    assert!(hello_id.is_some(), "hello should be in vocab");
+    assert!(world_id.is_some(), "world should be in vocab");
     assert_ne!(
         hello_id, world_id,
         "hello and world should have different IDs"
     );
-    assert_eq!(oov_id, -1, "foo should be OOV");
+    assert_eq!(oov_id, None, "foo should be OOV");
 
     // Lookup by ID
+    let hello_id = hello_id.unwrap();
+    let world_id = world_id.unwrap();
     assert_eq!(dict.get_word(hello_id), "hello");
     assert_eq!(dict.get_word(world_id), "world");
 }
@@ -325,10 +327,10 @@ fn test_vocab_sorted_order() {
     assert_eq!(dict.words()[3].count, 3);
 
     // IDs should be accessible via get_id
-    assert_eq!(dict.get_id("common"), 0);
-    assert_eq!(dict.get_id("rare"), 1);
-    assert_eq!(dict.get_id("__label__dog"), 2);
-    assert_eq!(dict.get_id("__label__cat"), 3);
+    assert_eq!(dict.get_id("common"), Some(0));
+    assert_eq!(dict.get_id("rare"), Some(1));
+    assert_eq!(dict.get_id("__label__dog"), Some(2));
+    assert_eq!(dict.get_id("__label__cat"), Some(3));
 }
 
 #[test]
@@ -347,10 +349,10 @@ fn test_vocab_threshold_filtering() {
     assert_eq!(dict.nwords(), 1, "Only 'common' survives");
     assert_eq!(dict.nlabels(), 2, "Both labels survive");
 
-    assert!(dict.get_id("common") >= 0, "common should be in vocab");
-    assert_eq!(dict.get_id("rare"), -1, "rare should be filtered out");
-    assert!(dict.get_id("__label__a") >= 0, "label a should be in vocab");
-    assert!(dict.get_id("__label__b") >= 0, "label b should be in vocab");
+    assert!(dict.get_id("common").is_some(), "common should be in vocab");
+    assert_eq!(dict.get_id("rare"), None, "rare should be filtered out");
+    assert!(dict.get_id("__label__a").is_some(), "label a should be in vocab");
+    assert!(dict.get_id("__label__b").is_some(), "label b should be in vocab");
 }
 
 #[test]
@@ -369,11 +371,11 @@ fn test_vocab_hash_collision_resolution() {
     // All words should be findable
     for i in 0..100 {
         let id = dict.get_id(&format!("word_{}", i));
-        assert!(id >= 0, "word_{} should be in vocab", i);
+        assert!(id.is_some(), "word_{} should be in vocab", i);
     }
 
-    // OOV should return -1
-    assert_eq!(dict.get_id("not_in_vocab"), -1);
+    // OOV should return None
+    assert_eq!(dict.get_id("not_in_vocab"), None);
 }
 
 #[test]
@@ -436,8 +438,7 @@ fn test_word_count_accumulation() {
     }
     dict.threshold(1, 1);
 
-    let id = dict.get_id("hello");
-    assert!(id >= 0);
+    let id = dict.get_id("hello").unwrap();
     assert_eq!(dict.words()[id as usize].count, 5);
 }
 
@@ -551,11 +552,14 @@ fn test_read_from_file_utf8_tokens() {
     let id_world = dict.get_id("world");
     let id_test = dict.get_id("test");
 
-    assert!(id_jp >= 0, "'日本語' should be in vocabulary (got -1)");
-    assert!(id_cafe >= 0, "'café' should be in vocabulary (got -1)");
-    assert!(id_hello >= 0, "'hello' should be in vocabulary (got -1)");
-    assert!(id_world >= 0, "'world' should be in vocabulary (got -1)");
-    assert!(id_test >= 0, "'test' should be in vocabulary (got -1)");
+    assert!(id_jp.is_some(), "'日本語' should be in vocabulary");
+    assert!(id_cafe.is_some(), "'café' should be in vocabulary");
+    assert!(id_hello.is_some(), "'hello' should be in vocabulary");
+    assert!(id_world.is_some(), "'world' should be in vocabulary");
+    assert!(id_test.is_some(), "'test' should be in vocabulary");
+
+    let id_jp = id_jp.unwrap();
+    let id_cafe = id_cafe.unwrap();
 
     // Verify the word strings are stored correctly (not corrupted).
     assert_eq!(
@@ -590,8 +594,7 @@ fn test_tokenize_eos_entry_type() {
     dict.add("hello");
     dict.threshold(1, 1);
 
-    let eos_id = dict.get_id(EOS);
-    assert!(eos_id >= 0);
+    let eos_id = dict.get_id(EOS).unwrap();
     assert_eq!(dict.get_type_by_id(eos_id), EntryType::Word);
 }
 
@@ -681,8 +684,7 @@ fn test_subword_computation_known_values() {
     dict.threshold(1, 1);
     dict.init_ngrams();
 
-    let wid = dict.get_id("hello");
-    assert!(wid >= 0);
+    let wid = dict.get_id("hello").unwrap();
     let subwords = dict.get_subwords(wid);
 
     // 1 (word ID) + 14 (n-grams) = 15 total
@@ -886,8 +888,7 @@ fn test_subword_eos_no_subwords() {
     dict.threshold(1, 1);
     dict.init_ngrams();
 
-    let eos_id = dict.get_id(EOS);
-    assert!(eos_id >= 0, "EOS should be in vocab");
+    let eos_id = dict.get_id(EOS).unwrap();
 
     let subwords = dict.get_subwords(eos_id);
     assert_eq!(
@@ -930,7 +931,7 @@ fn test_subword_zero_maxn() {
     dict.threshold(1, 1);
     dict.init_ngrams();
 
-    let wid = dict.get_id("hello");
+    let wid = dict.get_id("hello").unwrap();
     let subwords = dict.get_subwords(wid);
     assert_eq!(
         subwords.len(),
@@ -1146,8 +1147,7 @@ fn test_discard_table_formula() {
     // but here we call it directly.
     dict.init_discard();
 
-    let wid = dict.get_id("word");
-    assert!(wid >= 0);
+    let wid = dict.get_id("word").unwrap();
 
     let pdiscard = dict.get_discard(wid);
     // f = 100 / 1000 = 0.1
@@ -1177,8 +1177,7 @@ fn test_discard_supervised_bypass() {
     dict.threshold(1, 1);
     dict.init_discard();
 
-    let wid = dict.get_id("word");
-    assert!(wid >= 0);
+    let wid = dict.get_id("word").unwrap();
 
     // Even with rand=1.0 (which would normally trigger discard), supervised returns false.
     assert!(
@@ -1212,8 +1211,7 @@ fn test_discard_unsupervised_formula() {
     dict.threshold(1, 1);
     dict.init_discard();
 
-    let wid = dict.get_id("rare");
-    assert!(wid >= 0);
+    let wid = dict.get_id("rare").unwrap();
 
     // pdiscard["rare"] = sqrt(0.9 / (1/1001)) + 0.9 / (1/1001) ≈ very large (> 1.0)
     // So rand > pdiscard is false for any rand in [0,1], meaning it won't be discarded.
@@ -1252,7 +1250,7 @@ fn test_discard_unsupervised_formula() {
     dict2.threshold(1, 1);
     dict2.init_discard();
 
-    let wid_frequent = dict2.get_id("frequent");
+    let wid_frequent = dict2.get_id("frequent").unwrap();
     let pdiscard_freq = dict2.get_discard(wid_frequent);
     // f = 9999/10000 = 0.9999
     // pdiscard = sqrt(0.0001/0.9999) + 0.0001/0.9999 ≈ 0.01 + 0.0001 ≈ 0.0101
@@ -1290,12 +1288,12 @@ fn test_getline_word_label_split() {
     // With maxn=0, init_ngrams just stores word IDs.
     dict.init_ngrams();
 
-    let wid_cat = dict.get_id("cat");
-    let wid_sit = dict.get_id("sit");
-    let wid_on = dict.get_id("on");
-    let wid_mat = dict.get_id("mat");
-    let wid_good = dict.get_id("__label__good");
-    let wid_bad = dict.get_id("__label__bad");
+    let wid_cat = dict.get_id("cat").unwrap();
+    let wid_sit = dict.get_id("sit").unwrap();
+    let wid_on = dict.get_id("on").unwrap();
+    let wid_mat = dict.get_id("mat").unwrap();
+    let wid_good = dict.get_id("__label__good").unwrap();
+    let wid_bad = dict.get_id("__label__bad").unwrap();
     let nwords = dict.nwords();
 
     // getLine from a text with words and a label.
@@ -1362,9 +1360,9 @@ fn test_getline_eos_terminates() {
     // words: hello, world (EOS is a word but it triggers break)
     // Actually looking at C++: addSubwords is called for EOS token if it's in vocab,
     // then "if (token == EOS) { break; }" → so the EOS word ID IS added to words.
-    let wid_eos = dict.get_id(EOS);
-    let wid_hello = dict.get_id("hello");
-    let wid_world = dict.get_id("world");
+    let wid_eos = dict.get_id(EOS).unwrap();
+    let wid_hello = dict.get_id("hello").unwrap();
+    let wid_world = dict.get_id("world").unwrap();
     // EOS is added as a word, then we break.
     assert!(words.contains(&wid_eos), "words should contain EOS word id");
     assert!(words.contains(&wid_hello));
@@ -1391,7 +1389,7 @@ fn test_getline_oov_with_subwords() {
     dict.get_line(&mut reader, &mut words, &mut labels, &mut pending);
 
     // "hello" is in-vocab → contributes word ID + n-grams.
-    let wid_hello = dict.get_id("hello");
+    let wid_hello = dict.get_id("hello").unwrap();
     // "unknown" is OOV → computed n-grams added (no word ID).
     // words should have subwords for hello + subwords for unknown.
     assert!(!words.is_empty(), "words should not be empty");
@@ -1435,7 +1433,7 @@ fn test_getline_oov_without_subwords() {
     dict.get_line(&mut reader, &mut words, &mut labels, &mut pending);
 
     // Only "hello" should be in words; "unknown_word" is OOV and maxn=0 → skipped.
-    let wid_hello = dict.get_id("hello");
+    let wid_hello = dict.get_id("hello").unwrap();
     assert_eq!(words, vec![wid_hello], "Only 'hello' should be in words");
 }
 
@@ -1459,7 +1457,7 @@ fn test_getline_oov_label_dropped() {
     dict.get_line(&mut reader, &mut words, &mut labels, &mut pending);
 
     assert_eq!(labels.len(), 1, "Only known label should be in labels");
-    let wid_good = dict.get_id("__label__good");
+    let wid_good = dict.get_id("__label__good").unwrap();
     let nwords = dict.nwords();
     assert_eq!(labels[0], wid_good - nwords);
 }
@@ -1485,8 +1483,8 @@ fn test_getline_with_word_ngrams() {
     let mut pending = false;
     dict.get_line(&mut reader, &mut words, &mut labels, &mut pending);
 
-    let wid_hello = dict.get_id("hello");
-    let wid_world = dict.get_id("world");
+    let wid_hello = dict.get_id("hello").unwrap();
+    let wid_world = dict.get_id("world").unwrap();
     let nwords = dict.nwords();
 
     // Words should contain: hello_id, world_id, plus one bigram hash.
@@ -1547,7 +1545,7 @@ fn test_getline_from_str() {
 
     assert_eq!(ntokens, 3);
     assert_eq!(labels.len(), 1);
-    let wid_good = dict.get_id("__label__good");
+    let wid_good = dict.get_id("__label__good").unwrap();
     let nwords = dict.nwords();
     assert_eq!(labels[0], wid_good - nwords);
     assert_eq!(words.len(), 2);
@@ -1563,7 +1561,7 @@ fn test_get_subwords_for_string_in_vocab() {
     dict.threshold(1, 1);
     dict.init_ngrams();
 
-    let wid = dict.get_id("hello");
+    let wid = dict.get_id("hello").unwrap();
     let subwords_by_id = dict.get_subwords(wid).clone();
     let subwords_by_str = dict.get_subwords_for_string("hello");
     assert_eq!(
@@ -1626,7 +1624,7 @@ fn test_add_subwords_in_vocab_with_subwords() {
     dict.threshold(1, 1);
     dict.init_ngrams();
 
-    let wid = dict.get_id("hello");
+    let wid = dict.get_id("hello").unwrap();
     let mut line = Vec::new();
     dict.add_subwords(&mut line, "hello", wid);
 
@@ -1646,7 +1644,7 @@ fn test_add_subwords_in_vocab_no_subwords() {
     dict.threshold(1, 1);
     dict.init_ngrams();
 
-    let wid = dict.get_id("hello");
+    let wid = dict.get_id("hello").unwrap();
     let mut line = Vec::new();
     dict.add_subwords(&mut line, "hello", wid);
 

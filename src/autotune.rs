@@ -339,7 +339,7 @@ impl Autotune {
             if size_str.is_empty() {
                 None
             } else {
-                parse_size_to_bytes(&size_str)
+                parse_size_to_bytes(size_str)
             }
         };
 
@@ -492,7 +492,7 @@ impl Autotune {
             Ok(meter.f1())
         } else if let Some(label_name) = metric.strip_prefix("f1:") {
             // Per-label F1: look up the label ID in the model's dictionary.
-            let label_id = model.dict().get_id(label_name);
+            let label_id = model.dict().get_id(label_name).unwrap_or(-1);
             Ok(meter.f1_for_label(label_id))
         } else {
             // Unknown or unsupported metric: fall back to macro F1.

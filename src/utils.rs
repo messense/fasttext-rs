@@ -87,6 +87,29 @@ pub fn write_bool<W: Write>(writer: &mut W, value: bool) -> Result<()> {
     Ok(())
 }
 
+/// Wrapper for `f32` that implements `Ord` (NaN-safe, treats NaN as equal).
+///
+/// Used for ordering f32 values in binary heaps and sorted collections
+/// throughout the codebase (top-k prediction, nearest-neighbor search, etc.).
+#[derive(Clone, Copy, PartialEq)]
+pub struct OrdF32(pub f32);
+
+impl Eq for OrdF32 {}
+
+impl PartialOrd for OrdF32 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrdF32 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .partial_cmp(&other.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
