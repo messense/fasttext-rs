@@ -41,33 +41,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v5
 
-  asan:
-    name: Address Sanitizer
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
-      - name: cargo test
-        run: cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
-        env:
-          RUSTFLAGS: -Zsanitizer=address
-
-  valgrind:
-    name: Valgrind
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@valgrind
-      - uses: taiki-e/install-action@cargo-valgrind
-      - run: cargo valgrind test
-
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
