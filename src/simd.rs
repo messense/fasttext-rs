@@ -13,20 +13,16 @@ use crate::vector::Vector;
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn dot_scalar(a: &[f32], b: &[f32]) -> f32 {
-    let mut sum = 0.0f32;
-    for i in 0..a.len() {
-        sum += a[i] * b[i];
-    }
-    sum
+    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
 /// Scalar fallback for dest += scale * src.
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn add_vector_scalar(dest: &mut [f32], src: &[f32], scale: f32) {
-    for i in 0..dest.len() {
-        dest[i] += scale * src[i];
-    }
+    dest.iter_mut()
+        .zip(src.iter())
+        .for_each(|(d, &s)| *d += scale * s);
 }
 
 /// Scalar average_rows implementation.

@@ -67,18 +67,20 @@ impl LossTables {
         let sig_size = (SIGMOID_TABLE_SIZE + 1) as usize;
         let log_size = (LOG_TABLE_SIZE + 1) as usize;
 
-        let mut sigmoid_table = Vec::with_capacity(sig_size);
-        for i in 0..sig_size as i64 {
-            let x = (i as f32 * 2.0 * MAX_SIGMOID as f32) / SIGMOID_TABLE_SIZE as f32
-                - MAX_SIGMOID as f32;
-            sigmoid_table.push(1.0 / (1.0 + (-x).exp()));
-        }
+        let sigmoid_table: Vec<f32> = (0..sig_size)
+            .map(|i| {
+                let x = (i as f32 * 2.0 * MAX_SIGMOID as f32) / SIGMOID_TABLE_SIZE as f32
+                    - MAX_SIGMOID as f32;
+                1.0 / (1.0 + (-x).exp())
+            })
+            .collect();
 
-        let mut log_table = Vec::with_capacity(log_size);
-        for i in 0..log_size as i64 {
-            let x = (i as f32 + 1e-5_f32) / LOG_TABLE_SIZE as f32;
-            log_table.push(x.ln());
-        }
+        let log_table: Vec<f32> = (0..log_size)
+            .map(|i| {
+                let x = (i as f32 + 1e-5_f32) / LOG_TABLE_SIZE as f32;
+                x.ln()
+            })
+            .collect();
 
         LossTables {
             sigmoid_table,
@@ -180,8 +182,7 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
     // std_log for the final k survivors, avoiding ln() on all other labels.
     let mut min_heap: BinaryHeap<Reverse<(OrdF32, i32)>> = BinaryHeap::with_capacity(k + 1);
 
-    for i in 0..output.len() {
-        let score = output[i];
+    for (i, &score) in output.data().iter().enumerate() {
         if score < threshold {
             continue;
         }
@@ -264,9 +265,9 @@ impl BinaryLogisticBase {
     /// Compute output[i] = sigmoid(wo[i] · hidden) for all i.
     pub fn compute_output_sigmoid(&self, state: &mut State) {
         let osz = self.wo.rows() as usize;
-        for i in 0..osz {
+        for (i, out) in state.output.data_mut()[..osz].iter_mut().enumerate() {
             let dot = self.wo.dot_row(&state.hidden, i as i64);
-            state.output[i] = self.tables.sigmoid(dot);
+            *out = self.tables.sigmoid(dot);
         }
     }
 }
@@ -299,16 +300,14 @@ impl Loss for OneVsAllLoss {
         lr: f32,
         backprop: bool,
     ) -> f32 {
-        let mut loss = 0.0f32;
         let osz = self.base.wo.rows() as usize;
         let target_set: std::collections::HashSet<i32> = targets.iter().copied().collect();
-        for i in 0..osz {
+        (0..osz).fold(0.0f32, |loss, i| {
             let is_match = target_set.contains(&(i as i32));
-            loss += self
+            loss + self
                 .base
-                .binary_logistic(i as i32, state, is_match, lr, backprop);
-        }
-        loss
+                .binary_logistic(i as i32, state, is_match, lr, backprop)
+        })
     }
 
     fn compute_output(&self, state: &mut State) {
@@ -551,6 +550,10 @@ impl HierarchicalSoftmaxLoss {
     /// Depth-first search through the Huffman tree to find top-k labels.
     ///
     /// Uses exact sigmoid (not the table) for score computation, matching C++.
+    ///
+    /// The heap is maintained in **descending** order by score (highest first),
+    /// so the minimum element is at the end and can be evicted with `pop()` (O(1))
+    /// instead of `remove(0)` (O(k)).
     fn dfs_with_hidden(
         &self,
         k: usize,
@@ -564,22 +567,20 @@ impl HierarchicalSoftmaxLoss {
         if score < log_threshold {
             return;
         }
-        if heap.len() == k && !heap.is_empty() && score < heap[0].0 {
+        if heap.len() == k && !heap.is_empty() && score < heap.last().unwrap().0 {
             return;
         }
 
         let n = &self.tree[node];
         if n.left == -1 && n.right == -1 {
-            // Leaf node: add to heap, maintain min-sorted order
-            heap.push((score, node as i32));
-            let last = heap.len() - 1;
-            let mut j = last;
-            while j > 0 && heap[j].0 < heap[j - 1].0 {
-                heap.swap(j, j - 1);
-                j -= 1;
-            }
+            // Leaf node: insert into heap maintaining descending sort order
+            let pos = heap
+                .iter()
+                .position(|&(s, _)| s < score)
+                .unwrap_or(heap.len());
+            heap.insert(pos, (score, node as i32));
             if heap.len() > k {
-                heap.remove(0);
+                heap.pop(); // Remove the minimum (last element)
             }
             return;
         }
@@ -621,33 +622,35 @@ impl Loss for HierarchicalSoftmaxLoss {
         assert!(target_index >= 0);
         assert!((target_index as usize) < targets.len());
         let target = targets[target_index as usize] as usize;
-        let mut loss = 0.0f32;
         let path = &self.paths[target];
         let code = &self.codes[target];
-        for i in 0..path.len() {
-            loss += self
-                .base
-                .binary_logistic(path[i], state, code[i], lr, backprop);
-        }
-        loss
+        path.iter().zip(code.iter()).fold(0.0f32, |loss, (&p, &c)| {
+            loss + self.base.binary_logistic(p, state, c, lr, backprop)
+        })
     }
 
     fn compute_output(&self, state: &mut State) {
         // Compute approximate leaf probabilities by traversing each leaf's path.
         let osz = self.osz as usize;
-        for i in 0..osz {
-            let path = &self.paths[i];
-            let code = &self.codes[i];
-            let mut log_prob = 0.0f32;
-            for (j, &node) in path.iter().enumerate() {
-                let dot = self.base.wo.dot_row(&state.hidden, node as i64);
-                let f = 1.0_f32 / (1.0 + (-dot).exp()); // exact sigmoid
-                if code[j] {
-                    log_prob += std_log(f);
-                } else {
-                    log_prob += std_log(1.0 - f);
-                }
-            }
+        for (i, (path, code)) in self
+            .paths
+            .iter()
+            .zip(self.codes.iter())
+            .enumerate()
+            .take(osz)
+        {
+            let log_prob = path
+                .iter()
+                .zip(code.iter())
+                .fold(0.0f32, |acc, (&node, &c)| {
+                    let dot = self.base.wo.dot_row(&state.hidden, node as i64);
+                    let f = 1.0_f32 / (1.0 + (-dot).exp()); // exact sigmoid
+                    if c {
+                        acc + std_log(f)
+                    } else {
+                        acc + std_log(1.0 - f)
+                    }
+                });
             state.output[i] = log_prob.exp();
         }
     }
@@ -695,9 +698,9 @@ impl Loss for SoftmaxLoss {
 
         if backprop {
             let osz = self.wo.rows() as usize;
-            for i in 0..osz {
+            for (i, &out_i) in state.output.data()[..osz].iter().enumerate() {
                 let label = if i as i32 == target { 1.0_f32 } else { 0.0_f32 };
-                let alpha = lr * (label - state.output[i]);
+                let alpha = lr * (label - out_i);
                 // state.grad += alpha * wo[i]
                 self.wo.add_row_to_vector(&mut state.grad, i as i32, alpha);
                 // wo[i] += alpha * hidden  (Hogwild! lock-free SGD)
@@ -722,11 +725,7 @@ impl Loss for SoftmaxLoss {
         for (i, out_i) in out[..osz].iter_mut().enumerate() {
             let row_start = i * cols;
             let row = &wo_data[row_start..row_start + cols];
-            let mut d = 0.0f32;
-            for (a, b) in row.iter().zip(hidden.iter()) {
-                d += a * b;
-            }
-            *out_i = d;
+            *out_i = row.iter().zip(hidden.iter()).map(|(&a, &b)| a * b).sum();
         }
         utils::softmax_in_place(&mut out[..osz]);
     }

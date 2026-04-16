@@ -119,6 +119,48 @@ pub fn l2_normalize(v: &mut [f32]) {
     }
 }
 
+/// Format an f64 like C++ `std::cout` with `std::setprecision(n)` (default notation).
+///
+/// This matches C++ `printf("%.*g", n, val)` behavior:
+/// - Uses fixed notation when `-4 <= exponent < sig_digits`
+/// - Uses scientific notation otherwise
+/// - Strips trailing zeros from the fractional part
+///
+/// Used by the CLI for printing predictions, vectors, and metrics.
+pub fn cpp_default_format(val: f64, sig_digits: usize) -> String {
+    let sci = format!("{:.prec$e}", val, prec = sig_digits.saturating_sub(1));
+    let e_pos = sci.find('e').unwrap();
+    let exp: i32 = sci[e_pos + 1..].parse().unwrap();
+
+    // C++ default notation: use fixed if -4 <= exp < sig_digits, else scientific.
+    if exp >= -4 && exp < sig_digits as i32 {
+        let decimal_places = if exp >= 0 {
+            sig_digits.saturating_sub(1 + exp as usize)
+        } else {
+            sig_digits + (-exp as usize) - 1
+        };
+        let fixed = format!("{:.prec$}", val, prec = decimal_places);
+        if fixed.contains('.') {
+            fixed
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
+        } else {
+            fixed
+        }
+    } else {
+        // C++ uses zero-padded 2-digit exponents and strips trailing zeros from mantissa.
+        let mantissa = sci[..e_pos].trim_end_matches('0').trim_end_matches('.');
+        let exp_sign = if exp < 0 { "-" } else { "+" };
+        let exp_abs = exp.unsigned_abs();
+        if exp_abs < 10 {
+            format!("{}e{}{:02}", mantissa, exp_sign, exp_abs)
+        } else {
+            format!("{}e{}{}", mantissa, exp_sign, exp_abs)
+        }
+    }
+}
+
 /// Wrapper for `f32` that implements `Ord` (NaN-safe, treats NaN as equal).
 ///
 /// Used for ordering f32 values in binary heaps and sorted collections

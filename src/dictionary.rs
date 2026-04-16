@@ -668,7 +668,7 @@ impl Dictionary {
     }
 
     /// Get the subword IDs (word ID + n-grams) for an in-vocabulary word.
-    pub fn get_subwords(&self, id: i32) -> &Vec<i32> {
+    pub fn get_subwords(&self, id: i32) -> &[i32] {
         debug_assert!(id >= 0 && (id as usize) < self.words.len());
         &self.words[id as usize].subwords
     }

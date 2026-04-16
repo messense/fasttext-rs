@@ -143,16 +143,14 @@ impl FastText {
         let osz = nlabels;
         match &self.quant_output {
             Some(qout) => {
-                for i in 0..osz {
-                    let dot = qout.dot_row(&state.hidden, i as i64);
-                    state.output[i] = dot;
+                for (i, out) in state.output.data_mut()[..osz].iter_mut().enumerate() {
+                    *out = qout.dot_row(&state.hidden, i as i64);
                 }
             }
             None => {
                 // Use dense output matrix (qout=false).
-                for i in 0..osz {
-                    let dot = self.output.dot_row(&state.hidden, i as i64);
-                    state.output[i] = dot;
+                for (i, out) in state.output.data_mut()[..osz].iter_mut().enumerate() {
+                    *out = self.output.dot_row(&state.hidden, i as i64);
                 }
             }
         }
@@ -162,8 +160,8 @@ impl FastText {
             LossName::OneVsAll => {
                 // One-vs-all: independent sigmoid per class.
                 let tables = &self.loss_tables;
-                for i in 0..osz {
-                    state.output[i] = tables.sigmoid(state.output[i]);
+                for out in state.output.data_mut()[..osz].iter_mut() {
+                    *out = tables.sigmoid(*out);
                 }
             }
             _ => {

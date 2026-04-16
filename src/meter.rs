@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use crate::utils;
+
 /// Per-label statistics accumulated during evaluation.
 #[derive(Debug, Default, Clone)]
 struct LabelMetrics {
@@ -313,33 +315,13 @@ impl Meter {
     /// Mirrors `Meter::writeGeneralMetrics` from C++ fastText.
     /// C++ uses `std::setprecision(3)` (3 significant digits, not fixed).
     pub fn write_general_metrics(&self, k: i32) {
-        fn fmt3(val: f64) -> String {
-            // Match C++ setprecision(3): 3 significant digits, no trailing zeros.
-            let s = format!("{:.2e}", val);
-            let e_pos = s.find('e').unwrap();
-            let exp: i32 = s[e_pos + 1..].parse().unwrap();
-            if (-4..3).contains(&exp) {
-                let dec = if exp >= 0 {
-                    2usize.saturating_sub(exp as usize)
-                } else {
-                    2 + (-exp) as usize
-                };
-                let fixed = format!("{:.prec$}", val, prec = dec);
-                if fixed.contains('.') {
-                    fixed
-                        .trim_end_matches('0')
-                        .trim_end_matches('.')
-                        .to_string()
-                } else {
-                    fixed
-                }
-            } else {
-                s
-            }
-        }
         println!("N\t{}", self.n_examples);
-        println!("P@{}\t{}", k, fmt3(self.precision()));
-        println!("R@{}\t{}", k, fmt3(self.recall()));
+        println!(
+            "P@{}\t{}",
+            k,
+            utils::cpp_default_format(self.precision(), 3)
+        );
+        println!("R@{}\t{}", k, utils::cpp_default_format(self.recall(), 3));
     }
 }
 

@@ -82,9 +82,7 @@ fn mstep(rng: &mut MinstdRng, x: &[f32], centroids: &mut [f32], codes: &[u8], d:
     let mut nelts = vec![0i32; ksub];
 
     // Zero centroids accumulator.
-    for v in centroids[..d * ksub].iter_mut() {
-        *v = 0.0;
-    }
+    centroids[..d * ksub].fill(0.0);
 
     // Accumulate point sums.
     for i in 0..n {

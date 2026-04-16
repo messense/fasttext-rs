@@ -221,9 +221,7 @@ impl DenseMatrix {
     /// Set all elements to zero.
     pub fn zero(&mut self) {
         let data = self.data_mut();
-        for v in data.iter_mut() {
-            *v = 0.0;
-        }
+        data.fill(0.0);
     }
 
     /// Initialize matrix with uniform random values in [-a, a].
