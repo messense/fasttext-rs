@@ -93,11 +93,13 @@ impl Meter {
         // matching the C++ fastText precision(k) convention.
         self.predicted += k as u64;
 
+        let gold_set: std::collections::HashSet<i32> = gold_labels.iter().copied().collect();
+
         for &(prob, label_id) in predictions {
             let lm = self.label_metrics.entry(label_id).or_default();
             lm.predicted += 1;
 
-            let is_gold = gold_labels.contains(&label_id);
+            let is_gold = gold_set.contains(&label_id);
             if is_gold {
                 lm.predicted_gold += 1;
                 self.predicted_gold += 1;
@@ -235,7 +237,7 @@ impl Meter {
                 fp += 1;
             }
             // Squeeze tied scores: update the last entry rather than adding a new one.
-            if (score - last_score).abs() < f32::EPSILON && !positive_counts.is_empty() {
+            if score == last_score && !positive_counts.is_empty() {
                 *positive_counts.last_mut().unwrap() = (tp, fp);
             } else {
                 positive_counts.push((tp, fp));

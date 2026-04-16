@@ -938,3 +938,69 @@ fn run_dump(args: DumpArgs) {
 
     out.flush().unwrap_or_else(|_| process::exit(1));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_args;
+
+    #[test]
+    fn normalize_args_rewrites_known_cpp_style_flags() {
+        let raw = vec![
+            "fasttext".to_string(),
+            "supervised".to_string(),
+            "-epoch".to_string(),
+            "5".to_string(),
+            "-lrUpdateRate".to_string(),
+            "100".to_string(),
+            "-pretrainedVectors".to_string(),
+            "vectors.vec".to_string(),
+        ];
+
+        let normalized = normalize_args(raw.into_iter());
+
+        assert_eq!(
+            normalized,
+            vec![
+                "fasttext".to_string(),
+                "supervised".to_string(),
+                "--epoch".to_string(),
+                "5".to_string(),
+                "--lr-update-rate".to_string(),
+                "100".to_string(),
+                "--pretrained-vectors".to_string(),
+                "vectors.vec".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_args_leaves_unknown_args_unchanged() {
+        let raw = vec![
+            "fasttext".to_string(),
+            "supervised".to_string(),
+            "-unknownFlag".to_string(),
+            "value".to_string(),
+            "input.txt".to_string(),
+        ];
+
+        let normalized = normalize_args(raw.clone().into_iter());
+
+        assert_eq!(normalized, raw);
+    }
+
+    #[test]
+    fn normalize_args_only_rewrites_exact_matches() {
+        let raw = vec![
+            "fasttext".to_string(),
+            "supervised".to_string(),
+            "-epoch=5".to_string(),
+            "-epochExtra".to_string(),
+            "--epoch".to_string(),
+            "-lrUpdateRates".to_string(),
+        ];
+
+        let normalized = normalize_args(raw.clone().into_iter());
+
+        assert_eq!(normalized, raw);
+    }
+}

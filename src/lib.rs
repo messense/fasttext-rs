@@ -5,7 +5,7 @@ pub mod error;
 pub mod fasttext;
 pub(crate) mod loss;
 pub mod matrix;
-pub(crate) mod meter;
+pub mod meter;
 pub(crate) mod model;
 pub(crate) mod product_quantizer;
 pub(crate) mod quant_matrix;
