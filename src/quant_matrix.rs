@@ -255,13 +255,11 @@ impl Matrix for QuantMatrix {
         let pq = ProductQuantizer::load(reader)?;
 
         // Validate structural invariant: codesize must equal m * pq.nsubq.
-        let expected_codesize = m
-            .checked_mul(pq.nsubq as i64)
-            .ok_or_else(|| {
-                FastTextError::InvalidModel(
-                    "QuantMatrix codesize overflow: m * pq.nsubq overflows i64".to_string(),
-                )
-            })?;
+        let expected_codesize = m.checked_mul(pq.nsubq as i64).ok_or_else(|| {
+            FastTextError::InvalidModel(
+                "QuantMatrix codesize overflow: m * pq.nsubq overflows i64".to_string(),
+            )
+        })?;
         if codesize as i64 != expected_codesize {
             return Err(FastTextError::InvalidModel(format!(
                 "QuantMatrix codesize mismatch: stored codesize={} but expected {} \

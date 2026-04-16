@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
+use expect_test::expect;
 use fasttext::args::{Args, LossName, ModelName};
 use fasttext::dictionary::EOS;
 use fasttext::error::FastTextError;
 use fasttext::matrix::Matrix;
-use expect_test::expect;
 use fasttext::FastText;
 
 const COOKING_MODEL: &str = "tests/fixtures/cooking.model.bin";
@@ -129,7 +129,11 @@ fn test_predictions_identical_after_roundtrip() {
             input
         );
         for (i, (pred1, pred2)) in p1.iter().zip(p2.iter()).enumerate() {
-            assert_eq!(pred1.label, pred2.label, "Label[{}] should match for: {}", i, input);
+            assert_eq!(
+                pred1.label, pred2.label,
+                "Label[{}] should match for: {}",
+                i, input
+            );
             assert_eq!(
                 pred1.prob.to_bits(),
                 pred2.prob.to_bits(),
@@ -149,21 +153,28 @@ fn test_predict_cooking_top2() {
     let input = "Which baking dish is best to bake a banana bread ?";
     let preds = model.predict(input, 2, 0.0);
 
-    assert_eq!(preds.len(), 2, "Should return exactly 2 predictions, got {:?}",
-        preds.iter().map(|p| &p.label).collect::<Vec<_>>());
+    assert_eq!(
+        preds.len(),
+        2,
+        "Should return exactly 2 predictions, got {:?}",
+        preds.iter().map(|p| &p.label).collect::<Vec<_>>()
+    );
     assert_eq!(
         preds[0].label, "__label__baking",
-        "Top-1 should be __label__baking, got '{}'", preds[0].label
+        "Top-1 should be __label__baking, got '{}'",
+        preds[0].label
     );
     assert_eq!(
         preds[1].label, "__label__bread",
-        "Top-2 should be __label__bread, got '{}'", preds[1].label
+        "Top-2 should be __label__bread, got '{}'",
+        preds[1].label
     );
     // Top-1 probability > top-2 probability
     assert!(
         preds[0].prob > preds[1].prob,
         "Top-1 prob ({}) should be > top-2 prob ({})",
-        preds[0].prob, preds[1].prob
+        preds[0].prob,
+        preds[1].prob
     );
 }
 
@@ -185,11 +196,11 @@ fn test_predict_cooking_probabilities() {
 
     // Expected values from C++ reference (exp of log-prob)
     let expected = [
-        ("__label__baking",     0.72013_f32),
-        ("__label__bread",      0.205032_f32),
+        ("__label__baking", 0.72013_f32),
+        ("__label__bread", 0.205032_f32),
         ("__label__quickbread", 0.017047_f32),
-        ("__label__oven",       0.0105739_f32),
-        ("__label__rising",     0.00388523_f32),
+        ("__label__oven", 0.0105739_f32),
+        ("__label__rising", 0.00388523_f32),
     ];
 
     // Verify at least the first 2 predictions match
@@ -202,7 +213,10 @@ fn test_predict_cooking_probabilities() {
         assert!(
             (preds[i].prob - cpp_prob).abs() < 1e-4,
             "Prediction[{}] '{}': prob={} expected={} diff={}",
-            i, label, preds[i].prob, cpp_prob,
+            i,
+            label,
+            preds[i].prob,
+            cpp_prob,
             (preds[i].prob - cpp_prob).abs()
         );
     }
@@ -210,14 +224,14 @@ fn test_predict_cooking_probabilities() {
     // If we have 5 predictions, check all 5
     if preds.len() >= 5 {
         for (i, &(label, cpp_prob)) in expected.iter().enumerate() {
-            assert_eq!(
-                preds[i].label, label,
-                "Prediction[{}] label mismatch", i
-            );
+            assert_eq!(preds[i].label, label, "Prediction[{}] label mismatch", i);
             assert!(
                 (preds[i].prob - cpp_prob).abs() < 1e-4,
                 "Prediction[{}] '{}': prob={} expected={} diff={}",
-                i, label, preds[i].prob, cpp_prob,
+                i,
+                label,
+                preds[i].prob,
+                cpp_prob,
                 (preds[i].prob - cpp_prob).abs()
             );
         }
@@ -232,7 +246,10 @@ fn test_predict_threshold_filtering() {
 
     // threshold=0.0: all predictions returned (up to k)
     let preds_all = model.predict(input, 10, 0.0);
-    assert!(!preds_all.is_empty(), "threshold=0.0 should return predictions");
+    assert!(
+        !preds_all.is_empty(),
+        "threshold=0.0 should return predictions"
+    );
     for p in &preds_all {
         assert!(p.prob >= 0.0, "All probs should be >= 0.0");
     }
@@ -288,7 +305,10 @@ fn test_predict_threshold_filtering() {
 fn test_predict_empty_input() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
     let preds = model.predict("", 5, 0.0);
-    assert!(preds.is_empty(), "Empty input should return empty predictions");
+    assert!(
+        preds.is_empty(),
+        "Empty input should return empty predictions"
+    );
 }
 
 /// Whitespace-only input returns empty predictions without panic.
@@ -296,7 +316,10 @@ fn test_predict_empty_input() {
 fn test_predict_whitespace_only() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
     let preds = model.predict("   \t  \n  ", 5, 0.0);
-    assert!(preds.is_empty(), "Whitespace-only input should return empty predictions");
+    assert!(
+        preds.is_empty(),
+        "Whitespace-only input should return empty predictions"
+    );
 }
 
 /// k=0 returns empty predictions without panic.
@@ -317,7 +340,8 @@ fn test_predict_k_large() {
     assert!(
         preds.len() <= nlabels,
         "k > nlabels should return at most nlabels={} predictions, got {}",
-        nlabels, preds.len()
+        nlabels,
+        preds.len()
     );
 }
 
@@ -351,7 +375,9 @@ fn test_predict_on_words_matches_predict() {
     // including EOS to match C++ predictLine behavior).
     let mut words: Vec<i32> = Vec::new();
     let mut labels: Vec<i32> = Vec::new();
-    model.dict().get_line_from_str(input, &mut words, &mut labels);
+    model
+        .dict()
+        .get_line_from_str(input, &mut words, &mut labels);
     assert!(!words.is_empty(), "Should produce word IDs");
     // Add EOS just like predict() does
     let eos_id = model.dict().get_id(EOS);
@@ -382,7 +408,10 @@ fn test_predict_on_words_matches_predict() {
 fn test_predict_on_words_empty() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
     let preds = model.predict_on_words(&[], 5, 0.0);
-    assert!(preds.is_empty(), "Empty word IDs should return empty predictions");
+    assert!(
+        preds.is_empty(),
+        "Empty word IDs should return empty predictions"
+    );
 }
 
 /// predict_on_words with k=0 returns empty.
@@ -405,18 +434,25 @@ fn test_predict_determinism() {
     for i in 1..10 {
         let preds = model.predict(input, 5, 0.0);
         assert_eq!(
-            preds.len(), first.len(),
-            "Call {} prediction count should match", i
+            preds.len(),
+            first.len(),
+            "Call {} prediction count should match",
+            i
         );
         for (j, (p1, p2)) in first.iter().zip(preds.iter()).enumerate() {
             assert_eq!(
                 p1.label, p2.label,
-                "Call {} prediction[{}] label should be identical", i, j
+                "Call {} prediction[{}] label should be identical",
+                i, j
             );
             assert_eq!(
-                p1.prob.to_bits(), p2.prob.to_bits(),
+                p1.prob.to_bits(),
+                p2.prob.to_bits(),
                 "Call {} prediction[{}] prob should be bit-identical: {} vs {}",
-                i, j, p1.prob, p2.prob
+                i,
+                j,
+                p1.prob,
+                p2.prob
             );
         }
     }
@@ -430,9 +466,7 @@ fn test_predict_determinism() {
 fn test_predict_thread_safety() {
     use std::thread;
 
-    let model = Arc::new(
-        FastText::load_model(COOKING_MODEL).expect("Should load cooking model")
-    );
+    let model = Arc::new(FastText::load_model(COOKING_MODEL).expect("Should load cooking model"));
     let input = "Which baking dish is best to bake a banana bread ?";
 
     // Get reference result single-threaded
@@ -452,9 +486,11 @@ fn test_predict_thread_safety() {
             for call in 0..n_calls {
                 let preds = model.predict(&input, 5, 0.0);
                 assert_eq!(
-                    preds.len(), reference.len(),
+                    preds.len(),
+                    reference.len(),
                     "Thread {} call {}: prediction count mismatch",
-                    thread_id, call
+                    thread_id,
+                    call
                 );
                 for (j, (p, r)) in preds.iter().zip(reference.iter()).enumerate() {
                     assert_eq!(
@@ -463,9 +499,14 @@ fn test_predict_thread_safety() {
                         thread_id, call, j, p.label, r.label
                     );
                     assert_eq!(
-                        p.prob.to_bits(), r.prob.to_bits(),
+                        p.prob.to_bits(),
+                        r.prob.to_bits(),
                         "Thread {} call {}: prediction[{}] prob mismatch: {} vs {}",
-                        thread_id, call, j, p.prob, r.prob
+                        thread_id,
+                        call,
+                        j,
+                        p.prob,
+                        r.prob
                     );
                 }
             }
@@ -499,25 +540,30 @@ fn test_predict_probability_validity() {
             assert!(
                 p.prob.is_finite(),
                 "Probability should be finite for '{}': got {}",
-                input, p.prob
+                input,
+                p.prob
             );
             assert!(
                 p.prob >= 0.0,
                 "Probability should be >= 0.0 for '{}': got {}",
-                input, p.prob
+                input,
+                p.prob
             );
             assert!(
                 p.prob <= 1.0 + 1e-5,
                 "Probability should be <= 1.0 for '{}': got {}",
-                input, p.prob
+                input,
+                p.prob
             );
         }
         // Probabilities should be sorted descending
         for i in 1..preds.len() {
             assert!(
-                preds[i-1].prob >= preds[i].prob,
+                preds[i - 1].prob >= preds[i].prob,
                 "Predictions should be sorted descending by prob for '{}': {} < {}",
-                input, preds[i-1].prob, preds[i].prob
+                input,
+                preds[i - 1].prob,
+                preds[i].prob
             );
         }
     }
@@ -545,7 +591,10 @@ fn test_get_word_vector_banana() {
         assert!(
             (got - exp).abs() < tolerance,
             "banana vector[{}]: got={}, expected={}, diff={}",
-            i, got, exp, (got - exp).abs()
+            i,
+            got,
+            exp,
+            (got - exp).abs()
         );
     }
 }
@@ -561,7 +610,11 @@ fn test_get_word_vector_unknown_zero() {
     assert_eq!(vec.len(), 10, "Vector should have 10 dimensions");
 
     for &v in &vec {
-        assert_eq!(v, 0.0, "Unknown word with maxn=0 should return zero vector, got {}", v);
+        assert_eq!(
+            v, 0.0,
+            "Unknown word with maxn=0 should return zero vector, got {}",
+            v
+        );
     }
 }
 
@@ -575,7 +628,8 @@ fn test_get_word_vector_known_nonzero() {
     let norm: f32 = vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
     assert!(
         norm > 0.0,
-        "Known word 'banana' should have non-zero vector, norm={}", norm
+        "Known word 'banana' should have non-zero vector, norm={}",
+        norm
     );
 }
 
@@ -601,7 +655,10 @@ fn test_get_sentence_vector_supervised() {
 
     // Should be non-zero for a sentence with known words
     let norm: f32 = svec.iter().map(|&v| v * v).sum::<f32>().sqrt();
-    assert!(norm > 0.0, "Sentence vector should be non-zero for known words");
+    assert!(
+        norm > 0.0,
+        "Sentence vector should be non-zero for known words"
+    );
 }
 
 /// Empty input returns zero vector.
@@ -611,7 +668,11 @@ fn test_get_sentence_vector_empty() {
     let svec = model.get_sentence_vector("");
     assert_eq!(svec.len(), 10, "Sentence vector should have 10 dims");
     for &v in &svec {
-        assert_eq!(v, 0.0, "Empty sentence should return zero vector, got {}", v);
+        assert_eq!(
+            v, 0.0,
+            "Empty sentence should return zero vector, got {}",
+            v
+        );
     }
 }
 
@@ -622,7 +683,11 @@ fn test_get_sentence_vector_whitespace_only() {
     let svec = model.get_sentence_vector("   \t  ");
     assert_eq!(svec.len(), 10, "Sentence vector should have 10 dims");
     for &v in &svec {
-        assert_eq!(v, 0.0, "Whitespace-only should return zero vector, got {}", v);
+        assert_eq!(
+            v, 0.0,
+            "Whitespace-only should return zero vector, got {}",
+            v
+        );
     }
 }
 
@@ -636,12 +701,18 @@ fn test_get_sentence_vector_averaging() {
     let sent_vec = model.get_sentence_vector("baking");
     assert_eq!(sent_vec.len(), 10, "Sentence vector should have 10 dims");
     let norm: f32 = sent_vec.iter().map(|&v| v * v).sum::<f32>().sqrt();
-    assert!(norm > 0.0, "Sentence vector for 'baking' should be non-zero");
+    assert!(
+        norm > 0.0,
+        "Sentence vector for 'baking' should be non-zero"
+    );
 
     // Two-word sentence should be different from single-word sentence
     let sent_vec2 = model.get_sentence_vector("baking bread");
     let norm2: f32 = sent_vec2.iter().map(|&v| v * v).sum::<f32>().sqrt();
-    assert!(norm2 > 0.0, "Sentence vector for 'baking bread' should be non-zero");
+    assert!(
+        norm2 > 0.0,
+        "Sentence vector for 'baking bread' should be non-zero"
+    );
 
     // Longer sentence should produce different result than shorter
     let sent_vec3 = model.get_sentence_vector("baking banana bread cake");
@@ -661,13 +732,27 @@ fn test_get_sentence_vector_reference() {
     assert_eq!(svec.len(), 10, "Should have 10 dims");
 
     // C++ reference values for all 10 dimensions
-    let expected = [0.65401_f32, 0.61836, 0.49154, -0.20285, 0.1512, -1.348, 0.42243, -0.3267, 0.99147, 0.99911];
+    let expected = [
+        0.65401_f32,
+        0.61836,
+        0.49154,
+        -0.20285,
+        0.1512,
+        -1.348,
+        0.42243,
+        -0.3267,
+        0.99147,
+        0.99911,
+    ];
     let tolerance = 1e-3_f32;
     for (i, (&got, &exp)) in svec.iter().zip(expected.iter()).enumerate() {
         assert!(
             (got - exp).abs() < tolerance,
             "sentence_vector[{}]: got={}, expected={}, diff={}",
-            i, got, exp, (got - exp).abs()
+            i,
+            got,
+            exp,
+            (got - exp).abs()
         );
     }
 }
@@ -728,11 +813,14 @@ fn test_get_vocab_cooking() {
     let (words, freqs) = model.get_vocab();
     let actual = format!(
         "count {}\nfirst {} freq {}",
-        words.len(), words[0], freqs[0]
+        words.len(),
+        words[0],
+        freqs[0]
     );
     expect![[r#"
 count 8952
-first </s> freq 12404"#]].assert_eq(&actual);
+first </s> freq 12404"#]]
+    .assert_eq(&actual);
 
     // All words should be non-empty
     for (i, word) in words.iter().enumerate() {
@@ -752,17 +840,22 @@ fn test_get_labels_cooking() {
     let (labels, freqs) = model.get_labels();
     let actual = format!(
         "count {}\nfirst {} freq {}",
-        labels.len(), labels[0], freqs[0]
+        labels.len(),
+        labels[0],
+        freqs[0]
     );
     expect![[r#"
 count 735
-first __label__baking freq 1156"#]].assert_eq(&actual);
+first __label__baking freq 1156"#]]
+    .assert_eq(&actual);
 
     // All labels should start with __label__
     for (i, label) in labels.iter().enumerate() {
         assert!(
             label.starts_with("__label__"),
-            "Label[{}] '{}' should start with '__label__'", i, label
+            "Label[{}] '{}' should start with '__label__'",
+            i,
+            label
         );
     }
 }
@@ -781,19 +874,26 @@ fn test_get_word_id_known() {
 
     // EOS should be at index 0
     let eos_id = model.get_word_id("</s>");
-    assert_eq!(eos_id, Some(0), "EOS should be at index 0, got {:?}", eos_id);
+    assert_eq!(
+        eos_id,
+        Some(0),
+        "EOS should be at index 0, got {:?}",
+        eos_id
+    );
 
     // Known words should be in vocabulary
     let banana_id = model.get_word_id("banana");
     assert!(
         banana_id.is_some(),
-        "'banana' should be in vocabulary, got id={:?}", banana_id
+        "'banana' should be in vocabulary, got id={:?}",
+        banana_id
     );
 
     let baking_id = model.get_word_id("baking");
     assert!(
         baking_id.is_some(),
-        "'baking' should be in vocabulary, got id={:?}", baking_id
+        "'baking' should be in vocabulary, got id={:?}",
+        baking_id
     );
 }
 
@@ -824,7 +924,9 @@ fn test_get_vocab_not_labels() {
     for (i, word) in words.iter().enumerate() {
         assert!(
             !word.starts_with("__label__"),
-            "Vocab word[{}] '{}' should not be a label", i, word
+            "Vocab word[{}] '{}' should not be a label",
+            i,
+            word
         );
     }
 }
@@ -835,7 +937,11 @@ fn test_get_labels_format() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
     let (labels, freqs) = model.get_labels();
 
-    assert_eq!(labels.len(), freqs.len(), "Labels and freqs should have same length");
+    assert_eq!(
+        labels.len(),
+        freqs.len(),
+        "Labels and freqs should have same length"
+    );
 
     // All labels should be non-empty
     for (i, label) in labels.iter().enumerate() {
@@ -988,22 +1094,10 @@ __label__food cook recipe eat meal\n";
     let p = meter.precision();
     let r = meter.recall();
     let f = meter.f1();
-    assert!(
-        (0.0..=1.0).contains(&p),
-        "Precision {:.4} out of [0,1]",
-        p
-    );
-    assert!(
-        (0.0..=1.0).contains(&r),
-        "Recall {:.4} out of [0,1]",
-        r
-    );
+    assert!((0.0..=1.0).contains(&p), "Precision {:.4} out of [0,1]", p);
+    assert!((0.0..=1.0).contains(&r), "Recall {:.4} out of [0,1]", r);
     assert!(f.is_finite(), "F1 should be finite, got {}", f);
-    assert!(
-        (0.0..=1.0).contains(&f),
-        "F1 {:.4} out of [0,1]",
-        f
-    );
+    assert!((0.0..=1.0).contains(&f), "F1 {:.4} out of [0,1]", f);
 
     // After 5 epochs on simple data, the model should predict at least
     // SOME examples correctly (p > 0 and r > 0).
@@ -1081,11 +1175,17 @@ fn test_train_no_labels() {
     let result = FastText::train(args);
     std::fs::remove_file(&path).ok();
 
-    assert!(result.is_err(), "Supervised training with no labels should return error");
+    assert!(
+        result.is_err(),
+        "Supervised training with no labels should return error"
+    );
     match result.unwrap_err() {
         FastTextError::InvalidArgument(msg) => {
-            assert!(msg.contains("label") || msg.contains("supervised"),
-                "Error message should mention labels or supervised: {}", msg);
+            assert!(
+                msg.contains("label") || msg.contains("supervised"),
+                "Error message should mention labels or supervised: {}",
+                msg
+            );
         }
         e => panic!("Expected InvalidArgument for no-labels, got: {:?}", e),
     }
@@ -1135,7 +1235,11 @@ fn test_get_nn_unknown_word() {
     // With maxn=0, unknown word has zero vector, but get_nn should still not panic
     let results = model.get_nn("xyzzy_unknown_word_42", 3);
     // Results should be returned (even if similarities are all ~0)
-    assert_eq!(results.len(), 3, "Should return 3 neighbors even for unknown word");
+    assert_eq!(
+        results.len(),
+        3,
+        "Should return 3 neighbors even for unknown word"
+    );
 }
 
 /// get_analogies returns k results, excludes input words, sorted descending.
@@ -1254,7 +1358,13 @@ fn test_get_ngram_vectors_with_subwords() {
 
     let dim = model.get_dimension() as usize;
     for (s, vec) in &ngrams {
-        assert_eq!(vec.len(), dim, "N-gram '{}' vector should have dim={}", s, dim);
+        assert_eq!(
+            vec.len(),
+            dim,
+            "N-gram '{}' vector should have dim={}",
+            s,
+            dim
+        );
     }
 }
 
@@ -1275,11 +1385,46 @@ fn test_config_matrix_supervised() {
     }
 
     let configs = [
-        Config { dim: 10, minn: 2, maxn: 4, bucket: 100, loss: LossName::SOFTMAX, label: "subwords" },
-        Config { dim: 10, minn: 0, maxn: 0, bucket: 0, loss: LossName::SOFTMAX, label: "no-subwords" },
-        Config { dim: 1, minn: 0, maxn: 0, bucket: 0, loss: LossName::SOFTMAX, label: "dim=1" },
-        Config { dim: 5, minn: 0, maxn: 0, bucket: 0, loss: LossName::SOFTMAX, label: "dim=5" },
-        Config { dim: 5, minn: 0, maxn: 0, bucket: 0, loss: LossName::HS, label: "dim=5+HS" },
+        Config {
+            dim: 10,
+            minn: 2,
+            maxn: 4,
+            bucket: 100,
+            loss: LossName::SOFTMAX,
+            label: "subwords",
+        },
+        Config {
+            dim: 10,
+            minn: 0,
+            maxn: 0,
+            bucket: 0,
+            loss: LossName::SOFTMAX,
+            label: "no-subwords",
+        },
+        Config {
+            dim: 1,
+            minn: 0,
+            maxn: 0,
+            bucket: 0,
+            loss: LossName::SOFTMAX,
+            label: "dim=1",
+        },
+        Config {
+            dim: 5,
+            minn: 0,
+            maxn: 0,
+            bucket: 0,
+            loss: LossName::SOFTMAX,
+            label: "dim=5",
+        },
+        Config {
+            dim: 5,
+            minn: 0,
+            maxn: 0,
+            bucket: 0,
+            loss: LossName::HS,
+            label: "dim=5+HS",
+        },
     ];
 
     for cfg in &configs {
@@ -1299,7 +1444,8 @@ fn test_config_matrix_supervised() {
         args.loss = cfg.loss;
         args.thread = 1;
 
-        let model = FastText::train(args).expect(&format!("Training [{}] should succeed", cfg.label));
+        let model =
+            FastText::train(args).expect(&format!("Training [{}] should succeed", cfg.label));
         std::fs::remove_file(&path).ok();
 
         // Predictions should work

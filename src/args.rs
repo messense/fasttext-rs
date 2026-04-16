@@ -1,4 +1,3 @@
-
 // Args: hyperparameter configuration for fastText
 
 use std::io::{Read, Write};

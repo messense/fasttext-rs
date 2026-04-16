@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use fasttext::args::{Args, ModelName};
-use fasttext::dictionary::{Dictionary, EntryType, EOS, BOW, EOW, MAX_LINE_SIZE};
+use fasttext::dictionary::{Dictionary, EntryType, BOW, EOS, EOW, MAX_LINE_SIZE};
 
 // Helpers
 
@@ -351,8 +351,14 @@ fn test_vocab_threshold_filtering() {
 
     assert!(dict.get_id("common").is_some(), "common should be in vocab");
     assert_eq!(dict.get_id("rare"), None, "rare should be filtered out");
-    assert!(dict.get_id("__label__a").is_some(), "label a should be in vocab");
-    assert!(dict.get_id("__label__b").is_some(), "label b should be in vocab");
+    assert!(
+        dict.get_id("__label__a").is_some(),
+        "label a should be in vocab"
+    );
+    assert!(
+        dict.get_id("__label__b").is_some(),
+        "label b should be in vocab"
+    );
 }
 
 #[test]

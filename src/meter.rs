@@ -305,7 +305,10 @@ impl Meter {
                 };
                 let fixed = format!("{:.prec$}", val, prec = dec);
                 if fixed.contains('.') {
-                    fixed.trim_end_matches('0').trim_end_matches('.').to_string()
+                    fixed
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string()
                 } else {
                     fixed
                 }
@@ -391,11 +394,7 @@ mod tests {
             "Expected precision 0.75, got {:.6}",
             p
         );
-        assert!(
-            (r - 1.0).abs() < 1e-9,
-            "Expected recall 1.0, got {:.6}",
-            r
-        );
+        assert!((r - 1.0).abs() < 1e-9, "Expected recall 1.0, got {:.6}", r);
     }
 
     #[test]
@@ -429,7 +428,11 @@ mod tests {
     fn test_meter_zero_predictions() {
         // No predictions have been added.
         let meter = Meter::new();
-        assert_eq!(meter.precision(), 0.0, "Empty meter precision should be 0.0");
+        assert_eq!(
+            meter.precision(),
+            0.0,
+            "Empty meter precision should be 0.0"
+        );
         assert_eq!(meter.recall(), 0.0, "Empty meter recall should be 0.0");
         assert_eq!(meter.f1(), 0.0, "Empty meter F1 should be 0.0");
     }
@@ -458,7 +461,10 @@ mod tests {
             "F1 should be finite (not NaN/Inf), got {}",
             f
         );
-        assert_eq!(f, 0.0, "F1 should be 0.0 when precision and recall are both 0");
+        assert_eq!(
+            f, 0.0,
+            "F1 should be 0.0 when precision and recall are both 0"
+        );
     }
 
     #[test]
@@ -587,7 +593,12 @@ mod tests {
         let curve = meter.precision_recall_curve_for_label(0);
 
         // Should have 2 points (one per distinct threshold).
-        assert_eq!(curve.len(), 2, "Expected 2 curve points, got {}", curve.len());
+        assert_eq!(
+            curve.len(),
+            2,
+            "Expected 2 curve points, got {}",
+            curve.len()
+        );
 
         // All precision and recall values must be in [0, 1].
         for &(threshold, precision, recall) in &curve {
@@ -725,10 +736,7 @@ mod tests {
         for i in 1..curve.len() {
             let (_, _, r_prev) = curve[i - 1];
             let (_, _, r_curr) = curve[i];
-            assert!(
-                r_curr >= r_prev - 1e-9,
-                "Recall should be non-decreasing"
-            );
+            assert!(r_curr >= r_prev - 1e-9, "Recall should be non-decreasing");
         }
     }
 
@@ -827,8 +835,8 @@ mod tests {
         // Example 1: correct (pred label 0, gold label 0)
         // Example 2: wrong   (pred label 1, gold label 0)
         let mut meter = Meter::new();
-        meter.add(&[(0.9, 0)], &[0], 5);  // k=5 requested, 1 returned
-        meter.add(&[(0.8, 1)], &[0], 5);  // k=5 requested, 1 returned
+        meter.add(&[(0.9, 0)], &[0], 5); // k=5 requested, 1 returned
+        meter.add(&[(0.8, 1)], &[0], 5); // k=5 requested, 1 returned
 
         assert_eq!(meter.n_examples(), 2);
 

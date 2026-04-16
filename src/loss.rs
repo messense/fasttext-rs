@@ -96,9 +96,8 @@ impl LossTables {
         } else if x > MAX_SIGMOID as f32 {
             return 1.0;
         }
-        let i = ((x + MAX_SIGMOID as f32) * SIGMOID_TABLE_SIZE as f32
-            / MAX_SIGMOID as f32
-            / 2.0) as i64;
+        let i = ((x + MAX_SIGMOID as f32) * SIGMOID_TABLE_SIZE as f32 / MAX_SIGMOID as f32 / 2.0)
+            as i64;
         self.sigmoid_table[i as usize]
     }
 
@@ -254,7 +253,8 @@ impl BinaryLogisticBase {
             // wo[target] += alpha * hidden  (Hogwild! lock-free SGD)
             // SAFETY: see DenseMatrix::add_vector_to_row_unsync documentation.
             unsafe {
-                self.wo.add_vector_to_row_unsync(&state.hidden, target as i64, alpha);
+                self.wo
+                    .add_vector_to_row_unsync(&state.hidden, target as i64, alpha);
             }
         }
         if label_is_positive {
@@ -307,7 +307,9 @@ impl Loss for OneVsAllLoss {
         let target_set: std::collections::HashSet<i32> = targets.iter().copied().collect();
         for i in 0..osz {
             let is_match = target_set.contains(&(i as i32));
-            loss += self.base.binary_logistic(i as i32, state, is_match, lr, backprop);
+            loss += self
+                .base
+                .binary_logistic(i as i32, state, is_match, lr, backprop);
         }
         loss
     }
@@ -420,7 +422,9 @@ impl Loss for NegativeSamplingLoss {
         // Negative examples
         for _ in 0..self.neg {
             let neg_target = self.get_negative(target, &mut state.rng);
-            loss += self.base.binary_logistic(neg_target, state, false, lr, backprop);
+            loss += self
+                .base
+                .binary_logistic(neg_target, state, false, lr, backprop);
         }
         loss
     }
@@ -505,9 +509,7 @@ impl HierarchicalSoftmaxLoss {
             let i = i as usize;
             let mut mini = [0i32; 2];
             for mini_j in mini.iter_mut().take(2) {
-                if leaf >= 0
-                    && self.tree[leaf as usize].count < self.tree[node as usize].count
-                {
+                if leaf >= 0 && self.tree[leaf as usize].count < self.tree[node as usize].count {
                     *mini_j = leaf;
                     leaf -= 1;
                 } else {
@@ -575,10 +577,7 @@ impl HierarchicalSoftmaxLoss {
 
         // Internal node: exact sigmoid of wo[node - osz] · hidden
         let matrix_row = node as i32 - self.osz;
-        let f_raw = self
-            .base
-            .wo
-            .dot_row(hidden, matrix_row as i64);
+        let f_raw = self.base.wo.dot_row(hidden, matrix_row as i64);
         let f = 1.0_f32 / (1.0 + (-f_raw).exp()); // exact sigmoid
 
         let left = self.tree[node].left as usize;
@@ -629,7 +628,9 @@ impl Loss for HierarchicalSoftmaxLoss {
         let path = &self.paths[target];
         let code = &self.codes[target];
         for i in 0..path.len() {
-            loss += self.base.binary_logistic(path[i], state, code[i], lr, backprop);
+            loss += self
+                .base
+                .binary_logistic(path[i], state, code[i], lr, backprop);
         }
         loss
     }
@@ -642,10 +643,7 @@ impl Loss for HierarchicalSoftmaxLoss {
             let code = &self.codes[i];
             let mut log_prob = 0.0f32;
             for (j, &node) in path.iter().enumerate() {
-                let dot = self
-                    .base
-                    .wo
-                    .dot_row(&state.hidden, node as i64);
+                let dot = self.base.wo.dot_row(&state.hidden, node as i64);
                 let f = 1.0_f32 / (1.0 + (-dot).exp()); // exact sigmoid
                 if code[j] {
                     log_prob += std_log(f);
@@ -711,7 +709,8 @@ impl Loss for SoftmaxLoss {
                 // wo[i] += alpha * hidden  (Hogwild! lock-free SGD)
                 // SAFETY: see DenseMatrix::add_vector_to_row_unsync documentation.
                 unsafe {
-                    self.wo.add_vector_to_row_unsync(&state.hidden, i as i64, alpha);
+                    self.wo
+                        .add_vector_to_row_unsync(&state.hidden, i as i64, alpha);
                 }
             }
         }
@@ -859,8 +858,7 @@ mod tests {
         let size = loss.negatives().len();
         // Allow up to 100 entries of slack from floating-point truncation
         assert!(
-            size >= (NEGATIVE_TABLE_SIZE - 100) as usize
-                && size <= NEGATIVE_TABLE_SIZE as usize,
+            size >= (NEGATIVE_TABLE_SIZE - 100) as usize && size <= NEGATIVE_TABLE_SIZE as usize,
             "NS negative table size {} should be within 100 entries of 10M ({})",
             size,
             NEGATIVE_TABLE_SIZE
@@ -1013,8 +1011,7 @@ mod tests {
 
         assert_eq!(heap.len(), 1, "HS DFS predict(k=1) should return 1 result");
         assert_eq!(
-            heap[0].1,
-            0,
+            heap[0].1, 0,
             "Most frequent label (index 0, depth=1) should be top-1 prediction, got {}",
             heap[0].1
         );
@@ -1054,7 +1051,11 @@ mod tests {
             !heap3.is_empty(),
             "k=4 predict should return at least one result"
         );
-        assert!(heap3.len() <= osz, "k=4 should return at most {} labels", osz);
+        assert!(
+            heap3.len() <= osz,
+            "k=4 should return at most {} labels",
+            osz
+        );
 
         // Results should be sorted descending by log-prob
         for i in 1..heap3.len() {
@@ -1069,8 +1070,7 @@ mod tests {
         }
         // Label 0 should be first (highest score)
         assert_eq!(
-            heap3[0].1,
-            0,
+            heap3[0].1, 0,
             "Label 0 should have highest score in k=4 prediction"
         );
     }
@@ -1407,7 +1407,10 @@ mod tests {
         // All zeros: score = sigmoid(0) = 0.5
         // loss_positive = -log(0.5) > 0
         let loss = base.binary_logistic(0, &mut state, true, 0.0, false);
-        assert!(loss > 0.0, "Positive label loss should be > 0 for zero weights");
+        assert!(
+            loss > 0.0,
+            "Positive label loss should be > 0 for zero weights"
+        );
         assert!(loss.is_finite(), "Loss should be finite");
     }
 
@@ -1420,7 +1423,10 @@ mod tests {
         // All zeros: score = sigmoid(0) = 0.5
         // loss_negative = -log(1 - 0.5) = -log(0.5) > 0
         let loss = base.binary_logistic(0, &mut state, false, 0.0, false);
-        assert!(loss > 0.0, "Negative label loss should be > 0 for zero weights");
+        assert!(
+            loss > 0.0,
+            "Negative label loss should be > 0 for zero weights"
+        );
         assert!(loss.is_finite(), "Loss should be finite");
     }
 
@@ -1455,7 +1461,10 @@ mod tests {
         for _ in 0..1000 {
             let neg = loss.get_negative(0, &mut rng);
             // In the degenerate single-label case the fallback is (0+1)%2 = 1.
-            assert_eq!(neg, 1, "Fallback negative should be (target+1)%n_labels = 1");
+            assert_eq!(
+                neg, 1,
+                "Fallback negative should be (target+1)%n_labels = 1"
+            );
         }
     }
 

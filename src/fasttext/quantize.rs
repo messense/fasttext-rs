@@ -92,8 +92,11 @@ impl FastText {
             // Ngram rows keep their order from `idx` (which matches pruneidx mapping).
             let mut words_idx: Vec<i32> =
                 idx.iter().copied().filter(|&i| i < nwords_before).collect();
-            let ngrams_idx: Vec<i32> =
-                idx.iter().copied().filter(|&i| i >= nwords_before).collect();
+            let ngrams_idx: Vec<i32> = idx
+                .iter()
+                .copied()
+                .filter(|&i| i >= nwords_before)
+                .collect();
             words_idx.sort_unstable(); // match dict word order (ascending original ID)
 
             // ordered_idx: word rows first (sorted), then ngram rows.
@@ -157,16 +160,11 @@ impl FastText {
     /// (`epoch`, `lr`, `thread`) are taken from `qargs`.
     ///
     /// The pruned_input weights are updated in-place via Hogwild! SGD.
-    fn retrain_after_prune(
-        &self,
-        pruned_input: Arc<DenseMatrix>,
-        qargs: &Args,
-    ) -> Result<()> {
+    fn retrain_after_prune(&self, pruned_input: Arc<DenseMatrix>, qargs: &Args) -> Result<()> {
         let input_path = &qargs.input;
         if input_path.is_empty() {
             return Err(FastTextError::InvalidArgument(
-                "retrain=true requires qargs.input to be set to the training data path"
-                    .to_string(),
+                "retrain=true requires qargs.input to be set to the training data path".to_string(),
             ));
         }
 

@@ -40,7 +40,11 @@ fn write_unique_temp_file(content: &str, tag: &str) -> std::path::PathBuf {
 fn write_pretrained_vec_file(words_and_vecs: &[(&str, Vec<f32>)]) -> std::path::PathBuf {
     static VEC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    let dim = if words_and_vecs.is_empty() { 0 } else { words_and_vecs[0].1.len() };
+    let dim = if words_and_vecs.is_empty() {
+        0
+    } else {
+        words_and_vecs[0].1.len()
+    };
     let mut content = format!("{} {}\n", words_and_vecs.len(), dim);
     for (word, vec) in words_and_vecs {
         content.push_str(word);
@@ -438,7 +442,10 @@ fn test_training_abort() {
     std::thread::sleep(std::time::Duration::from_millis(50));
     abort_flag.store(true, Ordering::Relaxed);
 
-    let model = handle.join().unwrap().expect("Aborted training should return Ok");
+    let model = handle
+        .join()
+        .unwrap()
+        .expect("Aborted training should return Ok");
 
     // The model must still be usable for prediction without panicking.
     let preds = model.predict("basketball player sport game", 1, 0.0);
@@ -618,12 +625,18 @@ fn test_train_save_load_roundtrip() {
         .collect();
 
     for (i, preds) in preds_before.iter().enumerate() {
-        assert!(!preds.is_empty(), "Input[{}] should have predictions before save", i);
+        assert!(
+            !preds.is_empty(),
+            "Input[{}] should have predictions before save",
+            i
+        );
     }
 
     let tmp_path = std::env::temp_dir().join("fasttext_train_save_load_rt.bin");
     let tmp_str = tmp_path.to_str().unwrap();
-    model1.save_model(tmp_str).expect("Should save trained model");
+    model1
+        .save_model(tmp_str)
+        .expect("Should save trained model");
 
     let model2 = FastText::load_model(tmp_str).expect("Should reload trained model");
     std::fs::remove_file(tmp_str).ok();
@@ -634,14 +647,27 @@ fn test_train_save_load_roundtrip() {
         .collect();
 
     for (i, (pb, pa)) in preds_before.iter().zip(preds_after.iter()).enumerate() {
-        assert_eq!(pb.len(), pa.len(),
-            "Input[{}]: prediction count should match after round-trip", i);
+        assert_eq!(
+            pb.len(),
+            pa.len(),
+            "Input[{}]: prediction count should match after round-trip",
+            i
+        );
         for (j, (p1, p2)) in pb.iter().zip(pa.iter()).enumerate() {
-            assert_eq!(p1.label, p2.label,
-                "Input[{}] pred[{}]: label should match after round-trip", i, j);
-            assert_eq!(p1.prob.to_bits(), p2.prob.to_bits(),
+            assert_eq!(
+                p1.label, p2.label,
+                "Input[{}] pred[{}]: label should match after round-trip",
+                i, j
+            );
+            assert_eq!(
+                p1.prob.to_bits(),
+                p2.prob.to_bits(),
                 "Input[{}] pred[{}]: prob should be bit-identical: {} vs {}",
-                i, j, p1.prob, p2.prob);
+                i,
+                j,
+                p1.prob,
+                p2.prob
+            );
         }
     }
 }
@@ -664,12 +690,16 @@ fn test_train_empty_file() {
     let result = FastText::train(args);
     std::fs::remove_file(&path).ok();
 
-    assert!(result.is_err(), "Training on empty file should return an error");
+    assert!(
+        result.is_err(),
+        "Training on empty file should return an error"
+    );
     match result.unwrap_err() {
         FastTextError::InvalidArgument(msg) => {
             let msg_lower = msg.to_lowercase();
             assert!(
-                msg_lower.contains("empty") || msg_lower.contains("tokens")
+                msg_lower.contains("empty")
+                    || msg_lower.contains("tokens")
                     || msg_lower.contains("vocabulary"),
                 "Error message should mention empty, tokens, or vocabulary: {}",
                 msg
@@ -741,20 +771,35 @@ fn test_min_count_filtering() {
     let model = FastText::train(args).expect("Training with min_count=3 should succeed");
     std::fs::remove_file(&path).ok();
 
-    assert!(model.get_word_id("common_word").is_some(),
-        "common_word (count=20) should be in vocabulary");
-    assert_eq!(model.get_word_id("rare_word"), None,
-        "rare_word (count=1) should be excluded with min_count=3");
-    assert_eq!(model.get_word_id("unique_token"), None,
-        "unique_token (count=1) should be excluded with min_count=3");
-    assert_eq!(model.get_word_id("also_rare"), None,
-        "also_rare (count=2) should be excluded with min_count=3");
+    assert!(
+        model.get_word_id("common_word").is_some(),
+        "common_word (count=20) should be in vocabulary"
+    );
+    assert_eq!(
+        model.get_word_id("rare_word"),
+        None,
+        "rare_word (count=1) should be excluded with min_count=3"
+    );
+    assert_eq!(
+        model.get_word_id("unique_token"),
+        None,
+        "unique_token (count=1) should be excluded with min_count=3"
+    );
+    assert_eq!(
+        model.get_word_id("also_rare"),
+        None,
+        "also_rare (count=2) should be excluded with min_count=3"
+    );
 
     let (vocab_words, vocab_freqs) = model.get_vocab();
     for (w, &freq) in vocab_words.iter().zip(vocab_freqs.iter()) {
         if w != "</s>" {
-            assert!(freq >= 3,
-                "Word '{}' with freq={} should not be in vocab (min_count=3)", w, freq);
+            assert!(
+                freq >= 3,
+                "Word '{}' with freq={} should not be in vocab (min_count=3)",
+                w,
+                freq
+            );
         }
     }
 }
@@ -764,10 +809,14 @@ fn test_min_count_filtering() {
 fn test_training_loss_decreases() {
     let mut data = String::new();
     for _ in 0..30 {
-        data.push_str("__label__sports basketball player game score team win lose tournament championship\n");
+        data.push_str(
+            "__label__sports basketball player game score team win lose tournament championship\n",
+        );
     }
     for _ in 0..30 {
-        data.push_str("__label__food apple orange banana mango fruit eat cook recipe meal dessert\n");
+        data.push_str(
+            "__label__food apple orange banana mango fruit eat cook recipe meal dessert\n",
+        );
     }
 
     let path = write_temp_file(&data);
@@ -791,17 +840,37 @@ fn test_training_loss_decreases() {
 
     let (_model, epoch_losses) = result.expect("Training with loss tracking should succeed");
 
-    assert!(epoch_losses.len() >= 2,
-        "Should record at least 2 epoch losses, got {}: {:?}", epoch_losses.len(), epoch_losses);
+    assert!(
+        epoch_losses.len() >= 2,
+        "Should record at least 2 epoch losses, got {}: {:?}",
+        epoch_losses.len(),
+        epoch_losses
+    );
 
     let first_loss = epoch_losses[0];
     let last_loss = *epoch_losses.last().unwrap();
 
-    assert!(first_loss.is_finite(), "First epoch loss should be finite: {}", first_loss);
-    assert!(last_loss.is_finite(), "Final epoch loss should be finite: {}", last_loss);
-    assert!(first_loss > 0.0, "First epoch loss should be > 0: {}", first_loss);
-    assert!(last_loss < first_loss,
-        "Loss should decrease: first={}, final={}", first_loss, last_loss);
+    assert!(
+        first_loss.is_finite(),
+        "First epoch loss should be finite: {}",
+        first_loss
+    );
+    assert!(
+        last_loss.is_finite(),
+        "Final epoch loss should be finite: {}",
+        last_loss
+    );
+    assert!(
+        first_loss > 0.0,
+        "First epoch loss should be > 0: {}",
+        first_loss
+    );
+    assert!(
+        last_loss < first_loss,
+        "Loss should decrease: first={}, final={}",
+        first_loss,
+        last_loss
+    );
 }
 
 /// Pretrained vectors loaded for matching words, missing file returns IoError (VAL-TRAIN-014).
@@ -809,8 +878,12 @@ fn test_training_loss_decreases() {
 fn test_pretrained_vectors() {
     let dim = 4usize;
     let mut data = String::new();
-    for _ in 0..10 { data.push_str("__label__sports basketball game score\n"); }
-    for _ in 0..10 { data.push_str("__label__food apple fruit meal\n"); }
+    for _ in 0..10 {
+        data.push_str("__label__sports basketball game score\n");
+    }
+    for _ in 0..10 {
+        data.push_str("__label__food apple fruit meal\n");
+    }
     let train_path = write_unique_temp_file(&data, "pretrained");
 
     let vec_basketball = vec![1.0f32, 2.0, 3.0, 4.0];
@@ -839,19 +912,32 @@ fn test_pretrained_vectors() {
     std::fs::remove_file(&vec_path).ok();
 
     let basketball_id = model.get_word_id("basketball");
-    assert!(basketball_id.is_some(), "'basketball' should be in vocabulary");
+    assert!(
+        basketball_id.is_some(),
+        "'basketball' should be in vocabulary"
+    );
     let row = model.input_matrix().row(basketball_id.unwrap() as i64);
     for (j, (&got, &exp)) in row.iter().zip(vec_basketball.iter()).enumerate() {
-        assert!((got - exp).abs() < 1e-5,
-            "basketball[{}]: expected={}, got={}", j, exp, got);
+        assert!(
+            (got - exp).abs() < 1e-5,
+            "basketball[{}]: expected={}, got={}",
+            j,
+            exp,
+            got
+        );
     }
 
     let apple_id = model.get_word_id("apple");
     assert!(apple_id.is_some(), "'apple' should be in vocabulary");
     let row = model.input_matrix().row(apple_id.unwrap() as i64);
     for (j, (&got, &exp)) in row.iter().zip(vec_apple.iter()).enumerate() {
-        assert!((got - exp).abs() < 1e-5,
-            "apple[{}]: expected={}, got={}", j, exp, got);
+        assert!(
+            (got - exp).abs() < 1e-5,
+            "apple[{}]: expected={}, got={}",
+            j,
+            exp,
+            got
+        );
     }
 
     // Word not in pretrained file should have non-zero random init.
@@ -859,8 +945,11 @@ fn test_pretrained_vectors() {
     if let Some(game_id) = game_id {
         let row = model.input_matrix().row(game_id as i64);
         let norm: f32 = row.iter().map(|&v| v * v).sum::<f32>().sqrt();
-        assert!(norm.is_finite() && norm > 0.0,
-            "'game' should have non-zero random init, norm={}", norm);
+        assert!(
+            norm.is_finite() && norm > 0.0,
+            "'game' should have non-zero random init, norm={}",
+            norm
+        );
     }
 }
 
@@ -884,10 +973,16 @@ fn test_pretrained_vectors_missing_file() {
     let result = FastText::train(args);
     std::fs::remove_file(&path).ok();
 
-    assert!(result.is_err(), "Missing pretrained vectors file should return error");
+    assert!(
+        result.is_err(),
+        "Missing pretrained vectors file should return error"
+    );
     match result.unwrap_err() {
         FastTextError::IoError(_) => { /* correct */ }
-        e => panic!("Expected IoError for missing pretrained vec file, got: {:?}", e),
+        e => panic!(
+            "Expected IoError for missing pretrained vec file, got: {:?}",
+            e
+        ),
     }
 }
 
@@ -936,11 +1031,18 @@ fn test_train_integration_roundtrip() {
 
     // Predictions must be bit-identical.
     let preds_rt = model2.predict("basketball player sport game", 1, 0.0);
-    assert_eq!(preds_orig.len(), preds_rt.len(), "Prediction count should match");
+    assert_eq!(
+        preds_orig.len(),
+        preds_rt.len(),
+        "Prediction count should match"
+    );
     for (p1, p2) in preds_orig.iter().zip(preds_rt.iter()) {
         assert_eq!(p1.label, p2.label, "Labels should match after round-trip");
-        assert_eq!(p1.prob.to_bits(), p2.prob.to_bits(),
-            "Probabilities should be bit-identical after round-trip");
+        assert_eq!(
+            p1.prob.to_bits(),
+            p2.prob.to_bits(),
+            "Probabilities should be bit-identical after round-trip"
+        );
     }
 }
 
@@ -957,7 +1059,10 @@ fn test_train_integration_edge_cases() {
     args.epoch = 1;
     args.min_count = 1;
     args.bucket = 0;
-    assert!(FastText::train(args).is_err(), "Empty file should return error");
+    assert!(
+        FastText::train(args).is_err(),
+        "Empty file should return error"
+    );
     std::fs::remove_file(&empty_path).ok();
 
     // 2. No labels for supervised -> error
@@ -970,7 +1075,10 @@ fn test_train_integration_edge_cases() {
     args2.epoch = 1;
     args2.min_count = 1;
     args2.bucket = 0;
-    assert!(FastText::train(args2).is_err(), "No labels should return error");
+    assert!(
+        FastText::train(args2).is_err(),
+        "No labels should return error"
+    );
     std::fs::remove_file(&no_label_path).ok();
 
     // 3. epoch=0 -> untrained model (no panic)
@@ -988,7 +1096,9 @@ fn test_train_integration_edge_cases() {
     let result = FastText::train(args3);
     std::fs::remove_file(&p).ok();
     match result {
-        Ok(m) => { let _ = m.predict("test", 1, 0.0); } // no panic
+        Ok(m) => {
+            let _ = m.predict("test", 1, 0.0);
+        } // no panic
         Err(FastTextError::InvalidArgument(_)) => {} // acceptable
         Err(e) => panic!("Unexpected error for epoch=0: {:?}", e),
     }

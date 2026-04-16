@@ -42,7 +42,9 @@ impl MinstdRng {
     /// If `seed == 0`, the seed is set to 1 (matching C++ default_seed = 1).
     pub fn new(seed: u64) -> Self {
         let s = if seed == 0 { 1 } else { seed % Self::M };
-        MinstdRng { state: if s == 0 { 1 } else { s } }
+        MinstdRng {
+            state: if s == 0 { 1 } else { s },
+        }
     }
 
     /// Advance the state and return the next value in [1, M-1].
@@ -224,7 +226,12 @@ impl Model {
     ///   (use `true` for supervised, `false` for CBOW/skip-gram)
     pub fn new(wi: Arc<DenseMatrix>, loss: Box<dyn Loss>, normalize_gradient: bool) -> Self {
         let dim = wi.cols() as usize;
-        Model { wi, loss, normalize_gradient, dim }
+        Model {
+            wi,
+            loss,
+            normalize_gradient,
+            dim,
+        }
     }
 
     // compute_hidden
@@ -304,7 +311,8 @@ impl Model {
         // SAFETY: see DenseMatrix::add_vector_to_row_unsync documentation.
         for &idx in input_ids {
             unsafe {
-                self.wi.add_vector_to_row_unsync(&state.grad, idx as i64, 1.0);
+                self.wi
+                    .add_vector_to_row_unsync(&state.grad, idx as i64, 1.0);
             }
         }
     }
@@ -389,7 +397,11 @@ mod tests {
         s.increment_nexamples(1.0);
         assert_eq!(s.get_loss(), 1.0);
         s.increment_nexamples(3.0);
-        assert!((s.get_loss() - 2.0).abs() < 1e-6, "Expected 2.0, got {}", s.get_loss());
+        assert!(
+            (s.get_loss() - 2.0).abs() < 1e-6,
+            "Expected 2.0, got {}",
+            s.get_loss()
+        );
     }
 
     #[test]
@@ -498,7 +510,11 @@ mod tests {
         model.compute_hidden(&[], &mut state);
 
         for i in 0..4 {
-            assert_eq!(state.hidden[i], 0.0, "hidden[{}] should be 0 for empty input", i);
+            assert_eq!(
+                state.hidden[i], 0.0,
+                "hidden[{}] should be 0 for empty input",
+                i
+            );
         }
     }
 
@@ -532,9 +548,17 @@ mod tests {
 
         assert_eq!(preds.len(), 2, "Should return 2 predictions");
         // Top prediction should be label 2 (highest dot product)
-        assert_eq!(preds[0].1, 2, "First pred should be label 2, got {}", preds[0].1);
+        assert_eq!(
+            preds[0].1, 2,
+            "First pred should be label 2, got {}",
+            preds[0].1
+        );
         // Second prediction should be label 3
-        assert_eq!(preds[1].1, 3, "Second pred should be label 3, got {}", preds[1].1);
+        assert_eq!(
+            preds[1].1, 3,
+            "Second pred should be label 3, got {}",
+            preds[1].1
+        );
         // Sorted descending by log-prob
         assert!(
             preds[0].0 >= preds[1].0,
@@ -570,11 +594,7 @@ mod tests {
 
         for k in [-1i32, -2, -100, i32::MIN] {
             let preds = model.predict(&[0i32], k, 0.0, &mut state);
-            assert!(
-                preds.is_empty(),
-                "k={} should return empty predictions",
-                k
-            );
+            assert!(preds.is_empty(), "k={} should return empty predictions", k);
         }
     }
 
@@ -588,7 +608,10 @@ mod tests {
         let mut state = State::new(4, 2, 0);
 
         let preds = model.predict(&[], 5, 0.0, &mut state);
-        assert!(preds.is_empty(), "Empty input should return empty predictions");
+        assert!(
+            preds.is_empty(),
+            "Empty input should return empty predictions"
+        );
     }
 
     // ── update ─────────────────────────────────────────────────────────────
@@ -648,7 +671,7 @@ mod tests {
         // being added to each row, so wi update should be smaller.
         // Specifically: delta(normalized) ≈ delta(unnormalized) / 2.
         for i in 0..4 {
-            let delta_norm = wi_norm_data[i];    // started at 0
+            let delta_norm = wi_norm_data[i]; // started at 0
             let delta_no_norm = wi_no_norm_data[i];
             assert!(
                 (delta_norm - delta_no_norm / 2.0).abs() < 1e-5,
@@ -691,8 +714,15 @@ mod tests {
         //      = 0.05*[1,0] + (-0.05)*[0,1] = [0.05, -0.05]
         // wi[0] += grad = [0.05, -0.05]
         let after: Vec<f32> = model.wi.row(0).to_vec();
-        let changed = before.iter().zip(after.iter()).any(|(b, a)| (b - a).abs() > 1e-9);
-        assert!(changed, "Input weights should be updated by SGD, before={:?} after={:?}", before, after);
+        let changed = before
+            .iter()
+            .zip(after.iter())
+            .any(|(b, a)| (b - a).abs() > 1e-9);
+        assert!(
+            changed,
+            "Input weights should be updated by SGD, before={:?} after={:?}",
+            before, after
+        );
 
         // Verify direction: wi[0][0] should increase (toward label 0 which has wo[0][0]=1)
         assert!(

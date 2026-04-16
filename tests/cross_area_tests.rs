@@ -26,11 +26,7 @@ static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn temp_dir() -> PathBuf {
     let base = std::env::temp_dir();
     let id = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let unique = format!(
-        "fasttext-cross-test-{}-{}",
-        std::process::id(),
-        id,
-    );
+    let unique = format!("fasttext-cross-test-{}-{}", std::process::id(), id,);
     let dir = base.join(unique);
     std::fs::create_dir_all(&dir).expect("Failed to create temp dir");
     dir
@@ -354,13 +350,11 @@ fn test_cross_autotune_outperforms() {
 
     // Train a baseline model with standard (non-weakened) parameters.
     let baseline_output = dir.join("baseline").to_string_lossy().into_owned();
-    let baseline_args =
-        make_supervised_args(train_path.to_str().unwrap(), &baseline_output);
+    let baseline_args = make_supervised_args(train_path.to_str().unwrap(), &baseline_output);
     let baseline_model = FastText::train(baseline_args).expect("Baseline training should succeed");
 
     // Compute baseline F1 on the validation set.
-    let mut val_file =
-        std::fs::File::open(&val_path).expect("Val file should be readable");
+    let mut val_file = std::fs::File::open(&val_path).expect("Val file should be readable");
     let baseline_meter = baseline_model
         .test_model(&mut val_file, 1, 0.0)
         .expect("test_model should succeed for baseline");
@@ -368,8 +362,7 @@ fn test_cross_autotune_outperforms() {
 
     // Run autotune with a short budget (5 seconds) starting from the same
     // standard parameters; autotune must match or improve upon the baseline.
-    let mut autotune_args =
-        make_supervised_args(train_path.to_str().unwrap(), "/dev/null");
+    let mut autotune_args = make_supervised_args(train_path.to_str().unwrap(), "/dev/null");
     autotune_args.autotune_validation_file = val_path.to_str().unwrap().to_string();
     autotune_args.autotune_duration = 5; // 5-second budget
     autotune_args.autotune_metric = "f1".to_string();
@@ -377,8 +370,7 @@ fn test_cross_autotune_outperforms() {
     let autotune_model = Autotune::run(autotune_args).expect("Autotune should succeed");
 
     // Compute autotune F1 on the validation set.
-    let mut val_file2 =
-        std::fs::File::open(&val_path).expect("Val file should be readable");
+    let mut val_file2 = std::fs::File::open(&val_path).expect("Val file should be readable");
     let autotune_meter = autotune_model
         .test_model(&mut val_file2, 1, 0.0)
         .expect("test_model should succeed for autotune model");
@@ -434,7 +426,10 @@ fn test_cross_cli_api_consistency() {
         "CLI supervised training failed\nstdout: {}\nstderr: {}",
         stdout, stderr
     );
-    assert!(model_bin.exists(), "model.bin should exist after CLI training");
+    assert!(
+        model_bin.exists(),
+        "model.bin should exist after CLI training"
+    );
 
     let test_inputs = [
         "basketball player game score win",
@@ -483,7 +478,10 @@ fn test_cross_cli_api_consistency() {
         .iter()
         .map(|text| {
             let preds = api_model.predict(text, 1, 0.0);
-            let pred = preds.into_iter().next().expect("API should return a prediction");
+            let pred = preds
+                .into_iter()
+                .next()
+                .expect("API should return a prediction");
             (pred.label, pred.prob)
         })
         .collect();

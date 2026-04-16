@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 use crate::args::{Args, LossName, ModelName};
 use crate::dictionary::{Dictionary, EntryType, EOS};
 use crate::error::{FastTextError, Result};
-use crate::loss::{HierarchicalSoftmaxLoss, Loss, LossTables, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss};
+use crate::loss::{
+    HierarchicalSoftmaxLoss, Loss, LossTables, NegativeSamplingLoss, OneVsAllLoss, SoftmaxLoss,
+};
 use crate::matrix::{DenseMatrix, Matrix};
 use crate::model::Model;
 use crate::quant_matrix::QuantMatrix;
@@ -72,7 +74,11 @@ pub struct Prediction {
 /// - `NegativeSamplingLoss` — negative sampling (skipgram/CBOW)
 /// - `HierarchicalSoftmaxLoss` — Huffman-tree hierarchical softmax
 /// - `OneVsAllLoss` — one-vs-all binary logistic
-pub(super) fn build_loss(args: &Args, wo: Arc<DenseMatrix>, target_counts: &[i64]) -> Box<dyn Loss> {
+pub(super) fn build_loss(
+    args: &Args,
+    wo: Arc<DenseMatrix>,
+    target_counts: &[i64],
+) -> Box<dyn Loss> {
     match args.loss {
         LossName::HS => Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts)),
         LossName::NS => Box::new(NegativeSamplingLoss::new(wo, args.neg, target_counts)),
@@ -378,7 +384,11 @@ impl FastText {
     /// Panics if `out.len() != self.get_dimension() as usize`.
     pub fn get_word_vector_into(&self, word: &str, out: &mut [f32]) {
         let dim = self.args.dim as usize;
-        assert_eq!(out.len(), dim, "output buffer length must equal model dimension");
+        assert_eq!(
+            out.len(),
+            dim,
+            "output buffer length must equal model dimension"
+        );
         out.fill(0.0);
         let ids = self.dict.get_subwords_for_string(word);
         if ids.is_empty() {
@@ -428,13 +438,18 @@ impl FastText {
     /// Panics if `out.len() != self.get_dimension() as usize`.
     pub fn get_sentence_vector_into(&self, sentence: &str, out: &mut [f32]) {
         let dim = self.args.dim as usize;
-        assert_eq!(out.len(), dim, "output buffer length must equal model dimension");
+        assert_eq!(
+            out.len(),
+            dim,
+            "output buffer length must equal model dimension"
+        );
         out.fill(0.0);
 
         if self.args.model == ModelName::SUP {
             let mut words: Vec<i32> = Vec::new();
             let mut labels: Vec<i32> = Vec::new();
-            self.dict.get_line_from_str(sentence, &mut words, &mut labels);
+            self.dict
+                .get_line_from_str(sentence, &mut words, &mut labels);
 
             if words.is_empty() {
                 return;
@@ -1175,7 +1190,7 @@ mod tests {
         utils::write_i32(&mut buf, 0i32).unwrap(); // nlabels
         utils::write_i64(&mut buf, 10i64).unwrap(); // ntokens
         utils::write_i64(&mut buf, -1i64).unwrap(); // pruneidx_size = -1 (not pruned)
-        // Word 0: </s>
+                                                    // Word 0: </s>
         buf.extend_from_slice(b"</s>\0");
         utils::write_i64(&mut buf, 10i64).unwrap(); // count
         buf.push(0u8); // EntryType::Word
@@ -1283,11 +1298,11 @@ mod tests {
         utils::write_i32(&mut buf, 0i32).unwrap(); // nlabels
         utils::write_i64(&mut buf, 10i64).unwrap(); // ntokens
         utils::write_i64(&mut buf, -1i64).unwrap(); // pruneidx_size
-        // Word 0: </s>
+                                                    // Word 0: </s>
         buf.extend_from_slice(b"</s>\0");
         utils::write_i64(&mut buf, 5i64).unwrap();
         buf.push(0u8); // EntryType::Word
-        // Word 1: "hello"
+                       // Word 1: "hello"
         buf.extend_from_slice(b"hello\0");
         utils::write_i64(&mut buf, 5i64).unwrap();
         buf.push(0u8); // EntryType::Word
@@ -1439,8 +1454,7 @@ mod tests {
         assert!(
             changed,
             "Input weights should be updated by SGD: before={:?} after={:?}",
-            wi_before,
-            wi_after
+            wi_before, wi_after
         );
     }
 
@@ -1537,11 +1551,16 @@ mod tests {
             let mut qargs = Args::default();
             qargs.dsub = 2;
             qargs.cutoff = 0;
-            model_zero.quantize(&qargs).expect("zero cutoff quantize should succeed");
+            model_zero
+                .quantize(&qargs)
+                .expect("zero cutoff quantize should succeed");
         }
         // Zero cutoff: vocabulary size should be unchanged
-        assert_eq!(model_zero.dict().nwords(), nwords_before,
-            "cutoff=0 should not prune vocabulary");
+        assert_eq!(
+            model_zero.dict().nwords(),
+            nwords_before,
+            "cutoff=0 should not prune vocabulary"
+        );
 
         // cutoff = positive smaller than nwords: vocabulary should be pruned
         let cutoff = (nwords_before as usize / 2).max(1);
@@ -1549,12 +1568,18 @@ mod tests {
             let mut qargs = Args::default();
             qargs.dsub = 2;
             qargs.cutoff = cutoff;
-            model_cutoff.quantize(&qargs).expect("positive cutoff quantize should succeed");
+            model_cutoff
+                .quantize(&qargs)
+                .expect("positive cutoff quantize should succeed");
         }
         let nwords_after = model_cutoff.dict().nwords();
-        assert!(nwords_after < nwords_before,
+        assert!(
+            nwords_after < nwords_before,
             "cutoff={} should prune vocabulary: before={}, after={}",
-            cutoff, nwords_before, nwords_after);
+            cutoff,
+            nwords_before,
+            nwords_after
+        );
     }
 
     /// VAL-QUANT-006 (part 1): qnorm flag works correctly.
@@ -1567,18 +1592,27 @@ mod tests {
         qargs.dsub = 2;
         qargs.qnorm = true;
 
-        model.quantize(&qargs).expect("qnorm quantize should succeed");
-        assert!(model.is_quant(), "is_quant() should be true with qnorm=true");
+        model
+            .quantize(&qargs)
+            .expect("qnorm quantize should succeed");
+        assert!(
+            model.is_quant(),
+            "is_quant() should be true with qnorm=true"
+        );
 
         // quant_input should have qnorm=true
-        assert!(model.quant_input.as_ref().unwrap().qnorm,
-            "quant_input should have qnorm=true");
+        assert!(
+            model.quant_input.as_ref().unwrap().qnorm,
+            "quant_input should have qnorm=true"
+        );
 
         // Should still produce valid predictions
         let preds = model.predict("basketball player sport game", 1, 0.0);
         assert!(!preds.is_empty(), "qnorm model should produce predictions");
-        assert!(preds[0].prob.is_finite() && preds[0].prob > 0.0,
-            "qnorm prediction prob should be valid");
+        assert!(
+            preds[0].prob.is_finite() && preds[0].prob > 0.0,
+            "qnorm prediction prob should be valid"
+        );
     }
 
     /// VAL-QUANT-006 (part 2): qout flag works correctly.
@@ -1591,18 +1625,25 @@ mod tests {
         qargs.dsub = 2;
         qargs.qout = true;
 
-        model.quantize(&qargs).expect("qout quantize should succeed");
+        model
+            .quantize(&qargs)
+            .expect("qout quantize should succeed");
         assert!(model.is_quant(), "is_quant() should be true with qout=true");
         assert!(model.args().qout, "args.qout should be true");
 
         // quant_output should be set
-        assert!(model.quant_output.is_some(), "quant_output should be set when qout=true");
+        assert!(
+            model.quant_output.is_some(),
+            "quant_output should be set when qout=true"
+        );
 
         // Should still produce valid predictions
         let preds = model.predict("basketball player sport game", 1, 0.0);
         assert!(!preds.is_empty(), "qout model should produce predictions");
-        assert!(preds[0].prob.is_finite() && preds[0].prob > 0.0,
-            "qout prediction prob should be valid");
+        assert!(
+            preds[0].prob.is_finite() && preds[0].prob > 0.0,
+            "qout prediction prob should be valid"
+        );
     }
 
     // Fix tests: cutoff pruning row alignment
@@ -1620,7 +1661,9 @@ mod tests {
         qargs.qout = true;
         qargs.qnorm = true;
 
-        model.quantize(&qargs).expect("qout+qnorm quantize should succeed");
+        model
+            .quantize(&qargs)
+            .expect("qout+qnorm quantize should succeed");
         assert!(model.is_quant(), "is_quant() should be true");
         assert!(model.args().qout, "args.qout should be true");
 
@@ -1636,7 +1679,10 @@ mod tests {
 
         // Should still produce valid predictions.
         let preds = model.predict("basketball player sport game", 1, 0.0);
-        assert!(!preds.is_empty(), "qout+qnorm model should produce predictions");
+        assert!(
+            !preds.is_empty(),
+            "qout+qnorm model should produce predictions"
+        );
         assert!(
             preds[0].prob.is_finite() && preds[0].prob >= 0.0 && preds[0].prob <= 1.0,
             "qout+qnorm prediction prob should be in [0, 1]"
@@ -1654,7 +1700,9 @@ mod tests {
         qargs.qout = true;
         // qnorm is false by default
 
-        model.quantize(&qargs).expect("qout quantize should succeed");
+        model
+            .quantize(&qargs)
+            .expect("qout quantize should succeed");
         assert!(model.is_quant(), "is_quant() should be true");
 
         // quant_output should have qnorm=false (the default).
@@ -1663,7 +1711,6 @@ mod tests {
             "quant_output should have qnorm=false when qnorm flag is not set"
         );
     }
-
 }
 
 // Helper trait for tests: clone-like for FastText (creates a copy via save/load)

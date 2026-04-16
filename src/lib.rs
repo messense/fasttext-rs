@@ -12,4 +12,6 @@ pub(crate) mod quant_matrix;
 pub mod utils;
 pub(crate) mod vector;
 
-pub use fasttext::{FastText, Prediction, TrainingHandle, FASTTEXT_FILEFORMAT_MAGIC_INT32, FASTTEXT_VERSION};
+pub use fasttext::{
+    FastText, Prediction, TrainingHandle, FASTTEXT_FILEFORMAT_MAGIC_INT32, FASTTEXT_VERSION,
+};

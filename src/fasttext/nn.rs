@@ -208,7 +208,11 @@ impl FastText {
                 continue;
             }
             let row = &wv_data[i * dim..(i + 1) * dim];
-            let sim: f32 = normalized_query.iter().zip(row.iter()).map(|(&q, &r)| q * r).sum();
+            let sim: f32 = normalized_query
+                .iter()
+                .zip(row.iter())
+                .map(|(&q, &r)| q * r)
+                .sum();
 
             if heap.len() == k && sim <= heap.peek().unwrap().0 .0 .0 {
                 continue;

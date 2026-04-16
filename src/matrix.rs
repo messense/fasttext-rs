@@ -465,10 +465,11 @@ impl Matrix for DenseMatrix {
         // Bulk-read the entire matrix as raw bytes, then reinterpret as f32.
         // This is safe because f32 has no invalid bit patterns and the data
         // is stored as little-endian (matching all supported platforms).
-        let byte_slice = unsafe {
-            std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4)
-        };
-        reader.read_exact(byte_slice).map_err(FastTextError::IoError)?;
+        let byte_slice =
+            unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4) };
+        reader
+            .read_exact(byte_slice)
+            .map_err(FastTextError::IoError)?;
         // On big-endian platforms we would need to byte-swap here, but
         // fastText only targets little-endian (x86/ARM).
         Ok(mat)
@@ -510,7 +511,6 @@ fn average_rows_scalar(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
 }
 
 // SIMD implementations
-
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
@@ -643,7 +643,6 @@ fn average_rows_fast_neon(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
         }
     }
 }
-
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
@@ -782,7 +781,6 @@ fn average_rows_fast_sse2(x: &mut Vector, rows: &[i32], mat: &DenseMatrix) {
         }
     }
 }
-
 
 /// AVX2-accelerated dot product of two slices.
 ///
@@ -958,7 +956,6 @@ unsafe fn average_rows_fast_avx2(x: &mut Vector, rows: &[i32], mat: &DenseMatrix
     }
 }
 
-
 /// Dispatch dot product to best available implementation.
 #[inline]
 fn dot_impl(a: &[f32], b: &[f32]) -> f32 {
@@ -1009,7 +1006,6 @@ fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
 mod tests {
     use super::*;
     use std::io::Cursor;
-
 
     #[test]
     fn test_dense_matrix_alloc_safety_zero_size() {
@@ -1101,7 +1097,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_dense_matrix_new() {
         let m = DenseMatrix::new(3, 4);
@@ -1131,7 +1126,6 @@ mod tests {
         assert!(m.data().is_empty());
     }
 
-
     #[test]
     fn test_dense_matrix_zero() {
         let mut m = DenseMatrix::new(2, 3);
@@ -1150,7 +1144,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn test_dense_matrix_row_major_layout() {
@@ -1174,7 +1167,6 @@ mod tests {
         assert_eq!(data[4], 5.0);
         assert_eq!(data[5], 6.0);
     }
-
 
     #[test]
     fn test_dense_matrix_dot_row() {
@@ -1243,7 +1235,6 @@ mod tests {
         assert!(m.dot_row(&v, 0).is_nan());
     }
 
-
     #[test]
     fn test_dense_matrix_add_vector_to_row() {
         let mut m = DenseMatrix::new(2, 3);
@@ -1288,7 +1279,6 @@ mod tests {
         assert!((m.at(0, 2) - 18.0).abs() < 1e-6);
     }
 
-
     #[test]
     fn test_dense_matrix_add_row_to_vector() {
         let mut m = DenseMatrix::new(2, 3);
@@ -1327,7 +1317,6 @@ mod tests {
         assert!((v[1] - 3.0).abs() < 1e-6);
         assert!((v[2] - 4.0).abs() < 1e-6);
     }
-
 
     #[test]
     fn test_dense_matrix_average_rows_single() {
@@ -1403,7 +1392,6 @@ mod tests {
         assert_eq!(v[2], 0.0);
     }
 
-
     #[test]
     fn test_dense_matrix_l2_norm_row() {
         let mut m = DenseMatrix::new(2, 2);
@@ -1428,7 +1416,6 @@ mod tests {
             other => panic!("Expected EncounteredNaN, got {:?}", other),
         }
     }
-
 
     #[test]
     fn test_dense_matrix_multiply_row() {
@@ -1490,7 +1477,6 @@ mod tests {
         assert!((m.at(1, 1) - 12.0).abs() < 1e-6);
     }
 
-
     #[test]
     fn test_dense_matrix_divide_row() {
         let mut m = DenseMatrix::new(2, 2);
@@ -1542,7 +1528,6 @@ mod tests {
         assert!((m.at(1, 0) - 2.0).abs() < 1e-6);
         assert!((m.at(1, 1) - 2.5).abs() < 1e-6);
     }
-
 
     #[test]
     fn test_dense_matrix_simd_consistency() {
@@ -1658,7 +1643,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_dense_matrix_alignment() {
         for &(rows, cols) in &[(1, 1), (1, 16), (4, 64), (10, 100), (100, 256), (8, 512)] {
@@ -1674,7 +1658,6 @@ mod tests {
             );
         }
     }
-
 
     #[test]
     #[should_panic(expected = "Row index out of bounds")]
@@ -1714,7 +1697,6 @@ mod tests {
         let m = DenseMatrix::new(2, 3);
         let _ = m.l2_norm_row(2);
     }
-
 
     #[test]
     fn test_dense_matrix_save_load_roundtrip() {
@@ -1795,7 +1777,6 @@ mod tests {
         assert!(DenseMatrix::load(&mut cursor).is_err());
     }
 
-
     #[test]
     fn test_dense_matrix_uniform() {
         let mut m = DenseMatrix::new(10, 20);
@@ -1840,7 +1821,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_dense_matrix_clone() {
         let mut m = DenseMatrix::new(2, 3);
@@ -1858,7 +1838,6 @@ mod tests {
         assert_eq!(m2.at(0, 0), 1.0);
     }
 
-
     #[test]
     fn test_dense_matrix_row_access() {
         let mut m = DenseMatrix::new(2, 3);
@@ -1875,7 +1854,6 @@ mod tests {
         let row1 = m.row(1);
         assert_eq!(row1, &[4.0, 5.0, 6.0]);
     }
-
 
     #[test]
     fn test_dense_matrix_multiply_row_with_offset() {
@@ -1903,7 +1881,6 @@ mod tests {
         assert_eq!(m.at(3, 1), 40.0);
     }
 
-
     #[test]
     fn test_dense_matrix_divide_row_with_offset() {
         let mut m = DenseMatrix::new(4, 2);
@@ -1930,7 +1907,6 @@ mod tests {
         assert!((m.at(3, 1) - 8.0).abs() < 1e-6);
     }
 
-
     #[test]
     fn test_dense_matrix_dot_row_nan_in_vector() {
         let mut m = DenseMatrix::new(1, 3);
@@ -1945,7 +1921,6 @@ mod tests {
 
         assert!(m.dot_row(&v, 0).is_nan());
     }
-
 
     #[test]
     fn test_dense_matrix_large_dot_row() {
@@ -1963,7 +1938,6 @@ mod tests {
         // dot of 100 ones with 100 ones = 100
         assert!((m.dot_row(&v, 0) - 100.0).abs() < 0.01);
     }
-
 
     #[cfg(target_arch = "x86_64")]
     #[test]

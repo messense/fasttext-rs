@@ -1,4 +1,3 @@
-
 // Args tests: defaults, supervised overrides, serialization, enums
 //
 // Extracted from src/args.rs inline tests. These test the public

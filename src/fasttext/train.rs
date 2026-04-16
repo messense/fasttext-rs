@@ -20,7 +20,8 @@ fn atomic_f64_add(target: &AtomicU64, delta: f64) {
     let mut current = target.load(Ordering::Relaxed);
     loop {
         let new_bits = (f64::from_bits(current) + delta).to_bits();
-        match target.compare_exchange_weak(current, new_bits, Ordering::Relaxed, Ordering::Relaxed) {
+        match target.compare_exchange_weak(current, new_bits, Ordering::Relaxed, Ordering::Relaxed)
+        {
             Ok(_) => break,
             Err(actual) => current = actual,
         }
@@ -67,7 +68,10 @@ impl FastText {
         let abort_flag = Arc::new(AtomicBool::new(false));
         let abort_for_train = Arc::clone(&abort_flag);
         let join_handle = std::thread::spawn(move || Self::train_with_abort(args, abort_for_train));
-        TrainingHandle { abort_flag, join_handle }
+        TrainingHandle {
+            abort_flag,
+            join_handle,
+        }
     }
 
     /// Internal training implementation with optional epoch loss tracking.
@@ -230,9 +234,13 @@ impl FastText {
             Some(Arc::clone(&tracker)),
         )?;
         let losses = Arc::try_unwrap(tracker)
-            .map_err(|_| FastTextError::InvalidArgument("Epoch loss tracker still in use".to_string()))?
+            .map_err(|_| {
+                FastTextError::InvalidArgument("Epoch loss tracker still in use".to_string())
+            })?
             .into_inner()
-            .map_err(|_| FastTextError::InvalidArgument("Epoch loss tracker lock poisoned".to_string()))?;
+            .map_err(|_| {
+                FastTextError::InvalidArgument("Epoch loss tracker lock poisoned".to_string())
+            })?;
         Ok((model, losses))
     }
 
@@ -263,18 +271,24 @@ impl FastText {
         // Read header: "<n_words> <dim>"
         let header = lines
             .next()
-            .ok_or_else(|| FastTextError::InvalidModel("Empty pretrained vectors file".to_string()))?
+            .ok_or_else(|| {
+                FastTextError::InvalidModel("Empty pretrained vectors file".to_string())
+            })?
             .map_err(FastTextError::IoError)?;
 
         let mut header_parts = header.split_whitespace();
         let n: i64 = header_parts
             .next()
             .ok_or_else(|| {
-                FastTextError::InvalidModel("Missing word count in pretrained vectors header".to_string())
+                FastTextError::InvalidModel(
+                    "Missing word count in pretrained vectors header".to_string(),
+                )
             })?
             .parse()
             .map_err(|_| {
-                FastTextError::InvalidModel("Invalid word count in pretrained vectors header".to_string())
+                FastTextError::InvalidModel(
+                    "Invalid word count in pretrained vectors header".to_string(),
+                )
             })?;
         let vec_dim: i32 = header_parts
             .next()
@@ -290,8 +304,7 @@ impl FastText {
         if vec_dim != args.dim {
             return Err(FastTextError::InvalidArgument(format!(
                 "Dimension of pretrained vectors ({}) does not match model dimension ({})",
-                vec_dim,
-                args.dim
+                vec_dim, args.dim
             )));
         }
 
@@ -309,11 +322,9 @@ impl FastText {
                 .map_err(FastTextError::IoError)?;
 
             let mut parts = line.split_whitespace();
-            let word = parts
-                .next()
-                .ok_or_else(|| {
-                    FastTextError::InvalidModel("Missing word in pretrained vectors line".to_string())
-                })?;
+            let word = parts.next().ok_or_else(|| {
+                FastTextError::InvalidModel("Missing word in pretrained vectors line".to_string())
+            })?;
 
             // Parse all dim float values.
             let mut vec = Vec::with_capacity(dim);
@@ -393,7 +404,9 @@ impl FastText {
 
         // Open file and seek to this thread's starting position.
         let mut file = std::fs::File::open(&input_path).map_err(FastTextError::IoError)?;
-        let file_size = file.seek(SeekFrom::End(0)).map_err(FastTextError::IoError)?;
+        let file_size = file
+            .seek(SeekFrom::End(0))
+            .map_err(FastTextError::IoError)?;
         let start_pos = thread_id as u64 * file_size / n_threads as u64;
         file.seek(SeekFrom::Start(start_pos))
             .map_err(FastTextError::IoError)?;
@@ -492,14 +505,16 @@ impl FastText {
 
             local_token_count += ntok as i64;
             if local_token_count > lr_update_rate {
-                ctx.token_count.fetch_add(local_token_count, Ordering::Relaxed);
+                ctx.token_count
+                    .fetch_add(local_token_count, Ordering::Relaxed);
                 local_token_count = 0;
             }
         }
 
         // Flush any remaining local token count into the shared counter.
         if local_token_count > 0 {
-            ctx.token_count.fetch_add(local_token_count, Ordering::Relaxed);
+            ctx.token_count
+                .fetch_add(local_token_count, Ordering::Relaxed);
         }
 
         // Record the final (partial) epoch's loss, if any examples remain unrecorded.

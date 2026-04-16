@@ -1,4 +1,3 @@
-
 // C++ parity tests: verify Rust output matches C++ fastText golden references
 //
 // The cooking.model.bin fixture was trained with C++ fastText using:
@@ -48,7 +47,11 @@ fn test_cpp_parity_predict_prob() {
         assert!(
             (preds[i].prob - prob).abs() < 1e-4,
             "Prediction[{}] '{}' prob mismatch: got {}, expected {}, diff={}",
-            i, label, preds[i].prob, prob, (preds[i].prob - prob).abs()
+            i,
+            label,
+            preds[i].prob,
+            prob,
+            (preds[i].prob - prob).abs()
         );
     }
 }
@@ -124,7 +127,10 @@ fn test_cpp_parity_word_vector() {
         assert!(
             (got - exp).abs() < 1e-3,
             "word_vector[{}]: got {}, expected {}, diff={}",
-            i, got, exp, (got - exp).abs()
+            i,
+            got,
+            exp,
+            (got - exp).abs()
         );
     }
 }
@@ -148,7 +154,10 @@ fn test_cpp_parity_sentence_vector() {
         assert!(
             (got - exp).abs() < 1e-3,
             "sentence_vector[{}]: got {}, expected {}, diff={}",
-            i, got, exp, (got - exp).abs()
+            i,
+            got,
+            exp,
+            (got - exp).abs()
         );
     }
 }
@@ -185,7 +194,11 @@ fn test_cpp_parity_nn() {
         assert!(
             (results[i].0 - sim).abs() < 1e-4,
             "nn[{}] '{}' similarity mismatch: got {}, expected {}, diff={}",
-            i, word, results[i].0, sim, (results[i].0 - sim).abs()
+            i,
+            word,
+            results[i].0,
+            sim,
+            (results[i].0 - sim).abs()
         );
     }
 }
@@ -219,7 +232,11 @@ fn test_cpp_parity_analogies() {
         assert!(
             (results[i].0 - sim).abs() < 1e-4,
             "analogies[{}] '{}' similarity mismatch: got {}, expected {}, diff={}",
-            i, word, results[i].0, sim, (results[i].0 - sim).abs()
+            i,
+            word,
+            results[i].0,
+            sim,
+            (results[i].0 - sim).abs()
         );
     }
 }
@@ -247,7 +264,8 @@ bucket 0
 minn 0
 maxn 0
 lrUpdateRate 100
-t 0.0001"#]].assert_eq(&actual);
+t 0.0001"#]]
+    .assert_eq(&actual);
 }
 
 /// Verify dictionary sizes match C++ dump output.
@@ -258,7 +276,8 @@ fn test_cpp_parity_dict() {
     let actual = format!("nwords {}\nnlabels {}", dict.nwords(), dict.nlabels());
     expect![[r#"
 nwords 8952
-nlabels 735"#]].assert_eq(&actual);
+nlabels 735"#]]
+    .assert_eq(&actual);
 }
 
 // ngram vectors parity (maxn=0: just the word vector)
@@ -287,7 +306,9 @@ fn test_cpp_parity_ngram_vectors() {
         assert!(
             (got - exp).abs() < 1e-3,
             "ngram_vector[{}]: got {}, expected {}",
-            i, got, exp
+            i,
+            got,
+            exp
         );
     }
 }

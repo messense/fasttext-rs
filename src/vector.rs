@@ -155,7 +155,6 @@ fn add_vector_scalar(dest: &mut [f32], src: &[f32], scale: f32) {
     }
 }
 
-
 #[cfg(target_arch = "aarch64")]
 #[inline]
 fn dot_simd_neon(a: &[f32], b: &[f32]) -> f32 {
@@ -242,7 +241,6 @@ fn add_vector_simd_neon(dest: &mut [f32], src: &[f32], scale: f32) {
         }
     }
 }
-
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
@@ -350,7 +348,6 @@ unsafe fn vst(ptr: *mut f32, val: std::arch::x86_64::__m128) {
     std::arch::x86_64::_mm_storeu_ps(ptr, val);
 }
 
-
 /// Dispatch dot product to best available implementation.
 #[inline]
 fn dot_impl(a: &[f32], b: &[f32]) -> f32 {
@@ -391,7 +388,6 @@ fn add_vector_impl(dest: &mut [f32], src: &[f32], scale: f32) {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_vector_new() {
         let v = Vector::new(10);
@@ -420,7 +416,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_vector_norm_known() {
         // [3, 4] should have norm 5
@@ -442,7 +437,6 @@ mod tests {
         v[0] = -7.0;
         assert!((v.norm() - 7.0).abs() < f32::EPSILON);
     }
-
 
     #[test]
     fn test_vector_mul_scalar() {
@@ -479,7 +473,6 @@ mod tests {
         assert_eq!(v[1], 2.0);
         assert_eq!(v[2], -3.0);
     }
-
 
     #[test]
     fn test_vector_add_vector_basic() {
@@ -525,7 +518,6 @@ mod tests {
         v.add_vector(&other, 1.0);
     }
 
-
     #[test]
     fn test_vector_dot_basic() {
         let mut a = Vector::new(3);
@@ -562,7 +554,6 @@ mod tests {
         let b = Vector::new(4);
         a.dot(&b);
     }
-
 
     #[test]
     fn test_vector_argmax_first() {
@@ -604,7 +595,6 @@ mod tests {
         assert_eq!(v.argmax(), 0);
     }
 
-
     #[test]
     fn test_vector_size_one() {
         let mut v = Vector::new(1);
@@ -636,7 +626,6 @@ mod tests {
         assert!((a[0] - 11.0).abs() < f32::EPSILON);
     }
 
-
     #[test]
     fn test_vector_large() {
         let size = 10000;
@@ -665,7 +654,6 @@ mod tests {
             n
         );
     }
-
 
     #[test]
     fn test_simd_vs_scalar_dot_512() {
@@ -748,7 +736,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_vector_clone() {
         let mut v = Vector::new(4);
@@ -769,7 +756,6 @@ mod tests {
         assert_eq!(v2[0], 1.0);
     }
 
-
     #[test]
     fn test_vector_display() {
         let mut v = Vector::new(3);
@@ -779,7 +765,6 @@ mod tests {
         let s = format!("{}", v);
         assert_eq!(s, "1.00000 2.50000 -3.14000 ");
     }
-
 
     #[test]
     fn test_vector_index() {
@@ -799,7 +784,6 @@ mod tests {
         let _ = v[3];
     }
 
-
     #[test]
     fn test_vector_alloc_safety_zero_size() {
         // Allocation with size 0 must not panic and produce an empty vector.
@@ -811,7 +795,6 @@ mod tests {
         let v2 = v.clone();
         assert_eq!(v2.len(), 0);
     }
-
 
     #[test]
     fn test_vector_dot_zero_vectors() {
@@ -858,7 +841,6 @@ mod tests {
         // Should return the first occurrence of the maximum
         assert_eq!(v.argmax(), 1);
     }
-
 
     #[test]
     fn test_simd_vs_scalar_dot_non_aligned_sizes() {

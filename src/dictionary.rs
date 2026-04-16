@@ -147,14 +147,22 @@ impl Dictionary {
     pub fn get_id(&self, w: &str) -> Option<i32> {
         let h = self.find_slot(w);
         let id = self.word2int[h];
-        if id >= 0 { Some(id) } else { None }
+        if id >= 0 {
+            Some(id)
+        } else {
+            None
+        }
     }
 
     /// Get the vocabulary index of a word given its hash, or `None` if not found.
     pub fn get_id_with_hash(&self, w: &str, h: u32) -> Option<i32> {
         let idx = self.find_slot_with_hash(w, h);
         let id = self.word2int[idx];
-        if id >= 0 { Some(id) } else { None }
+        if id >= 0 {
+            Some(id)
+        } else {
+            None
+        }
     }
 
     /// Get the entry type (Word or Label) for a word by its vocabulary index.
@@ -427,10 +435,7 @@ impl Dictionary {
             }
         }
 
-        self.threshold(
-            self.args.min_count as i64,
-            self.args.min_count_label as i64,
-        );
+        self.threshold(self.args.min_count as i64, self.args.min_count_label as i64);
         self.init_table_discard();
         self.init_ngrams();
 
@@ -728,8 +733,7 @@ impl Dictionary {
                             Some(self.nwords + h)
                         };
                         if let Some(id) = bucket_id {
-                            let ngram_str =
-                                String::from_utf8(ngram.clone()).unwrap_or_default();
+                            let ngram_str = String::from_utf8(ngram.clone()).unwrap_or_default();
                             result.push((id, ngram_str));
                         }
                     }
@@ -768,7 +772,14 @@ impl Dictionary {
     ) -> i32 {
         let mut word_hashes: Vec<i32> = Vec::new();
         let mut token = String::new();
-        self.get_line_with_scratch(reader, words, labels, &mut word_hashes, &mut token, pending_newline)
+        self.get_line_with_scratch(
+            reader,
+            words,
+            labels,
+            &mut word_hashes,
+            &mut token,
+            pending_newline,
+        )
     }
 
     pub fn get_line_with_scratch<R: Read>(

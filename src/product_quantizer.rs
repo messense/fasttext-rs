@@ -275,8 +275,7 @@ impl ProductQuantizer {
                 for j in 0..ksub {
                     let row = j % n_usize;
                     let src = &x[row * dim + m * dsub..row * dim + m * dsub + d];
-                    self.centroids[cstart + j * d..cstart + (j + 1) * d]
-                        .copy_from_slice(src);
+                    self.centroids[cstart + j * d..cstart + (j + 1) * d].copy_from_slice(src);
                 }
             }
             return;
@@ -869,7 +868,7 @@ mod tests {
         let mut pq = ProductQuantizer::new(4, 2);
         let data = vec![0.0f32; 4 * 4]; // only 4 rows, all zeros
         pq.train(4, &data); // should not panic
-        // Centroids are filled from zero data, so all remain 0.0.
+                            // Centroids are filled from zero data, so all remain 0.0.
         assert!(pq.centroids.iter().all(|&v| v == 0.0));
     }
 

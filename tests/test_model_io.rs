@@ -1,4 +1,3 @@
-
 // Model I/O tests: load, save, round-trip, validation
 //
 // Tests extracted from src/fasttext.rs inline tests. These test the public
@@ -38,9 +37,19 @@ minn {}
 maxn {}
 lrUpdateRate {}
 t {}",
-        args.dim, args.ws, args.epoch, args.min_count, args.neg,
-        args.word_ngrams, args.loss, args.model, args.bucket,
-        args.minn, args.maxn, args.lr_update_rate, args.t
+        args.dim,
+        args.ws,
+        args.epoch,
+        args.min_count,
+        args.neg,
+        args.word_ngrams,
+        args.loss,
+        args.model,
+        args.bucket,
+        args.minn,
+        args.maxn,
+        args.lr_update_rate,
+        args.t
     );
     expect![[r#"
 dim 10
@@ -55,7 +64,8 @@ bucket 0
 minn 0
 maxn 0
 lrUpdateRate 100
-t 0.0001"#]].assert_eq(&actual);
+t 0.0001"#]]
+    .assert_eq(&actual);
 }
 
 #[test]
@@ -63,7 +73,10 @@ fn test_load_cooking_model_first_entry() {
     let model = FastText::load_model(COOKING_MODEL).expect("Should load cooking model");
     let dict = model.dict();
     let words = dict.words();
-    let actual = format!("{} {} {:?}", words[0].word, words[0].count, words[0].entry_type);
+    let actual = format!(
+        "{} {} {:?}",
+        words[0].word, words[0].count, words[0].entry_type
+    );
     expect![[r#"</s> 12404 Word"#]].assert_eq(&actual);
 }
 
@@ -86,14 +99,17 @@ fn test_load_cooking_model_matrices() {
     let output = model.output_matrix();
     let actual = format!(
         "input {}x{}\noutput {}x{}\nquant {}",
-        input.rows(), input.cols(),
-        output.rows(), output.cols(),
+        input.rows(),
+        input.cols(),
+        output.rows(),
+        output.cols(),
         model.is_quant()
     );
     expect![[r#"
 input 8952x10
 output 735x10
-quant false"#]].assert_eq(&actual);
+quant false"#]]
+    .assert_eq(&actual);
 }
 
 #[test]
@@ -309,9 +325,7 @@ fn test_model_save_load_roundtrip() {
         preds_after.len(),
         "Number of predictions should match after round-trip"
     );
-    for (idx, (p1, p2)) in
-        preds_before.iter().zip(preds_after.iter()).enumerate()
-    {
+    for (idx, (p1, p2)) in preds_before.iter().zip(preds_after.iter()).enumerate() {
         assert_eq!(
             p1.label, p2.label,
             "Prediction[{}] label should match: {} vs {}",
@@ -346,7 +360,9 @@ fn test_save_model_flushes_bufwriter() {
     let tmp_str = tmp_path.to_str().unwrap();
 
     // save_model must succeed (implicit flush).
-    model.save_model(tmp_str).expect("save_model should succeed");
+    model
+        .save_model(tmp_str)
+        .expect("save_model should succeed");
 
     // Reload and verify the model is fully intact — proves the flush worked.
     let model2 = FastText::load_model(tmp_str).expect("Reloaded model should be valid");
@@ -354,5 +370,8 @@ fn test_save_model_flushes_bufwriter() {
 
     // Sanity-check that predictions from reloaded model are valid.
     let preds = model2.predict("How to bake a banana bread?", 1, 0.0);
-    assert!(!preds.is_empty(), "Reloaded model should produce predictions");
+    assert!(
+        !preds.is_empty(),
+        "Reloaded model should produce predictions"
+    );
 }

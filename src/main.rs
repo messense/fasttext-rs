@@ -302,37 +302,37 @@ fn normalize_args(raw: impl Iterator<Item = String>) -> Vec<String> {
     // Mapping from single-dash C++ flag name → double-dash clap flag name.
     // C++ uses camelCase; clap uses kebab-case.
     const FLAG_MAP: &[(&str, &str)] = &[
-        ("-epoch",           "--epoch"),
-        ("-lr",              "--lr"),
-        ("-lrUpdateRate",    "--lr-update-rate"),
-        ("-dim",             "--dim"),
-        ("-ws",              "--ws"),
-        ("-minCount",        "--min-count"),
-        ("-minCountLabel",   "--min-count-label"),
-        ("-neg",             "--neg"),
-        ("-wordNgrams",      "--word-ngrams"),
-        ("-loss",            "--loss"),
-        ("-bucket",          "--bucket"),
-        ("-minn",            "--minn"),
-        ("-maxn",            "--maxn"),
-        ("-thread",          "--thread"),
-        ("-t",               "--t"),
-        ("-label",           "--label"),
-        ("-verbose",         "--verbose"),
-        ("-seed",            "--seed"),
-        ("-input",           "--input"),
-        ("-output",          "--output"),
+        ("-epoch", "--epoch"),
+        ("-lr", "--lr"),
+        ("-lrUpdateRate", "--lr-update-rate"),
+        ("-dim", "--dim"),
+        ("-ws", "--ws"),
+        ("-minCount", "--min-count"),
+        ("-minCountLabel", "--min-count-label"),
+        ("-neg", "--neg"),
+        ("-wordNgrams", "--word-ngrams"),
+        ("-loss", "--loss"),
+        ("-bucket", "--bucket"),
+        ("-minn", "--minn"),
+        ("-maxn", "--maxn"),
+        ("-thread", "--thread"),
+        ("-t", "--t"),
+        ("-label", "--label"),
+        ("-verbose", "--verbose"),
+        ("-seed", "--seed"),
+        ("-input", "--input"),
+        ("-output", "--output"),
         ("-pretrainedVectors", "--pretrained-vectors"),
-        ("-saveOutput",      "--save-output"),
-        ("-cutoff",          "--cutoff"),
-        ("-retrain",         "--retrain"),
-        ("-qnorm",           "--qnorm"),
-        ("-qout",            "--qout"),
-        ("-dsub",            "--dsub"),
+        ("-saveOutput", "--save-output"),
+        ("-cutoff", "--cutoff"),
+        ("-retrain", "--retrain"),
+        ("-qnorm", "--qnorm"),
+        ("-qout", "--qout"),
+        ("-dsub", "--dsub"),
         ("-autotuneValidationFile", "--autotune-validation-file"),
         ("-autotuneDuration", "--autotune-duration"),
         ("-autotuneModelSize", "--autotune-model-size"),
-        ("-autotuneMetric",  "--autotune-metric"),
+        ("-autotuneMetric", "--autotune-metric"),
     ];
 
     raw.map(|arg| {
@@ -398,7 +398,10 @@ fn cpp_default_format(val: f64, sig_digits: usize) -> String {
         };
         let fixed = format!("{:.prec$}", val, prec = decimal_places);
         if fixed.contains('.') {
-            fixed.trim_end_matches('0').trim_end_matches('.').to_string()
+            fixed
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
         } else {
             fixed
         }
@@ -476,7 +479,10 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
         match parse_loss(loss_str) {
             Some(loss) => args.loss = loss,
             None => {
-                eprintln!("Error: unknown loss function '{}'. Valid values: ns, hs, softmax, ova", loss_str);
+                eprintln!(
+                    "Error: unknown loss function '{}'. Valid values: ns, hs, softmax, ova",
+                    loss_str
+                );
                 process::exit(1);
             }
         }
@@ -786,8 +792,13 @@ fn run_nn(args: NnArgs) {
         }
         let neighbors = model.get_nn(query, k);
         for (similarity, word) in &neighbors {
-            writeln!(out, "{} {}", word, cpp_default_format(*similarity as f64, 6))
-                .unwrap_or_else(|_| process::exit(1));
+            writeln!(
+                out,
+                "{} {}",
+                word,
+                cpp_default_format(*similarity as f64, 6)
+            )
+            .unwrap_or_else(|_| process::exit(1));
         }
         write!(out, "Query word? ").unwrap_or_else(|_| process::exit(1));
         out.flush().unwrap_or_else(|_| process::exit(1));
@@ -823,8 +834,13 @@ fn run_analogies(args: AnalogiesArgs) {
         let (word_a, word_b, word_c) = (words[0], words[1], words[2]);
         let results = model.get_analogies(word_a, word_b, word_c, k);
         for (similarity, word) in &results {
-            writeln!(out, "{} {}", word, cpp_default_format(*similarity as f64, 6))
-                .unwrap_or_else(|_| process::exit(1));
+            writeln!(
+                out,
+                "{} {}",
+                word,
+                cpp_default_format(*similarity as f64, 6)
+            )
+            .unwrap_or_else(|_| process::exit(1));
         }
         write!(out, "Query triplet (A - B + C)? ").unwrap_or_else(|_| process::exit(1));
         out.flush().unwrap_or_else(|_| process::exit(1));
@@ -847,15 +863,13 @@ fn run_dump(args: DumpArgs) {
             writeln!(out, "epoch {}", a.epoch).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "minCount {}", a.min_count).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "neg {}", a.neg).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "wordNgrams {}", a.word_ngrams)
-                .unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "wordNgrams {}", a.word_ngrams).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "loss {}", a.loss_to_string()).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "model {}", a.model_to_string()).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "bucket {}", a.bucket).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "minn {}", a.minn).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "maxn {}", a.maxn).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "lrUpdateRate {}", a.lr_update_rate)
-                .unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "lrUpdateRate {}", a.lr_update_rate).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "t {}", a.t).unwrap_or_else(|_| process::exit(1));
         }
         "dict" => {
@@ -877,8 +891,7 @@ fn run_dump(args: DumpArgs) {
                 process::exit(1);
             }
             let m = model.input_matrix();
-            writeln!(out, "{} {}", m.rows(), m.cols())
-                .unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "{} {}", m.rows(), m.cols()).unwrap_or_else(|_| process::exit(1));
             for i in 0..m.rows() {
                 let row = m.row(i);
                 let mut first = true;
@@ -886,7 +899,8 @@ fn run_dump(args: DumpArgs) {
                     if !first {
                         write!(out, " ").unwrap_or_else(|_| process::exit(1));
                     }
-                    write!(out, "{}", cpp_default_format(v as f64, 6)).unwrap_or_else(|_| process::exit(1));
+                    write!(out, "{}", cpp_default_format(v as f64, 6))
+                        .unwrap_or_else(|_| process::exit(1));
                     first = false;
                 }
                 writeln!(out).unwrap_or_else(|_| process::exit(1));
@@ -898,8 +912,7 @@ fn run_dump(args: DumpArgs) {
                 process::exit(1);
             }
             let m = model.output_matrix();
-            writeln!(out, "{} {}", m.rows(), m.cols())
-                .unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "{} {}", m.rows(), m.cols()).unwrap_or_else(|_| process::exit(1));
             for i in 0..m.rows() {
                 let row = m.row(i);
                 let mut first = true;
@@ -907,7 +920,8 @@ fn run_dump(args: DumpArgs) {
                     if !first {
                         write!(out, " ").unwrap_or_else(|_| process::exit(1));
                     }
-                    write!(out, "{}", cpp_default_format(v as f64, 6)).unwrap_or_else(|_| process::exit(1));
+                    write!(out, "{}", cpp_default_format(v as f64, 6))
+                        .unwrap_or_else(|_| process::exit(1));
                     first = false;
                 }
                 writeln!(out).unwrap_or_else(|_| process::exit(1));

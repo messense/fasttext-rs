@@ -51,7 +51,11 @@ fn update_arg_gauss(
     let stddev =
         start_sigma - ((start_sigma - end_sigma) / 0.5) * (0.5f64.min((t - 0.25).max(0.0)));
     let coeff = normal_sample(rng) * stddev;
-    let result = if linear { val + coeff } else { val * 2.0f64.powf(coeff) };
+    let result = if linear {
+        val + coeff
+    } else {
+        val * 2.0f64.powf(coeff)
+    };
     result.max(min).min(max)
 }
 
@@ -235,7 +239,11 @@ impl AutotuneStrategy {
         self.best_args = args.clone();
         self.best_minn_index = Self::find_index(args.minn, &self.minn_choices);
         let dsub = args.dsub as f64;
-        self.best_dsub_exponent = if dsub > 0.0 { dsub.log2().round() as i32 } else { 1 };
+        self.best_dsub_exponent = if dsub > 0.0 {
+            dsub.log2().round() as i32
+        } else {
+            1
+        };
         if args.bucket != 0 {
             self.best_nonzero_bucket = args.bucket;
         }
@@ -369,9 +377,8 @@ impl Autotune {
             let abort_clone = Arc::clone(&abort_flag);
 
             // Spawn training in a background thread so we can abort it.
-            let handle = std::thread::spawn(move || {
-                FastText::train_with_abort(trial_args, abort_clone)
-            });
+            let handle =
+                std::thread::spawn(move || FastText::train_with_abort(trial_args, abort_clone));
 
             // Wait for training to finish or the time budget to expire.
             let mut timed_out = false;
@@ -438,8 +445,9 @@ impl Autotune {
                     std::fs::remove_file(&tmp_path).ok();
                     continue;
                 }
-                let ftz_size =
-                    std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(u64::MAX);
+                let ftz_size = std::fs::metadata(&tmp_path)
+                    .map(|m| m.len())
+                    .unwrap_or(u64::MAX);
                 std::fs::remove_file(&tmp_path).ok();
                 if ftz_size > max_bytes {
                     // Quantized model exceeds the size constraint — skip this trial.
@@ -517,8 +525,12 @@ mod tests {
     /// Write content to a uniquely-named temp file. Returns the path.
     fn write_temp(content: &str, tag: &str) -> std::path::PathBuf {
         let id = FILE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("fasttext_autotune_{}_{}_{}.txt", tag, std::process::id(), id));
+        let path = std::env::temp_dir().join(format!(
+            "fasttext_autotune_{}_{}_{}.txt",
+            tag,
+            std::process::id(),
+            id
+        ));
         std::fs::write(&path, content).expect("Failed to write temp file");
         path
     }
@@ -601,8 +613,7 @@ mod tests {
     fn test_autotune_duration_default() {
         let args = Args::default();
         assert_eq!(
-            args.autotune_duration,
-            300,
+            args.autotune_duration, 300,
             "Default autotune duration should be 300 seconds"
         );
     }
@@ -613,16 +624,21 @@ mod tests {
         let mut args = Args::default();
         args.autotune_duration = 60;
         assert_eq!(
-            args.autotune_duration,
-            60,
+            args.autotune_duration, 60,
             "Autotune duration should reflect the custom value"
         );
 
         args.autotune_duration = 1;
-        assert_eq!(args.autotune_duration, 1, "Should accept duration of 1 second");
+        assert_eq!(
+            args.autotune_duration, 1,
+            "Should accept duration of 1 second"
+        );
 
         args.autotune_duration = 3600;
-        assert_eq!(args.autotune_duration, 3600, "Should accept large durations");
+        assert_eq!(
+            args.autotune_duration, 3600,
+            "Should accept large durations"
+        );
     }
 
     // VAL-AUTO-003: Respects time budget
@@ -728,7 +744,10 @@ mod tests {
 
         // The returned model must be usable.
         let preds = model.predict("basketball player sport game", 1, 0.0);
-        assert!(!preds.is_empty(), "Autotune model should produce predictions");
+        assert!(
+            !preds.is_empty(),
+            "Autotune model should produce predictions"
+        );
     }
 
     /// Verify that AutotuneStrategy::ask produces different args for trials > 1.
@@ -747,7 +766,10 @@ mod tests {
 
         // Trial 1: should return original args unchanged.
         let trial1 = strategy.ask(0.0);
-        assert_eq!(trial1.epoch, args.epoch, "Trial 1 must return original epoch");
+        assert_eq!(
+            trial1.epoch, args.epoch,
+            "Trial 1 must return original epoch"
+        );
         assert_eq!(trial1.dim, args.dim, "Trial 1 must return original dim");
 
         // Trial 2: should differ in at least one parameter.
@@ -838,7 +860,10 @@ mod tests {
         // The model must be usable for prediction.
         let preds = model.predict("sport game basketball player", 1, 0.0);
         assert!(!preds.is_empty(), "Predictions must be non-empty");
-        assert!(!preds[0].label.is_empty(), "Prediction label must be non-empty");
+        assert!(
+            !preds[0].label.is_empty(),
+            "Prediction label must be non-empty"
+        );
     }
 
     // Additional AutotuneStrategy unit tests
@@ -861,7 +886,10 @@ mod tests {
         strategy.update_best(&new_best);
 
         assert_eq!(strategy.best_minn_index, 1, "minn=2 should map to index 1");
-        assert_eq!(strategy.best_dsub_exponent, 2, "dsub=4 should give exponent 2");
+        assert_eq!(
+            strategy.best_dsub_exponent, 2,
+            "dsub=4 should give exponent 2"
+        );
     }
 
     /// Verify normal_sample produces values in a plausible range.
@@ -871,8 +899,11 @@ mod tests {
         let samples: Vec<f64> = (0..1000).map(|_| normal_sample(&mut rng)).collect();
 
         let mean: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
-        let var: f64 =
-            samples.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / samples.len() as f64;
+        let var: f64 = samples
+            .iter()
+            .map(|&x| (x - mean) * (x - mean))
+            .sum::<f64>()
+            / samples.len() as f64;
         let stddev = var.sqrt();
 
         // Mean should be close to 0, stddev close to 1.
@@ -1021,7 +1052,10 @@ mod tests {
         // Should complete without error and produce a usable model.
         let model = result.expect("Autotune with label F1 metric should succeed");
         let preds = model.predict("basketball player sport", 1, 0.0);
-        assert!(!preds.is_empty(), "Model from label-F1 autotune should produce predictions");
+        assert!(
+            !preds.is_empty(),
+            "Model from label-F1 autotune should produce predictions"
+        );
     }
 
     /// Verify autotune with default F1 metric still works after the dispatch refactor.
@@ -1045,7 +1079,10 @@ mod tests {
 
         let model = result.expect("Autotune with default F1 metric should succeed");
         let preds = model.predict("banana fruit eat recipe", 1, 0.0);
-        assert!(!preds.is_empty(), "Model from default-F1 autotune should produce predictions");
+        assert!(
+            !preds.is_empty(),
+            "Model from default-F1 autotune should produce predictions"
+        );
     }
 
     // Fix tests: autotune model_size enforcement
@@ -1067,19 +1104,25 @@ mod tests {
 
         // Quantize the model using default settings.
         let qargs = Args::default();
-        model.quantize(&qargs).expect("Quantize should succeed for size-check path");
+        model
+            .quantize(&qargs)
+            .expect("Quantize should succeed for size-check path");
 
         // Save and measure size.
-        let tmp_path = std::env::temp_dir().join(format!(
-            "test_size_check_mech_{}.ftz",
-            std::process::id()
-        ));
-        model.save_model(tmp_path.to_str().unwrap()).expect("Save should succeed");
+        let tmp_path =
+            std::env::temp_dir().join(format!("test_size_check_mech_{}.ftz", std::process::id()));
+        model
+            .save_model(tmp_path.to_str().unwrap())
+            .expect("Save should succeed");
         let ftz_size = std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
         std::fs::remove_file(&tmp_path).ok();
 
         // A real quantized model must be larger than 1 byte.
-        assert!(ftz_size > 1, "Quantized model should be > 1 byte; got {} bytes", ftz_size);
+        assert!(
+            ftz_size > 1,
+            "Quantized model should be > 1 byte; got {} bytes",
+            ftz_size
+        );
 
         // Our tiny test model should be well under 10 MB.
         let ten_mb = 10u64 * 1024 * 1024;

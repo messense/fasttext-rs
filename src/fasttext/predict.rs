@@ -75,7 +75,12 @@ impl FastText {
     }
 
     /// Internal helper: run model.predict on pre-validated word IDs.
-    fn predict_words_internal(&self, word_ids: &[i32], k: usize, threshold: f32) -> Vec<Prediction> {
+    fn predict_words_internal(
+        &self,
+        word_ids: &[i32],
+        k: usize,
+        threshold: f32,
+    ) -> Vec<Prediction> {
         let nlabels = self.dict.nlabels() as usize;
         if nlabels == 0 {
             return Vec::new();
@@ -188,10 +193,19 @@ impl FastText {
     ///
     /// Returns a [`Meter`] containing accumulated precision, recall, and F1
     /// statistics for all examples in `reader`.
-    pub fn test_model<R: Read + Seek>(&self, reader: &mut R, k: usize, threshold: f32) -> Result<Meter> {
+    pub fn test_model<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        k: usize,
+        threshold: f32,
+    ) -> Result<Meter> {
         let nlabels = self.dict.nlabels() as usize;
         let dim = self.args.dim as usize;
-        let k_eff = if nlabels == 0 { 0i32 } else { k.min(nlabels) as i32 };
+        let k_eff = if nlabels == 0 {
+            0i32
+        } else {
+            k.min(nlabels) as i32
+        };
         let effective_threshold = threshold.max(0.0);
 
         if k_eff == 0 {
@@ -199,7 +213,9 @@ impl FastText {
         }
 
         // Rewind to the beginning, matching C++ `in.seekg(0, beg)`.
-        reader.seek(SeekFrom::Start(0)).map_err(FastTextError::IoError)?;
+        reader
+            .seek(SeekFrom::Start(0))
+            .map_err(FastTextError::IoError)?;
         let mut buf_reader = BufReader::new(reader);
 
         let mut meter = Meter::new();
@@ -211,7 +227,14 @@ impl FastText {
         let mut state = State::new(dim, nlabels, 0);
 
         loop {
-            let ntokens = self.dict.get_line_with_scratch(&mut buf_reader, &mut words, &mut labels, &mut word_hashes, &mut token, &mut pending_newline);
+            let ntokens = self.dict.get_line_with_scratch(
+                &mut buf_reader,
+                &mut words,
+                &mut labels,
+                &mut word_hashes,
+                &mut token,
+                &mut pending_newline,
+            );
             if ntokens == 0 && words.is_empty() && labels.is_empty() {
                 break;
             }
@@ -220,7 +243,8 @@ impl FastText {
                 let raw = if self.quant {
                     self.predict_raw_quantized(&words, k_eff, effective_threshold, &mut state)
                 } else {
-                    self.model.predict(&words, k_eff, effective_threshold, &mut state)
+                    self.model
+                        .predict(&words, k_eff, effective_threshold, &mut state)
                 };
 
                 // Convert log-probs to probabilities (matching C++ `min(exp(score), 1.0)`).
