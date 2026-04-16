@@ -1,5 +1,7 @@
 // Args: hyperparameter configuration for fastText
 
+use std::convert::TryFrom;
+use std::fmt;
 use std::io::{Read, Write};
 
 use crate::error::Result;
@@ -10,11 +12,11 @@ use crate::utils;
 #[repr(i32)]
 pub enum ModelName {
     /// Continuous bag-of-words.
-    CBOW = 1,
+    Cbow = 1,
     /// Skip-gram.
-    SG = 2,
+    SkipGram = 2,
     /// Supervised classification.
-    SUP = 3,
+    Supervised = 3,
 }
 
 /// Loss function type.
@@ -22,13 +24,13 @@ pub enum ModelName {
 #[repr(i32)]
 pub enum LossName {
     /// Hierarchical softmax.
-    HS = 1,
+    HierarchicalSoftmax = 1,
     /// Negative sampling.
-    NS = 2,
+    NegativeSampling = 2,
     /// Softmax.
-    SOFTMAX = 3,
+    Softmax = 3,
     /// One-vs-all.
-    OVA = 4,
+    OneVsAll = 4,
 }
 
 /// Autotune metric type.
@@ -49,27 +51,50 @@ pub enum MetricName {
     RecallAtPrecisionLabel = 6,
 }
 
-impl ModelName {
-    /// Convert from i32 to ModelName.
-    pub fn from_i32(value: i32) -> Option<ModelName> {
+impl TryFrom<i32> for ModelName {
+    type Error = i32;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
         match value {
-            1 => Some(ModelName::CBOW),
-            2 => Some(ModelName::SG),
-            3 => Some(ModelName::SUP),
-            _ => None,
+            1 => Ok(ModelName::Cbow),
+            2 => Ok(ModelName::SkipGram),
+            3 => Ok(ModelName::Supervised),
+            _ => Err(value),
         }
     }
 }
 
-impl LossName {
-    /// Convert from i32 to LossName.
-    pub fn from_i32(value: i32) -> Option<LossName> {
+impl fmt::Display for ModelName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModelName::Cbow => write!(f, "cbow"),
+            ModelName::SkipGram => write!(f, "sg"),
+            ModelName::Supervised => write!(f, "sup"),
+        }
+    }
+}
+
+impl TryFrom<i32> for LossName {
+    type Error = i32;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
         match value {
-            1 => Some(LossName::HS),
-            2 => Some(LossName::NS),
-            3 => Some(LossName::SOFTMAX),
-            4 => Some(LossName::OVA),
-            _ => None,
+            1 => Ok(LossName::HierarchicalSoftmax),
+            2 => Ok(LossName::NegativeSampling),
+            3 => Ok(LossName::Softmax),
+            4 => Ok(LossName::OneVsAll),
+            _ => Err(value),
+        }
+    }
+}
+
+impl fmt::Display for LossName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LossName::HierarchicalSoftmax => write!(f, "hs"),
+            LossName::NegativeSampling => write!(f, "ns"),
+            LossName::Softmax => write!(f, "softmax"),
+            LossName::OneVsAll => write!(f, "one-vs-all"),
         }
     }
 }
@@ -126,8 +151,8 @@ impl Default for Args {
             min_count_label: 0,
             neg: 5,
             word_ngrams: 1,
-            loss: LossName::NS,
-            model: ModelName::SG,
+            loss: LossName::NegativeSampling,
+            model: ModelName::SkipGram,
             bucket: 2_000_000,
             minn: 3,
             maxn: 6,
@@ -167,11 +192,11 @@ impl Args {
 
     /// Apply supervised mode overrides.
     ///
-    /// Sets model=SUP, loss=SOFTMAX, minCount=1, minn=0, maxn=0, lr=0.1.
+    /// Sets model=Supervised, loss=Softmax, minCount=1, minn=0, maxn=0, lr=0.1.
     /// Also sets bucket=0 when wordNgrams<=1 and maxn==0 and autotune is not enabled.
     pub fn apply_supervised_defaults(&mut self) {
-        self.model = ModelName::SUP;
-        self.loss = LossName::SOFTMAX;
+        self.model = ModelName::Supervised;
+        self.loss = LossName::Softmax;
         self.min_count = 1;
         self.minn = 0;
         self.maxn = 0;
@@ -216,12 +241,12 @@ impl Args {
         self.neg = utils::read_i32(reader)?;
         self.word_ngrams = utils::read_i32(reader)?;
         let loss_val = utils::read_i32(reader)?;
-        self.loss = LossName::from_i32(loss_val).ok_or_else(|| {
-            crate::error::FastTextError::InvalidModel(format!("Invalid loss value: {}", loss_val))
+        self.loss = LossName::try_from(loss_val).map_err(|v| {
+            crate::error::FastTextError::InvalidModel(format!("Invalid loss value: {}", v))
         })?;
         let model_val = utils::read_i32(reader)?;
-        self.model = ModelName::from_i32(model_val).ok_or_else(|| {
-            crate::error::FastTextError::InvalidModel(format!("Invalid model value: {}", model_val))
+        self.model = ModelName::try_from(model_val).map_err(|v| {
+            crate::error::FastTextError::InvalidModel(format!("Invalid model value: {}", v))
         })?;
         self.bucket = utils::read_i32(reader)?;
         self.minn = utils::read_i32(reader)?;
@@ -229,25 +254,6 @@ impl Args {
         self.lr_update_rate = utils::read_i32(reader)?;
         self.t = utils::read_f64(reader)?;
         Ok(())
-    }
-
-    /// Convert loss name to string (matching C++ output).
-    pub fn loss_to_string(&self) -> &'static str {
-        match self.loss {
-            LossName::HS => "hs",
-            LossName::NS => "ns",
-            LossName::SOFTMAX => "softmax",
-            LossName::OVA => "one-vs-all",
-        }
-    }
-
-    /// Convert model name to string (matching C++ output).
-    pub fn model_to_string(&self) -> &'static str {
-        match self.model {
-            ModelName::CBOW => "cbow",
-            ModelName::SG => "sg",
-            ModelName::SUP => "sup",
-        }
     }
 
     /// Parse the autotune metric string and return the corresponding MetricName.

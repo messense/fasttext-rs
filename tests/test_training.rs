@@ -149,8 +149,8 @@ fn test_train_cbow() {
     let mut args = Args::default();
     args.input = path_str.clone();
     args.output = "/dev/null".to_string();
-    args.model = ModelName::CBOW;
-    args.loss = LossName::NS;
+    args.model = ModelName::Cbow;
+    args.loss = LossName::NegativeSampling;
     args.dim = 10;
     args.epoch = 3;
     args.min_count = 1;
@@ -200,8 +200,8 @@ fn test_train_skipgram() {
     let mut args = Args::default();
     args.input = path_str.clone();
     args.output = "/dev/null".to_string();
-    args.model = ModelName::SG;
-    args.loss = LossName::NS;
+    args.model = ModelName::SkipGram;
+    args.loss = LossName::NegativeSampling;
     args.dim = 10;
     args.epoch = 3;
     args.min_count = 1;
@@ -352,8 +352,8 @@ fn test_hogwild_weights_finite() {
     let mut args = Args::default();
     args.input = path_str.clone();
     args.output = "/dev/null".to_string();
-    args.model = fasttext::args::ModelName::CBOW;
-    args.loss = fasttext::args::LossName::NS;
+    args.model = fasttext::args::ModelName::Cbow;
+    args.loss = fasttext::args::LossName::NegativeSampling;
     args.dim = 10;
     args.epoch = 3;
     args.min_count = 1;

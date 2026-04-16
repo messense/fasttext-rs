@@ -109,7 +109,7 @@ impl FastText {
         }
 
         // Guard: supervised mode requires at least one label.
-        if args.model == ModelName::SUP && dict.nlabels() == 0 {
+        if args.model == ModelName::Supervised && dict.nlabels() == 0 {
             return Err(FastTextError::InvalidArgument(
                 "Supervised training requires at least one label, but none were found. \
                  Labels must start with the label prefix (default: '__label__')."
@@ -133,7 +133,7 @@ impl FastText {
         });
 
         // Initialize output matrix: (nlabels for supervised, nwords for unsupervised) × dim, zeros.
-        let out_rows = if args.model == ModelName::SUP {
+        let out_rows = if args.model == ModelName::Supervised {
             dict.nlabels() as i64
         } else {
             dict.nwords() as i64
@@ -143,12 +143,12 @@ impl FastText {
         let output_size = output.rows() as usize;
 
         // Build target counts for loss construction.
-        let target_counts = if args.model == ModelName::SUP {
+        let target_counts = if args.model == ModelName::Supervised {
             dict.get_counts(EntryType::Label)
         } else {
             dict.get_counts(EntryType::Word)
         };
-        let normalize_gradient = args.model == ModelName::SUP;
+        let normalize_gradient = args.model == ModelName::Supervised;
 
         // Number of threads (at least 1).
         let n_threads = (args.thread as usize).max(1);
@@ -416,7 +416,7 @@ impl FastText {
         let mut state = State::new(ctx.args.dim as usize, ctx.output_size, seed);
 
         let model_name = ctx.args.model;
-        let is_ova = ctx.args.loss == LossName::OVA;
+        let is_ova = ctx.args.loss == LossName::OneVsAll;
         let ws = ctx.args.ws;
         let lr_update_rate = ctx.args.lr_update_rate as i64;
         let base_lr = ctx.args.lr as f32;
@@ -464,7 +464,7 @@ impl FastText {
             let lr = (base_lr * (1.0 - progress)).max(0.0_f32);
 
             let ntok = match model_name {
-                ModelName::SUP => ctx.dict.get_line_with_scratch(
+                ModelName::Supervised => ctx.dict.get_line_with_scratch(
                     &mut reader,
                     &mut line,
                     &mut labels,
@@ -491,10 +491,10 @@ impl FastText {
             }
 
             match model_name {
-                ModelName::SUP => {
+                ModelName::Supervised => {
                     Self::supervised_fn(ctx.model, &mut state, lr, &line, &labels, is_ova);
                 }
-                ModelName::CBOW => {
+                ModelName::Cbow => {
                     Self::cbow_fn(ctx.model, ctx.dict, &mut state, lr, &line, ws);
                 }
                 _ => {

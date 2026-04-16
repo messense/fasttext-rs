@@ -58,8 +58,8 @@ epoch 25
 minCount 1
 neg 5
 wordNgrams 1
-loss SOFTMAX
-model SUP
+loss Softmax
+model Supervised
 bucket 0
 minn 0
 maxn 0

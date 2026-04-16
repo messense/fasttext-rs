@@ -80,10 +80,12 @@ pub(super) fn build_loss(
     target_counts: &[i64],
 ) -> Box<dyn Loss> {
     match args.loss {
-        LossName::HS => Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts)),
-        LossName::NS => Box::new(NegativeSamplingLoss::new(wo, args.neg, target_counts)),
-        LossName::OVA => Box::new(OneVsAllLoss::new(wo)),
-        LossName::SOFTMAX => Box::new(SoftmaxLoss::new(wo)),
+        LossName::HierarchicalSoftmax => Box::new(HierarchicalSoftmaxLoss::new(wo, target_counts)),
+        LossName::NegativeSampling => {
+            Box::new(NegativeSamplingLoss::new(wo, args.neg, target_counts))
+        }
+        LossName::OneVsAll => Box::new(OneVsAllLoss::new(wo)),
+        LossName::Softmax => Box::new(SoftmaxLoss::new(wo)),
     }
 }
 
@@ -185,7 +187,7 @@ impl FastText {
 
         // Version 11 backward compatibility:
         // Old supervised models do not use character n-grams.
-        if version == 11 && args.model == ModelName::SUP {
+        if version == 11 && args.model == ModelName::Supervised {
             args.maxn = 0;
         }
 
@@ -233,13 +235,13 @@ impl FastText {
         let output_arc = Arc::new(output_dense);
         let label_counts = dict.get_counts(EntryType::Label);
         let word_counts = dict.get_counts(EntryType::Word);
-        let target_counts = if args.model == ModelName::SUP {
+        let target_counts = if args.model == ModelName::Supervised {
             label_counts
         } else {
             word_counts
         };
         let loss = build_loss(&args, Arc::clone(&output_arc), &target_counts);
-        let normalize_gradient = args.model == ModelName::SUP;
+        let normalize_gradient = args.model == ModelName::Supervised;
         let model = Model::new(Arc::clone(&input_arc), loss, normalize_gradient);
 
         Ok(FastText {
@@ -445,7 +447,7 @@ impl FastText {
         );
         out.fill(0.0);
 
-        if self.args.model == ModelName::SUP {
+        if self.args.model == ModelName::Supervised {
             let mut words: Vec<i32> = Vec::new();
             let mut labels: Vec<i32> = Vec::new();
             self.dict
@@ -594,8 +596,8 @@ mod tests {
         args.min_count = 1;
         args.neg = 5;
         args.word_ngrams = 1;
-        args.loss = LossName::SOFTMAX;
-        args.model = ModelName::SUP;
+        args.loss = LossName::Softmax;
+        args.model = ModelName::Supervised;
         args.bucket = 0;
         args.minn = 0;
         args.maxn = 0;
@@ -735,8 +737,8 @@ mod tests {
         assert_eq!(model.args().min_count, 1);
         assert_eq!(model.args().neg, 5);
         assert_eq!(model.args().word_ngrams, 1);
-        assert_eq!(model.args().loss, LossName::SOFTMAX);
-        assert_eq!(model.args().model, ModelName::SUP);
+        assert_eq!(model.args().loss, LossName::Softmax);
+        assert_eq!(model.args().model, ModelName::Supervised);
         assert_eq!(model.args().bucket, 0);
         assert_eq!(model.args().minn, 0);
         assert_eq!(model.args().maxn, 0);
@@ -924,8 +926,8 @@ mod tests {
         args.min_count = 1;
         args.neg = 5;
         args.word_ngrams = 1;
-        args.loss = LossName::NS;
-        args.model = ModelName::SG; // NOT supervised
+        args.loss = LossName::NegativeSampling;
+        args.model = ModelName::SkipGram; // NOT supervised
         args.bucket = 100;
         args.minn = 3;
         args.maxn = 6; // should remain 6
@@ -1080,8 +1082,8 @@ mod tests {
         args.min_count = 1;
         args.neg = 5;
         args.word_ngrams = 1;
-        args.loss = LossName::NS;
-        args.model = ModelName::SG;
+        args.loss = LossName::NegativeSampling;
+        args.model = ModelName::SkipGram;
         args.bucket = 0;
         args.minn = 0;
         args.maxn = 0;
@@ -1175,8 +1177,8 @@ mod tests {
         args.min_count = 1;
         args.neg = 1;
         args.word_ngrams = 1;
-        args.loss = LossName::NS;
-        args.model = ModelName::SG;
+        args.loss = LossName::NegativeSampling;
+        args.model = ModelName::SkipGram;
         args.bucket = bucket;
         args.minn = minn;
         args.maxn = maxn;
@@ -1283,8 +1285,8 @@ mod tests {
         args.min_count = 1;
         args.neg = 1;
         args.word_ngrams = 1;
-        args.loss = LossName::NS;
-        args.model = ModelName::SG;
+        args.loss = LossName::NegativeSampling;
+        args.model = ModelName::SkipGram;
         args.bucket = 0;
         args.minn = 0;
         args.maxn = 0;
@@ -1339,7 +1341,7 @@ mod tests {
         // Confirm model type is unsupervised
         assert_eq!(
             model.args().model,
-            ModelName::SG,
+            ModelName::SkipGram,
             "Model should be SG (unsupervised)"
         );
 

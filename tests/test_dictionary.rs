@@ -1206,7 +1206,7 @@ fn test_discard_unsupervised_formula() {
     // Use a very low-frequency word with high t to force discard.
     let mut args = Args::default();
     args.t = 0.9; // Very high t
-    args.model = ModelName::SG; // Unsupervised
+    args.model = ModelName::SkipGram; // Unsupervised
     let mut dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
     // Add "rare" once, "common" 1000 times → f_rare ≈ 0.001
@@ -1247,7 +1247,7 @@ fn test_discard_unsupervised_formula() {
     // rand=0.5 > 0.01001 → discard returns true.
     let mut args2 = Args::default();
     args2.t = 0.0001;
-    args2.model = ModelName::SG;
+    args2.model = ModelName::SkipGram;
     let mut dict2 = Dictionary::new_with_capacity(Arc::new(args2), 1024);
     for _ in 0..9999 {
         dict2.add("frequent");

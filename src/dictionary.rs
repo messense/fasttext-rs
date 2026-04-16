@@ -889,7 +889,7 @@ impl Dictionary {
     /// Always returns `false` for supervised models.
     pub fn discard(&self, id: i32, rand: f32) -> bool {
         debug_assert!(id >= 0 && id < self.nwords);
-        if self.args.model == ModelName::SUP {
+        if self.args.model == ModelName::Supervised {
             return false;
         }
         rand > self.pdiscard[id as usize]

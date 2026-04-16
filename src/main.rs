@@ -352,9 +352,9 @@ fn main() {
     let cli = Cli::parse_from(normalized);
 
     match cli.command {
-        Commands::Supervised(args) => run_train(args, ModelName::SUP),
-        Commands::Skipgram(args) => run_train(args, ModelName::SG),
-        Commands::Cbow(args) => run_train(args, ModelName::CBOW),
+        Commands::Supervised(args) => run_train(args, ModelName::Supervised),
+        Commands::Skipgram(args) => run_train(args, ModelName::SkipGram),
+        Commands::Cbow(args) => run_train(args, ModelName::Cbow),
         Commands::Predict(args) => run_predict(args, false),
         Commands::PredictProb(args) => run_predict(args, true),
         Commands::Test(args) => run_test(args, false),
@@ -374,10 +374,10 @@ fn main() {
 /// Parse a loss name string to `LossName`.
 fn parse_loss(s: &str) -> Option<LossName> {
     match s.to_lowercase().as_str() {
-        "ns" => Some(LossName::NS),
-        "hs" => Some(LossName::HS),
-        "softmax" => Some(LossName::SOFTMAX),
-        "ova" | "one-vs-all" | "ovr" => Some(LossName::OVA),
+        "ns" => Some(LossName::NegativeSampling),
+        "hs" => Some(LossName::HierarchicalSoftmax),
+        "softmax" => Some(LossName::Softmax),
+        "ova" | "one-vs-all" | "ovr" => Some(LossName::OneVsAll),
         _ => None,
     }
 }
@@ -438,7 +438,7 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
     let mut args = FTArgs::default();
 
     // Apply model-specific defaults before user overrides.
-    if model_name == ModelName::SUP {
+    if model_name == ModelName::Supervised {
         args.apply_supervised_defaults();
     } else {
         args.model = model_name;
@@ -864,8 +864,8 @@ fn run_dump(args: DumpArgs) {
             writeln!(out, "minCount {}", a.min_count).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "neg {}", a.neg).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "wordNgrams {}", a.word_ngrams).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "loss {}", a.loss_to_string()).unwrap_or_else(|_| process::exit(1));
-            writeln!(out, "model {}", a.model_to_string()).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "loss {}", a.loss).unwrap_or_else(|_| process::exit(1));
+            writeln!(out, "model {}", a.model).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "bucket {}", a.bucket).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "minn {}", a.minn).unwrap_or_else(|_| process::exit(1));
             writeln!(out, "maxn {}", a.maxn).unwrap_or_else(|_| process::exit(1));

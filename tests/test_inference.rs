@@ -1006,8 +1006,8 @@ fn test_train_matrix_dimensions() {
     let mut args2 = Args::default();
     args2.input = path2_str.clone();
     args2.output = "/dev/null".to_string();
-    args2.model = ModelName::CBOW;
-    args2.loss = LossName::NS;
+    args2.model = ModelName::Cbow;
+    args2.loss = LossName::NegativeSampling;
     args2.dim = 10;
     args2.epoch = 1;
     args2.min_count = 1;
@@ -1390,7 +1390,7 @@ fn test_config_matrix_supervised() {
             minn: 2,
             maxn: 4,
             bucket: 100,
-            loss: LossName::SOFTMAX,
+            loss: LossName::Softmax,
             label: "subwords",
         },
         Config {
@@ -1398,7 +1398,7 @@ fn test_config_matrix_supervised() {
             minn: 0,
             maxn: 0,
             bucket: 0,
-            loss: LossName::SOFTMAX,
+            loss: LossName::Softmax,
             label: "no-subwords",
         },
         Config {
@@ -1406,7 +1406,7 @@ fn test_config_matrix_supervised() {
             minn: 0,
             maxn: 0,
             bucket: 0,
-            loss: LossName::SOFTMAX,
+            loss: LossName::Softmax,
             label: "dim=1",
         },
         Config {
@@ -1414,7 +1414,7 @@ fn test_config_matrix_supervised() {
             minn: 0,
             maxn: 0,
             bucket: 0,
-            loss: LossName::SOFTMAX,
+            loss: LossName::Softmax,
             label: "dim=5",
         },
         Config {
@@ -1422,7 +1422,7 @@ fn test_config_matrix_supervised() {
             minn: 0,
             maxn: 0,
             bucket: 0,
-            loss: LossName::HS,
+            loss: LossName::HierarchicalSoftmax,
             label: "dim=5+HS",
         },
     ];
@@ -1480,9 +1480,9 @@ fn test_config_matrix_unsupervised() {
     let data = unsupervised_train_data();
 
     let configs = [
-        (ModelName::CBOW, 5, "CBOW-dim5"),
-        (ModelName::SG, 5, "SG-dim5"),
-        (ModelName::CBOW, 1, "CBOW-dim1"),
+        (ModelName::Cbow, 5, "CBOW-dim5"),
+        (ModelName::SkipGram, 5, "SG-dim5"),
+        (ModelName::Cbow, 1, "CBOW-dim1"),
     ];
 
     for &(model_type, dim, label) in &configs {
@@ -1493,7 +1493,7 @@ fn test_config_matrix_unsupervised() {
         args.input = path_str;
         args.output = "/dev/null".to_string();
         args.model = model_type;
-        args.loss = LossName::NS;
+        args.loss = LossName::NegativeSampling;
         args.dim = dim;
         args.epoch = 1;
         args.min_count = 1;

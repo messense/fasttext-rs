@@ -3,6 +3,7 @@
 // Extracted from src/args.rs inline tests. These test the public
 // API for Args hyperparameter configuration.
 
+use std::convert::TryFrom;
 use std::io::Cursor;
 
 use fasttext::args::{Args, LossName, MetricName, ModelName};
@@ -22,8 +23,8 @@ fn test_args_defaults() {
     assert_eq!(args.min_count_label, 0);
     assert_eq!(args.neg, 5);
     assert_eq!(args.word_ngrams, 1);
-    assert_eq!(args.loss, LossName::NS);
-    assert_eq!(args.model, ModelName::SG);
+    assert_eq!(args.loss, LossName::NegativeSampling);
+    assert_eq!(args.model, ModelName::SkipGram);
     assert_eq!(args.bucket, 2_000_000);
     assert_eq!(args.minn, 3);
     assert_eq!(args.maxn, 6);
@@ -54,8 +55,8 @@ fn test_args_supervised_overrides() {
     let mut args = Args::default();
     args.apply_supervised_defaults();
 
-    assert_eq!(args.model, ModelName::SUP);
-    assert_eq!(args.loss, LossName::SOFTMAX);
+    assert_eq!(args.model, ModelName::Supervised);
+    assert_eq!(args.loss, LossName::Softmax);
     assert_eq!(args.min_count, 1);
     assert_eq!(args.minn, 0);
     assert_eq!(args.maxn, 0);
@@ -143,8 +144,8 @@ fn test_args_binary_serialization_nondefault() {
     args.min_count = 3;
     args.neg = 10;
     args.word_ngrams = 2;
-    args.loss = LossName::SOFTMAX;
-    args.model = ModelName::SUP;
+    args.loss = LossName::Softmax;
+    args.model = ModelName::Supervised;
     args.bucket = 500_000;
     args.minn = 2;
     args.maxn = 5;
@@ -165,8 +166,8 @@ fn test_args_binary_serialization_nondefault() {
     assert_eq!(args2.min_count, 3);
     assert_eq!(args2.neg, 10);
     assert_eq!(args2.word_ngrams, 2);
-    assert_eq!(args2.loss, LossName::SOFTMAX);
-    assert_eq!(args2.model, ModelName::SUP);
+    assert_eq!(args2.loss, LossName::Softmax);
+    assert_eq!(args2.model, ModelName::Supervised);
     assert_eq!(args2.bucket, 500_000);
     assert_eq!(args2.minn, 2);
     assert_eq!(args2.maxn, 5);
@@ -184,8 +185,8 @@ fn test_args_binary_serialization_field_order() {
     args.min_count = 4;
     args.neg = 5;
     args.word_ngrams = 6;
-    args.loss = LossName::SOFTMAX; // = 3
-    args.model = ModelName::SUP; // = 3
+    args.loss = LossName::Softmax; // = 3
+    args.model = ModelName::Supervised; // = 3
     args.bucket = 9;
     args.minn = 10;
     args.maxn = 11;
@@ -271,68 +272,52 @@ fn test_args_binary_load_truncated() {
 }
 #[test]
 fn test_model_name_values() {
-    assert_eq!(ModelName::CBOW as i32, 1);
-    assert_eq!(ModelName::SG as i32, 2);
-    assert_eq!(ModelName::SUP as i32, 3);
+    assert_eq!(ModelName::Cbow as i32, 1);
+    assert_eq!(ModelName::SkipGram as i32, 2);
+    assert_eq!(ModelName::Supervised as i32, 3);
 }
 
 #[test]
 fn test_loss_name_values() {
-    assert_eq!(LossName::HS as i32, 1);
-    assert_eq!(LossName::NS as i32, 2);
-    assert_eq!(LossName::SOFTMAX as i32, 3);
-    assert_eq!(LossName::OVA as i32, 4);
+    assert_eq!(LossName::HierarchicalSoftmax as i32, 1);
+    assert_eq!(LossName::NegativeSampling as i32, 2);
+    assert_eq!(LossName::Softmax as i32, 3);
+    assert_eq!(LossName::OneVsAll as i32, 4);
 }
 
 #[test]
-fn test_model_name_from_i32() {
-    assert_eq!(ModelName::from_i32(1), Some(ModelName::CBOW));
-    assert_eq!(ModelName::from_i32(2), Some(ModelName::SG));
-    assert_eq!(ModelName::from_i32(3), Some(ModelName::SUP));
-    assert_eq!(ModelName::from_i32(0), None);
-    assert_eq!(ModelName::from_i32(4), None);
-    assert_eq!(ModelName::from_i32(-1), None);
+fn test_model_name_try_from_i32() {
+    assert_eq!(ModelName::try_from(1), Ok(ModelName::Cbow));
+    assert_eq!(ModelName::try_from(2), Ok(ModelName::SkipGram));
+    assert_eq!(ModelName::try_from(3), Ok(ModelName::Supervised));
+    assert!(ModelName::try_from(0).is_err());
+    assert!(ModelName::try_from(4).is_err());
+    assert!(ModelName::try_from(-1).is_err());
 }
 
 #[test]
-fn test_loss_name_from_i32() {
-    assert_eq!(LossName::from_i32(1), Some(LossName::HS));
-    assert_eq!(LossName::from_i32(2), Some(LossName::NS));
-    assert_eq!(LossName::from_i32(3), Some(LossName::SOFTMAX));
-    assert_eq!(LossName::from_i32(4), Some(LossName::OVA));
-    assert_eq!(LossName::from_i32(0), None);
-    assert_eq!(LossName::from_i32(5), None);
-    assert_eq!(LossName::from_i32(-1), None);
+fn test_loss_name_try_from_i32() {
+    assert_eq!(LossName::try_from(1), Ok(LossName::HierarchicalSoftmax));
+    assert_eq!(LossName::try_from(2), Ok(LossName::NegativeSampling));
+    assert_eq!(LossName::try_from(3), Ok(LossName::Softmax));
+    assert_eq!(LossName::try_from(4), Ok(LossName::OneVsAll));
+    assert!(LossName::try_from(0).is_err());
+    assert!(LossName::try_from(5).is_err());
+    assert!(LossName::try_from(-1).is_err());
 }
 #[test]
-fn test_loss_to_string() {
-    let mut args = Args::default();
-
-    args.loss = LossName::HS;
-    assert_eq!(args.loss_to_string(), "hs");
-
-    args.loss = LossName::NS;
-    assert_eq!(args.loss_to_string(), "ns");
-
-    args.loss = LossName::SOFTMAX;
-    assert_eq!(args.loss_to_string(), "softmax");
-
-    args.loss = LossName::OVA;
-    assert_eq!(args.loss_to_string(), "one-vs-all");
+fn test_loss_display() {
+    assert_eq!(LossName::HierarchicalSoftmax.to_string(), "hs");
+    assert_eq!(LossName::NegativeSampling.to_string(), "ns");
+    assert_eq!(LossName::Softmax.to_string(), "softmax");
+    assert_eq!(LossName::OneVsAll.to_string(), "one-vs-all");
 }
 
 #[test]
-fn test_model_to_string() {
-    let mut args = Args::default();
-
-    args.model = ModelName::CBOW;
-    assert_eq!(args.model_to_string(), "cbow");
-
-    args.model = ModelName::SG;
-    assert_eq!(args.model_to_string(), "sg");
-
-    args.model = ModelName::SUP;
-    assert_eq!(args.model_to_string(), "sup");
+fn test_model_display() {
+    assert_eq!(ModelName::Cbow.to_string(), "cbow");
+    assert_eq!(ModelName::SkipGram.to_string(), "sg");
+    assert_eq!(ModelName::Supervised.to_string(), "sup");
 }
 #[test]
 fn test_autotune_metric_name_default() {
@@ -398,7 +383,12 @@ fn test_autotune_metric_name_unknown() {
 }
 #[test]
 fn test_args_binary_all_loss_types() {
-    for loss in &[LossName::HS, LossName::NS, LossName::SOFTMAX, LossName::OVA] {
+    for loss in &[
+        LossName::HierarchicalSoftmax,
+        LossName::NegativeSampling,
+        LossName::Softmax,
+        LossName::OneVsAll,
+    ] {
         let mut args = Args::default();
         args.loss = *loss;
 
@@ -415,7 +405,7 @@ fn test_args_binary_all_loss_types() {
 
 #[test]
 fn test_args_binary_all_model_types() {
-    for model in &[ModelName::CBOW, ModelName::SG, ModelName::SUP] {
+    for model in &[ModelName::Cbow, ModelName::SkipGram, ModelName::Supervised] {
         let mut args = Args::default();
         args.model = *model;
 

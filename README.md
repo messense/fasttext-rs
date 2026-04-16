@@ -26,7 +26,7 @@ use fasttext::args::{Args, ModelName};
 
 let mut args = Args::default();
 args.input = "data.txt".to_string();
-args.model = ModelName::SUP;
+args.model = ModelName::Supervised;
 args.epoch = 25;
 args.lr = 1.0;
 

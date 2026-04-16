@@ -229,7 +229,7 @@ impl AutotuneStrategy {
         }
 
         // loss: always softmax for supervised classification
-        args.loss = LossName::SOFTMAX;
+        args.loss = LossName::Softmax;
 
         args
     }

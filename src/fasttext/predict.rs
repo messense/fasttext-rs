@@ -159,7 +159,7 @@ impl FastText {
 
         // Apply the appropriate normalization based on loss type.
         match self.args.loss {
-            LossName::OVA => {
+            LossName::OneVsAll => {
                 // One-vs-all: independent sigmoid per class.
                 let tables = &self.loss_tables;
                 for i in 0..osz {

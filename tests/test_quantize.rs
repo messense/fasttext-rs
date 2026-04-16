@@ -100,8 +100,8 @@ fn test_quantize_unsupervised_rejected() {
     let mut args = Args::default();
     args.input = path_str;
     args.output = "/dev/null".to_string();
-    args.model = ModelName::CBOW;
-    args.loss = LossName::NS;
+    args.model = ModelName::Cbow;
+    args.loss = LossName::NegativeSampling;
     args.dim = 10;
     args.epoch = 1;
     args.min_count = 1;

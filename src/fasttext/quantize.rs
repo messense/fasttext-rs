@@ -66,7 +66,7 @@ impl FastText {
     /// 4. If `qargs.qout`: create a `QuantMatrix` from the output.
     /// 5. Set `quant=true`, update `args.qout`.
     pub fn quantize(&mut self, qargs: &Args) -> Result<()> {
-        if self.args.model != ModelName::SUP {
+        if self.args.model != ModelName::Supervised {
             return Err(FastTextError::InvalidArgument(
                 "For now we only support quantization of supervised models".to_string(),
             ));
