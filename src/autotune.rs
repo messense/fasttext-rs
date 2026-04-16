@@ -513,6 +513,7 @@ impl Autotune {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
     use super::*;
     use crate::args::Args;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -925,9 +926,9 @@ mod tests {
         let mut rng = MinstdRng::new(7);
         for _ in 0..100 {
             let v = update_arg_gauss(10.0, 5.0, 15.0, 3.0, 1.0, 0.0, false, &mut rng);
-            assert!(v >= 5.0 && v <= 15.0, "Value {} out of [5, 15]", v);
+            assert!((5.0..=15.0).contains(&v), "Value {} out of [5, 15]", v);
             let vi = update_arg_gauss_i32(10, 5, 15, 3.0, 1.0, 0.0, false, &mut rng);
-            assert!(vi >= 5 && vi <= 15, "Value {} out of [5, 15]", vi);
+            assert!((5..=15).contains(&vi), "Value {} out of [5, 15]", vi);
         }
     }
 

@@ -56,9 +56,9 @@ pub fn std_log(x: f32) -> f32 {
 #[derive(Debug, Clone)]
 pub struct LossTables {
     /// Sigmoid table: 513 entries, index i → sigmoid( i*2*MAX_SIGMOID/512 − MAX_SIGMOID ).
-    pub sigmoid_table: Vec<f32>,
+    sigmoid_table: Vec<f32>,
     /// Log table: 513 entries, index i → log( (i + 1e-5) / 512 ).
-    pub log_table: Vec<f32>,
+    log_table: Vec<f32>,
 }
 
 impl LossTables {
@@ -212,8 +212,8 @@ pub fn find_k_best(k: usize, threshold: f32, heap: &mut Predictions, output: &Ve
 /// Matches C++ `BinaryLogisticLoss`.
 #[derive(Debug)]
 pub struct BinaryLogisticBase {
-    pub tables: Arc<LossTables>,
-    pub wo: Arc<DenseMatrix>,
+    tables: Arc<LossTables>,
+    wo: Arc<DenseMatrix>,
 }
 
 impl BinaryLogisticBase {
@@ -671,8 +671,8 @@ impl Loss for HierarchicalSoftmaxLoss {
 /// Matches C++ `SoftmaxLoss`.
 #[derive(Debug)]
 pub struct SoftmaxLoss {
-    pub tables: Arc<LossTables>,
-    pub wo: Arc<DenseMatrix>,
+    tables: Arc<LossTables>,
+    wo: Arc<DenseMatrix>,
 }
 
 impl SoftmaxLoss {

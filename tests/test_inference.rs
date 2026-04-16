@@ -2,6 +2,8 @@
 //
 // Tests extracted from src/fasttext.rs inline tests. These test the public
 // API for model inference, word/sentence vectors, and evaluation.
+// Allow creating Args with Default::default() and then assigning fields in tests.
+#![allow(clippy::field_reassign_with_default)]
 
 use std::sync::Arc;
 
@@ -1444,8 +1446,8 @@ fn test_config_matrix_supervised() {
         args.loss = cfg.loss;
         args.thread = 1;
 
-        let model =
-            FastText::train(args).expect(&format!("Training [{}] should succeed", cfg.label));
+        let model = FastText::train(args)
+            .unwrap_or_else(|_| panic!("Training [{}] should succeed", cfg.label));
         std::fs::remove_file(&path).ok();
 
         // Predictions should work
@@ -1503,7 +1505,8 @@ fn test_config_matrix_unsupervised() {
         args.maxn = 0;
         args.thread = 1;
 
-        let model = FastText::train(args).expect(&format!("Training [{}] should succeed", label));
+        let model =
+            FastText::train(args).unwrap_or_else(|_| panic!("Training [{}] should succeed", label));
         std::fs::remove_file(&path).ok();
 
         // Word vectors should have correct dimension and be non-zero for known words

@@ -1267,7 +1267,7 @@ mod tests {
         let data = m.data();
         for &val in data {
             assert!(
-                val >= -0.5 && val <= 0.5,
+                (-0.5..=0.5).contains(&val),
                 "Uniform value {} out of range [-0.5, 0.5]",
                 val,
             );

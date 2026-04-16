@@ -51,7 +51,7 @@ impl FastText {
     ///
     /// # EOS handling
     ///
-    /// Unlike [`predict`], this method does **not** automatically append the
+    /// Unlike [`Self::predict`], this method does **not** automatically append the
     /// EOS token (`</s>`).  If you want results identical to `predict(text, …)`,
     /// you must append the EOS token ID yourself before calling this method:
     ///
@@ -63,7 +63,7 @@ impl FastText {
     ///
     /// This design follows C++ fastText's `FastText::predictLine`, where the
     /// EOS token is injected by the stream tokenizer when a newline is read.
-    /// The higher-level [`predict`] method replicates that behavior automatically
+    /// The higher-level [`Self::predict`] method replicates that behavior automatically
     /// (appending EOS after tokenizing the input string), while this lower-level
     /// method gives callers full control over the token sequence.
     pub fn predict_on_words(&self, word_ids: &[i32], k: usize, threshold: f32) -> Vec<Prediction> {

@@ -86,8 +86,8 @@ impl FastText {
     ///
     /// This mirrors the C++ `FastText::getNN`.
     ///
-    /// For repeated queries, use [`precompute_word_vectors`] once and then
-    /// call [`get_nn_with_word_vectors`] to avoid recomputing on every call.
+    /// For repeated queries, use [`Self::precompute_word_vectors`] once and then
+    /// call [`Self::get_nn_with_word_vectors`] to avoid recomputing on every call.
     pub fn get_nn(&self, word: &str, k: usize) -> Vec<(f32, String)> {
         let query = self.get_word_vector(word);
         let word_vectors = self.precompute_word_vectors();
@@ -97,8 +97,8 @@ impl FastText {
 
     /// Find the `k` nearest neighbors using precomputed word vectors.
     ///
-    /// Like [`get_nn`] but takes a precomputed `DenseMatrix` from
-    /// [`precompute_word_vectors`], avoiding the O(nwords × dim) recomputation
+    /// Like [`Self::get_nn`] but takes a precomputed `DenseMatrix` from
+    /// [`Self::precompute_word_vectors`], avoiding the O(nwords × dim) recomputation
     /// on every call.
     pub fn get_nn_with_word_vectors(
         &self,
@@ -121,8 +121,8 @@ impl FastText {
     ///
     /// This mirrors the C++ `FastText::getAnalogies`.
     ///
-    /// For repeated queries, use [`precompute_word_vectors`] once and then
-    /// call [`get_analogies_with_word_vectors`] to avoid recomputing on every call.
+    /// For repeated queries, use [`Self::precompute_word_vectors`] once and then
+    /// call [`Self::get_analogies_with_word_vectors`] to avoid recomputing on every call.
     pub fn get_analogies(
         &self,
         word_a: &str,
@@ -136,8 +136,8 @@ impl FastText {
 
     /// Find analogies using precomputed word vectors.
     ///
-    /// Like [`get_analogies`] but takes a precomputed `DenseMatrix` from
-    /// [`precompute_word_vectors`], avoiding the O(nwords × dim) recomputation
+    /// Like [`Self::get_analogies`] but takes a precomputed `DenseMatrix` from
+    /// [`Self::precompute_word_vectors`], avoiding the O(nwords × dim) recomputation
     /// on every call.
     pub fn get_analogies_with_word_vectors(
         &self,

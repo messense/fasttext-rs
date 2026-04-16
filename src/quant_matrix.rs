@@ -334,17 +334,17 @@ mod tests {
             *v = 100.0;
         }
         // Sub-q 0 (m=0): cstart = 0
-        pq.centroids[0 * dsub as usize] = 1.0; // c0: [1, 0]
-        pq.centroids[0 * dsub as usize + 1] = 0.0;
-        pq.centroids[1 * dsub as usize] = 0.0; // c1: [0, 1]
-        pq.centroids[1 * dsub as usize + 1] = 1.0;
+        pq.centroids[0] = 1.0; // c0: [1, 0]
+        pq.centroids[1] = 0.0;
+        pq.centroids[dsub as usize] = 0.0; // c1: [0, 1]
+        pq.centroids[dsub as usize + 1] = 1.0;
 
         // Sub-q 1 (m=1): cstart = 1 * ksub * dsub = 512
-        let cstart1 = 1 * ksub * dsub as usize;
-        pq.centroids[cstart1 + 0 * dsub as usize] = 2.0; // c0: [2, 0]
-        pq.centroids[cstart1 + 0 * dsub as usize + 1] = 0.0;
-        pq.centroids[cstart1 + 1 * dsub as usize] = 0.0; // c1: [0, 2]
-        pq.centroids[cstart1 + 1 * dsub as usize + 1] = 2.0;
+        let cstart1 = ksub * dsub as usize;
+        pq.centroids[cstart1] = 2.0; // c0: [2, 0]
+        pq.centroids[cstart1 + 1] = 0.0;
+        pq.centroids[cstart1 + dsub as usize] = 0.0; // c1: [0, 2]
+        pq.centroids[cstart1 + dsub as usize + 1] = 2.0;
 
         // codes: row 0=[0,0], row 1=[0,1], row 2=[1,0], row 3=[1,1]
         let codes = vec![0u8, 0, 0, 1, 1, 0, 1, 1];
@@ -601,7 +601,7 @@ mod tests {
         let mut cursor = Cursor::new(&buf);
         let qm2 = QuantMatrix::load(&mut cursor).expect("load should succeed");
 
-        assert_eq!(qm2.qnorm, true);
+        assert!(qm2.qnorm);
         assert_eq!(qm2.m, qm.m);
         assert_eq!(qm2.n, qm.n);
         assert_eq!(qm2.codesize, qm.codesize);

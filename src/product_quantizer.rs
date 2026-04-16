@@ -542,17 +542,17 @@ mod tests {
 
         // Sub-quantizer 0 (m=0): cstart = 0*256*2 = 0
         let cstart0 = 0;
-        pq.centroids[cstart0 + 0 * dsub] = 1.0; // centroid 0, dim 0
-        pq.centroids[cstart0 + 0 * dsub + 1] = 0.0; // centroid 0, dim 1
-        pq.centroids[cstart0 + 1 * dsub] = 0.0; // centroid 1, dim 0
-        pq.centroids[cstart0 + 1 * dsub + 1] = 1.0; // centroid 1, dim 1
+        pq.centroids[cstart0] = 1.0; // centroid 0, dim 0
+        pq.centroids[cstart0 + 1] = 0.0; // centroid 0, dim 1
+        pq.centroids[cstart0 + dsub] = 0.0; // centroid 1, dim 0
+        pq.centroids[cstart0 + dsub + 1] = 1.0; // centroid 1, dim 1
 
         // Sub-quantizer 1 (m=1): cstart = 1*256*2 = 512
-        let cstart1 = 1 * ksub * dsub;
-        pq.centroids[cstart1 + 0 * dsub] = 2.0; // centroid 0, dim 0
-        pq.centroids[cstart1 + 0 * dsub + 1] = 0.0; // centroid 0, dim 1
-        pq.centroids[cstart1 + 1 * dsub] = 0.0; // centroid 1, dim 0
-        pq.centroids[cstart1 + 1 * dsub + 1] = 2.0; // centroid 1, dim 1
+        let cstart1 = ksub * dsub;
+        pq.centroids[cstart1] = 2.0; // centroid 0, dim 0
+        pq.centroids[cstart1 + 1] = 0.0; // centroid 0, dim 1
+        pq.centroids[cstart1 + dsub] = 0.0; // centroid 1, dim 0
+        pq.centroids[cstart1 + dsub + 1] = 2.0; // centroid 1, dim 1
 
         pq
     }
@@ -609,7 +609,7 @@ mod tests {
         // VAL-DICT-015: mulcode must match naive inner product within 1e-6
         let pq = make_known_pq();
 
-        let x_data = vec![0.9f32, 0.1, 0.1, 1.9];
+        let x_data = [0.9f32, 0.1, 0.1, 1.9];
         let mut x = Vector::new(4);
         for (i, &v) in x_data.iter().enumerate() {
             x[i] = v;
@@ -637,7 +637,7 @@ mod tests {
     fn test_pq_mulcode_with_alpha() {
         let pq = make_known_pq();
 
-        let x_data = vec![0.9f32, 0.1, 0.1, 1.9];
+        let x_data = [0.9f32, 0.1, 0.1, 1.9];
         let mut x = Vector::new(4);
         for (i, &v) in x_data.iter().enumerate() {
             x[i] = v;
@@ -661,7 +661,7 @@ mod tests {
     fn test_pq_mulcode_multiple_rows() {
         // codes has two rows (nsubq=2 per row)
         let pq = make_known_pq();
-        let x_data = vec![0.1f32, 0.9, 1.9, 0.1];
+        let x_data = [0.1f32, 0.9, 1.9, 0.1];
         let mut x = Vector::new(4);
         for (i, &v) in x_data.iter().enumerate() {
             x[i] = v;
@@ -731,7 +731,7 @@ mod tests {
         // vector produced by addcode(zeros, codes, t, 1).
         let pq = make_known_pq();
 
-        let x_data = vec![0.3f32, 0.7, 1.1, 0.5];
+        let x_data = [0.3f32, 0.7, 1.1, 0.5];
         let mut x = Vector::new(4);
         for (i, &v) in x_data.iter().enumerate() {
             x[i] = v;
@@ -922,8 +922,8 @@ mod tests {
 
         // 4. Each training point should be assigned code i for both sub-quantizers,
         //    since its sub-vector is the exact centroid at slot i.
-        for i in 0..n as usize {
-            for (m, &code_val) in all_codes[i].iter().enumerate() {
+        for (i, codes_i) in all_codes[..n as usize].iter().enumerate() {
+            for (m, &code_val) in codes_i.iter().enumerate() {
                 assert_eq!(
                     code_val as usize, i,
                     "training point {} sub-quantizer {} should map to code {}",
@@ -934,9 +934,9 @@ mod tests {
 
         // 5. addcode on the code for point i should reconstruct the sub-vectors
         //    of that training point exactly.
-        for i in 0..n as usize {
+        for (i, codes_i) in all_codes[..n as usize].iter().enumerate() {
             let mut reconstructed = Vector::new(dim as usize);
-            pq.addcode(&mut reconstructed, &all_codes[i], 0, 1.0);
+            pq.addcode(&mut reconstructed, codes_i, 0, 1.0);
             let xi = &data[i * dim as usize..(i + 1) * dim as usize];
             for j in 0..dim as usize {
                 assert!(

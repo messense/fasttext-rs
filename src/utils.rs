@@ -290,6 +290,9 @@ mod tests {
     }
 
     #[test]
+    // These values (3.14, 2.71828) are test inputs for float serialization roundtrip, not
+    // mathematical uses of PI or E. We suppress the clippy lint here intentionally.
+    #[allow(clippy::approx_constant)]
     fn test_binary_io_write_read_sequence() {
         // Write multiple values in sequence and read them back
         let mut buf = Vec::new();

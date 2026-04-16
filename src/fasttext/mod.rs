@@ -425,7 +425,7 @@ impl FastText {
 
     /// Write the word vector for `word` into `out`.
     ///
-    /// Like [`get_word_vector`] but avoids allocation by writing into a
+    /// Like [`Self::get_word_vector`] but avoids allocation by writing into a
     /// caller-provided buffer. `out` must have length equal to `self.get_dimension()`.
     ///
     /// # Panics
@@ -543,7 +543,7 @@ impl FastText {
 
     /// Write the sentence vector for `sentence` into `out`.
     ///
-    /// Like [`get_sentence_vector`] but avoids allocation by writing into a
+    /// Like [`Self::get_sentence_vector`] but avoids allocation by writing into a
     /// caller-provided buffer. `out` must have length equal to `self.get_dimension()`.
     ///
     /// # Panics
@@ -619,10 +619,22 @@ impl FastText {
     }
 }
 
+// Helper: clone-like for FastText (creates a copy via save/load), only available in tests.
+impl FastText {
+    #[cfg(test)]
+    pub fn clone_for_test(&self) -> Self {
+        let mut buf = Vec::new();
+        self.save(&mut buf).expect("save for clone");
+        let mut cursor = std::io::Cursor::new(buf);
+        FastText::load(&mut cursor).expect("load for clone")
+    }
+}
+
 // Tests
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
     use super::*;
     use std::io::Cursor;
 
@@ -1435,13 +1447,8 @@ mod tests {
             "sv[0] should be ≈1.0 (normalized direction), got {}",
             sv[0]
         );
-        for i in 1..dim {
-            assert!(
-                sv[i].abs() < 1e-4,
-                "sv[{}] should be ≈0.0, got {}",
-                i,
-                sv[i]
-            );
+        for (i, &sv_i) in sv[1..].iter().enumerate().map(|(i, v)| (i + 1, v)) {
+            assert!(sv_i.abs() < 1e-4, "sv[{}] should be ≈0.0, got {}", i, sv_i);
         }
 
         // Contrast: the raw word vector has norm=2, proving normalization happened
@@ -1776,16 +1783,5 @@ mod tests {
             !model.quant_output.as_ref().unwrap().qnorm,
             "quant_output should have qnorm=false when qnorm flag is not set"
         );
-    }
-}
-
-// Helper trait for tests: clone-like for FastText (creates a copy via save/load)
-impl FastText {
-    #[cfg(test)]
-    pub fn clone_for_test(&self) -> Self {
-        let mut buf = Vec::new();
-        self.save(&mut buf).expect("save for clone");
-        let mut cursor = std::io::Cursor::new(buf);
-        FastText::load(&mut cursor).expect("load for clone")
     }
 }

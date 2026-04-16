@@ -3,6 +3,8 @@
 // Extracted from src/dictionary.rs inline tests. These test the public
 // API for Dictionary tokenization, vocabulary management, subword computation,
 // word n-gram hashing, subsampling discard, and getLine word/label separation.
+// Allow creating Args with Default::default() and then assigning fields in tests.
+#![allow(clippy::field_reassign_with_default)]
 
 use std::sync::Arc;
 
@@ -847,7 +849,7 @@ fn test_subword_computation_utf8_aware() {
     // Each ngram ID should be in valid range [0, bucket) (nwords=0, so IDs are in [0, 100000)).
     for &id in &ngrams {
         assert!(
-            id >= 0 && id < 100000,
+            (0..100000).contains(&id),
             "N-gram ID {} out of range [0, 100000)",
             id
         );
@@ -1568,7 +1570,7 @@ fn test_get_subwords_for_string_in_vocab() {
     dict.init_ngrams();
 
     let wid = dict.get_id("hello").unwrap();
-    let subwords_by_id = dict.get_subwords(wid).clone();
+    let subwords_by_id = dict.get_subwords(wid);
     let subwords_by_str = dict.get_subwords_for_string("hello");
     assert_eq!(
         subwords_by_id, subwords_by_str,
@@ -1634,7 +1636,7 @@ fn test_add_subwords_in_vocab_with_subwords() {
     let mut line = Vec::new();
     dict.add_subwords(&mut line, "hello", wid);
 
-    let expected = dict.get_subwords(wid).clone();
+    let expected = dict.get_subwords(wid);
     assert_eq!(
         line, expected,
         "add_subwords should push all subwords for in-vocab word"

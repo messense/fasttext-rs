@@ -196,15 +196,15 @@ pub struct Model {
     ///
     /// Shared via `Arc` for Hogwild! training; mutation during `update` is done
     /// via a raw-pointer cast (matching C++ fastText's lock-free SGD).
-    pub wi: Arc<DenseMatrix>,
+    pub(crate) wi: Arc<DenseMatrix>,
     /// Loss function (holds the output weight matrix internally).
-    pub loss: Box<dyn Loss>,
+    pub(crate) loss: Box<dyn Loss>,
     /// Whether to normalize the hidden-layer gradient by `1 / |input|`.
     ///
     /// Set to `true` for supervised models, `false` for CBOW/skip-gram.
-    pub normalize_gradient: bool,
+    pub(crate) normalize_gradient: bool,
     /// Model dimension (= `wi.cols()`).
-    pub dim: usize,
+    pub(crate) dim: usize,
 }
 
 impl std::fmt::Debug for Model {
@@ -354,7 +354,7 @@ mod tests {
         let mut rng = MinstdRng::new(42);
         for _ in 0..1000 {
             let v = rng.generate();
-            assert!(v >= 1 && v < MinstdRng::M, "Value out of range: {}", v);
+            assert!((1..MinstdRng::M).contains(&v), "Value out of range: {}", v);
         }
     }
 
@@ -456,13 +456,14 @@ mod tests {
         // Expected: mean of rows 0,1,2 = [(1+5+9)/3, (2+6+10)/3, (3+7+11)/3, (4+8+12)/3]
         //         = [5, 6, 7, 8]
         let expected = [5.0f32, 6.0, 7.0, 8.0];
-        for i in 0..4 {
+        for (i, (&hidden_i, &exp_i)) in state.hidden.data().iter().zip(expected.iter()).enumerate()
+        {
             assert!(
-                (state.hidden[i] - expected[i]).abs() < 1e-5,
+                (hidden_i - exp_i).abs() < 1e-5,
                 "hidden[{}] = {}, expected {}",
                 i,
-                state.hidden[i],
-                expected[i]
+                hidden_i,
+                exp_i
             );
         }
     }
@@ -487,13 +488,14 @@ mod tests {
         model.compute_hidden(&[1i32], &mut state);
 
         let expected = [5.0f32, 9.0, 2.0, 6.0];
-        for i in 0..4 {
+        for (i, (&hidden_i, &exp_i)) in state.hidden.data().iter().zip(expected.iter()).enumerate()
+        {
             assert!(
-                (state.hidden[i] - expected[i]).abs() < 1e-5,
+                (hidden_i - exp_i).abs() < 1e-5,
                 "hidden[{}] = {}, expected {}",
                 i,
-                state.hidden[i],
-                expected[i]
+                hidden_i,
+                exp_i
             );
         }
     }

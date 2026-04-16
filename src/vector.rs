@@ -509,6 +509,8 @@ mod tests {
     }
 
     #[test]
+    // The value -3.14 is used as an arbitrary test float (not PI). Suppress lint.
+    #[allow(clippy::approx_constant)]
     fn test_vector_display() {
         let mut v = Vector::new(3);
         v[0] = 1.0;

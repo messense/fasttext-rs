@@ -2,6 +2,8 @@
 //
 // Extracted from src/args.rs inline tests. These test the public
 // API for Args hyperparameter configuration.
+// Allow creating Args with Default::default() and then assigning fields in tests.
+#![allow(clippy::field_reassign_with_default)]
 
 use std::convert::TryFrom;
 use std::io::Cursor;
