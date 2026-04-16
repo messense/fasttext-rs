@@ -87,6 +87,38 @@ pub fn write_bool<W: Write>(writer: &mut W, value: bool) -> Result<()> {
     Ok(())
 }
 
+/// Apply softmax normalization in-place over `data[..len]`.
+///
+/// Uses max-subtraction for numerical stability, matching the C++ fastText
+/// softmax used in `SoftmaxLoss::compute_output` and the quantized prediction path.
+pub fn softmax_in_place(data: &mut [f32], len: usize) {
+    let slice = &mut data[..len];
+    let max = slice.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut z = 0.0f32;
+    for v in slice.iter_mut() {
+        *v = (*v - max).exp();
+        z += *v;
+    }
+    if z > 0.0 {
+        let inv_z = 1.0 / z;
+        for v in slice.iter_mut() {
+            *v *= inv_z;
+        }
+    }
+}
+
+/// L2-normalize a slice in-place. If the norm is below `1e-8`, the slice is left unchanged.
+pub fn l2_normalize(v: &mut [f32]) {
+    let norm: f32 = v.iter().map(|&x| x * x).sum::<f32>().sqrt();
+    if norm < 1e-8 {
+        return;
+    }
+    let inv = 1.0 / norm;
+    for x in v.iter_mut() {
+        *x *= inv;
+    }
+}
+
 /// Wrapper for `f32` that implements `Ord` (NaN-safe, treats NaN as equal).
 ///
 /// Used for ordering f32 values in binary heaps and sorted collections

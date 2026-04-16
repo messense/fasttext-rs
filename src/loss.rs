@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::matrix::{DenseMatrix, Matrix};
 use crate::model::{MinstdRng, Predictions, State};
-use crate::utils::OrdF32;
+use crate::utils::{self, OrdF32};
 use crate::vector::Vector;
 
 // Constants
@@ -735,24 +735,7 @@ impl Loss for SoftmaxLoss {
             }
             *out_i = d;
         }
-        // Max-subtraction for numerical stability
-        let mut max = f32::NEG_INFINITY;
-        for out_i in &out[..osz] {
-            if *out_i > max {
-                max = *out_i;
-            }
-        }
-        let mut z = 0.0f32;
-        for out_i in out[..osz].iter_mut() {
-            *out_i = (*out_i - max).exp();
-            z += *out_i;
-        }
-        if z > 0.0 {
-            let inv_z = 1.0 / z;
-            for out_i in out[..osz].iter_mut() {
-                *out_i *= inv_z;
-            }
-        }
+        utils::softmax_in_place(out, osz);
     }
 }
 
