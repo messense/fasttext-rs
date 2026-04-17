@@ -393,36 +393,7 @@ impl Matrix for DenseMatrix {
             self.n
         );
 
-        // Try SIMD-accelerated path for common dimensions
-        #[cfg(target_arch = "aarch64")]
-        {
-            match self.n {
-                512 | 256 | 64 | 32 | 16 => {
-                    crate::simd::average_rows_fast_neon(x, rows, self);
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        #[cfg(target_arch = "x86_64")]
-        {
-            match self.n {
-                512 | 256 | 64 | 32 | 16 => {
-                    if is_x86_feature_detected!("avx2") {
-                        // SAFETY: AVX2 availability verified by is_x86_feature_detected!
-                        unsafe { crate::simd::average_rows_fast_avx2(x, rows, self) };
-                    } else {
-                        crate::simd::average_rows_fast_sse2(x, rows, self);
-                    }
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        // Scalar fallback
-        crate::simd::average_rows_scalar(x, rows, self);
+        crate::simd::average_rows_impl(x, rows, self);
     }
 
     /// **Note:** Values are written in little-endian byte order.  C++ fastText
@@ -482,10 +453,6 @@ impl Matrix for DenseMatrix {
 mod tests {
     use super::*;
     use crate::simd::{add_vector_scalar, dot_scalar};
-    #[cfg(target_arch = "x86_64")]
-    use crate::simd::{
-        add_vector_simd_avx2, average_rows_fast_avx2, average_rows_scalar, dot_simd_avx2,
-    };
     use std::io::Cursor;
 
     #[test]
@@ -1420,18 +1387,12 @@ mod tests {
         assert!((m.dot_row(&v, 0) - 100.0).abs() < 0.01);
     }
 
-    #[cfg(target_arch = "x86_64")]
     #[test]
-    fn test_dense_matrix_avx2_consistency() {
-        if !is_x86_feature_detected!("avx2") {
-            // AVX2 not available on this CPU, skip runtime checks
-            return;
-        }
-        for &dim in &[16_i64, 32, 64, 256, 512] {
+    fn test_dense_matrix_simd_dispatch_consistency() {
+        for &dim in &[1_i64, 3, 7, 15, 16, 32, 64, 100, 256, 512] {
             let mut m = DenseMatrix::new(3, dim);
             let n = dim as usize;
 
-            // Fill matrix with deterministic values
             for i in 0..3 {
                 for j in 0..n {
                     *m.at_mut(i as i64, j as i64) = ((i * n + j) as f32) * 0.01;
@@ -1443,75 +1404,52 @@ mod tests {
                 v[j] = ((n - j) as f32) * 0.01;
             }
 
-            // Test dot_simd_avx2 vs scalar for dot_row
+            // dot_impl vs scalar
             let row1 = m.row(1);
-            let avx2_dot = unsafe { dot_simd_avx2(row1, v.data()) };
+            let simd_dot = crate::simd::dot_impl(row1, v.data());
             let scalar_dot = dot_scalar(row1, v.data());
-            let tolerance = scalar_dot.abs().max(avx2_dot.abs()).max(1.0) * f32::EPSILON * n as f32;
+            let tolerance = scalar_dot.abs().max(simd_dot.abs()).max(1.0) * f32::EPSILON * n as f32;
             assert!(
-                (avx2_dot - scalar_dot).abs() < tolerance,
-                "dot_simd_avx2 vs scalar mismatch for dim={}: AVX2={}, scalar={}",
+                (simd_dot - scalar_dot).abs() < tolerance,
+                "dot mismatch for dim={}: simd={}, scalar={}",
                 dim,
-                avx2_dot,
+                simd_dot,
                 scalar_dot,
             );
 
-            // Test add_vector_simd_avx2 vs scalar for add_vector_to_row
-            let mut dest_avx2: Vec<f32> = (0..n).map(|j| j as f32 * 0.5).collect();
+            // add_vector_impl vs scalar
+            let mut dest_simd: Vec<f32> = (0..n).map(|j| j as f32 * 0.5).collect();
             let mut dest_scalar: Vec<f32> = (0..n).map(|j| j as f32 * 0.5).collect();
             let src: Vec<f32> = (0..n).map(|j| j as f32 * 0.1).collect();
-            unsafe { add_vector_simd_avx2(&mut dest_avx2, &src, 2.0) };
+            crate::simd::add_vector_impl(&mut dest_simd, &src, 2.0);
             add_vector_scalar(&mut dest_scalar, &src, 2.0);
             for j in 0..n {
-                let mag = dest_avx2[j].abs().max(dest_scalar[j].abs()).max(1.0);
+                let mag = dest_simd[j].abs().max(dest_scalar[j].abs()).max(1.0);
                 let tol = mag * f32::EPSILON * 4.0;
                 assert!(
-                    (dest_avx2[j] - dest_scalar[j]).abs() < tol,
-                    "add_vector_simd_avx2 vs scalar mismatch at j={} for dim={}: AVX2={}, scalar={}",
+                    (dest_simd[j] - dest_scalar[j]).abs() < tol,
+                    "add_vector mismatch at j={} for dim={}: simd={}, scalar={}",
                     j,
                     dim,
-                    dest_avx2[j],
+                    dest_simd[j],
                     dest_scalar[j],
                 );
             }
 
-            // Test add_vector_simd_avx2 vs scalar for add_row_to_vector
-            let mut v_avx2 = Vector::new(n);
-            let mut v_scalar = Vector::new(n);
-            for j in 0..n {
-                v_avx2[j] = j as f32 * 0.1;
-                v_scalar[j] = j as f32 * 0.1;
-            }
-            let row2 = m.row(2);
-            unsafe { add_vector_simd_avx2(v_avx2.data_mut(), row2, 0.7) };
-            add_vector_scalar(v_scalar.data_mut(), row2, 0.7);
-            for j in 0..n {
-                let mag = v_avx2[j].abs().max(v_scalar[j].abs()).max(1.0);
-                let tol = mag * f32::EPSILON * 4.0;
-                assert!(
-                    (v_avx2[j] - v_scalar[j]).abs() < tol,
-                    "add_vector_simd_avx2 (add_row) vs scalar mismatch at j={} for dim={}: AVX2={}, scalar={}",
-                    j,
-                    dim,
-                    v_avx2[j],
-                    v_scalar[j],
-                );
-            }
-
-            // Test average_rows_fast_avx2 vs scalar for average_rows_to_vector
-            let mut v_avg_avx2 = Vector::new(n);
+            // average_rows_impl vs scalar
+            let mut v_avg_simd = Vector::new(n);
             let mut v_avg_scalar = Vector::new(n);
-            unsafe { average_rows_fast_avx2(&mut v_avg_avx2, &[0, 1, 2], &m) };
-            average_rows_scalar(&mut v_avg_scalar, &[0, 1, 2], &m);
+            crate::simd::average_rows_impl(&mut v_avg_simd, &[0, 1, 2], &m);
+            crate::simd::average_rows_scalar(&mut v_avg_scalar, &[0, 1, 2], &m);
             for j in 0..n {
-                let mag = v_avg_avx2[j].abs().max(v_avg_scalar[j].abs()).max(1.0);
+                let mag = v_avg_simd[j].abs().max(v_avg_scalar[j].abs()).max(1.0);
                 let tol = mag * f32::EPSILON * n as f32;
                 assert!(
-                    (v_avg_avx2[j] - v_avg_scalar[j]).abs() < tol,
-                    "average_rows_fast_avx2 vs scalar mismatch at j={} for dim={}: AVX2={}, scalar={}",
+                    (v_avg_simd[j] - v_avg_scalar[j]).abs() < tol,
+                    "average_rows mismatch at j={} for dim={}: simd={}, scalar={}",
                     j,
                     dim,
-                    v_avg_avx2[j],
+                    v_avg_simd[j],
                     v_avg_scalar[j],
                 );
             }
