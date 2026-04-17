@@ -1595,7 +1595,7 @@ mod tests {
         let path = write_unique_temp_file(&data, "quant_train");
         let mut args = Args::default();
         args.input = path.clone();
-        args.output = std::path::PathBuf::from("/dev/null");
+        args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
         args.apply_supervised_defaults();
         args.dim = dim;
         args.epoch = epoch;

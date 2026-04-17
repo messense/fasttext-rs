@@ -554,7 +554,7 @@ mod tests {
     fn make_fast_supervised_args(input: &std::path::Path) -> Args {
         let mut args = Args::default();
         args.input = input.to_path_buf();
-        args.output = std::path::PathBuf::from("/dev/null");
+        args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
         args.apply_supervised_defaults();
         args.dim = 10;
         args.epoch = 3;
@@ -981,7 +981,8 @@ mod tests {
         let train_path = write_temp(&make_train_data(), "missing_val");
         let mut args = make_fast_supervised_args(&train_path);
         args.autotune_duration = 1;
-        args.autotune_validation_file = std::path::PathBuf::from("/nonexistent/path/validation.txt");
+        args.autotune_validation_file =
+            std::path::PathBuf::from("/nonexistent/path/validation.txt");
         std::fs::remove_file(&train_path).ok();
 
         let result = Autotune::run(args);

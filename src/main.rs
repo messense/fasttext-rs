@@ -531,8 +531,7 @@ fn run_train(train_args: TrainArgs, model_name: ModelName) {
     let args = build_ft_args(train_args, model_name);
 
     let has_autotune = args.has_autotune();
-    let model_size_constrained =
-        has_autotune && !args.autotune_model_size.is_empty();
+    let model_size_constrained = has_autotune && !args.autotune_model_size.is_empty();
 
     let result = if has_autotune {
         fasttext::autotune::Autotune::run(args)

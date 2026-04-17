@@ -965,7 +965,7 @@ fn test_train_matrix_dimensions() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(&path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1007,7 +1007,7 @@ fn test_train_matrix_dimensions() {
 
     let mut args2 = Args::default();
     args2.input = std::path::PathBuf::from(&path2_str);
-    args2.output = std::path::PathBuf::from("/dev/null");
+    args2.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args2.model = ModelName::Cbow;
     args2.loss = LossName::NegativeSampling;
     args2.dim = 10;
@@ -1058,7 +1058,7 @@ fn test_meter_test_command() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(&train_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 5;
@@ -1124,7 +1124,7 @@ fn test_meter_test_command_empty_file() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(&train_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1167,7 +1167,7 @@ fn test_train_no_labels() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(&path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1338,7 +1338,7 @@ fn test_get_ngram_vectors_with_subwords() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1435,7 +1435,7 @@ fn test_config_matrix_supervised() {
 
         let mut args = Args::default();
         args.input = std::path::PathBuf::from(path_str);
-        args.output = std::path::PathBuf::from("/dev/null");
+        args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
         args.apply_supervised_defaults();
         args.dim = cfg.dim;
         args.epoch = 3;
@@ -1493,7 +1493,7 @@ fn test_config_matrix_unsupervised() {
 
         let mut args = Args::default();
         args.input = std::path::PathBuf::from(path_str);
-        args.output = std::path::PathBuf::from("/dev/null");
+        args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
         args.model = model_type;
         args.loss = LossName::NegativeSampling;
         args.dim = dim;

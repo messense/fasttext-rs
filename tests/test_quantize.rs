@@ -68,7 +68,7 @@ fn train_small_supervised(dim: i32, epoch: i32, bucket: i32) -> (FastText, std::
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = dim;
     args.epoch = epoch;
@@ -101,7 +101,7 @@ fn test_quantize_unsupervised_rejected() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.model = ModelName::Cbow;
     args.loss = LossName::NegativeSampling;
     args.dim = 10;
@@ -215,7 +215,7 @@ fn test_quantize_smaller_file() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 50;
     args.epoch = 1;
@@ -338,7 +338,7 @@ fn test_quantize_retrain() {
 
     let mut args = Args::default();
     args.input = std::path::PathBuf::from(&path_str);
-    args.output = std::path::PathBuf::from("/dev/null");
+    args.output = std::path::PathBuf::from(if cfg!(windows) { "NUL" } else { "/dev/null" });
     args.apply_supervised_defaults();
     args.dim = 16;
     args.epoch = 5;
