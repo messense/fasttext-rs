@@ -171,6 +171,26 @@ struct TrainArgs {
     /// Random seed
     #[arg(long)]
     seed: Option<i32>,
+
+    /// Validation file for autotune
+    #[arg(long, name = "autotune-validation-file")]
+    autotune_validation_file: Option<String>,
+
+    /// Autotune optimization metric (default: f1)
+    #[arg(long, name = "autotune-metric")]
+    autotune_metric: Option<String>,
+
+    /// Number of predictions for autotune evaluation (default: 1)
+    #[arg(long, name = "autotune-predictions")]
+    autotune_predictions: Option<i32>,
+
+    /// Autotune time budget in seconds (default: 300)
+    #[arg(long, name = "autotune-duration")]
+    autotune_duration: Option<i32>,
+
+    /// Max model size for autotune (e.g. "2M", "100K")
+    #[arg(long, name = "autotune-model-size")]
+    autotune_model_size: Option<String>,
 }
 
 /// Arguments for predict / predict-prob.
@@ -470,6 +490,21 @@ fn apply_train_overrides(args: &mut FTArgs, train_args: &TrainArgs) {
     if let Some(v) = train_args.seed {
         args.seed = v;
     }
+    if let Some(ref v) = train_args.autotune_validation_file {
+        args.autotune_validation_file = PathBuf::from(v.as_str());
+    }
+    if let Some(ref v) = train_args.autotune_metric {
+        args.autotune_metric = v.clone();
+    }
+    if let Some(v) = train_args.autotune_predictions {
+        args.autotune_predictions = v;
+    }
+    if let Some(v) = train_args.autotune_duration {
+        args.autotune_duration = v;
+    }
+    if let Some(ref v) = train_args.autotune_model_size {
+        args.autotune_model_size = v.clone();
+    }
 }
 
 /// Build `FTArgs` from a `TrainArgs`, applying model-specific defaults first.
@@ -495,10 +530,20 @@ fn run_train(train_args: TrainArgs, model_name: ModelName) {
     let output_base = train_args.output.clone();
     let args = build_ft_args(train_args, model_name);
 
-    match FastText::train(args) {
+    let has_autotune = args.has_autotune();
+    let model_size_constrained =
+        has_autotune && !args.autotune_model_size.is_empty();
+
+    let result = if has_autotune {
+        fasttext::autotune::Autotune::run(args)
+    } else {
+        FastText::train(args)
+    };
+
+    match result {
         Ok(model) => {
-            // C++ fastText appends ".bin" to the output path automatically.
-            let model_path = format!("{}.bin", output_base);
+            let ext = if model_size_constrained { "ftz" } else { "bin" };
+            let model_path = format!("{}.{}", output_base, ext);
             if let Err(e) = model.save_model(&model_path) {
                 eprintln!("Error saving model to '{}': {}", model_path, e);
                 process::exit(1);

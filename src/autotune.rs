@@ -254,11 +254,6 @@ impl AutotuneStrategy {
     fn find_index(val: i32, choices: &[i32]) -> usize {
         choices.iter().position(|&x| x == val).unwrap_or(0)
     }
-
-    /// Return the number of trials requested so far.
-    pub fn trials(&self) -> u32 {
-        self.trials
-    }
 }
 
 // Autotune
@@ -445,8 +440,7 @@ impl Autotune {
             std::process::id(),
             SIZE_CHECK_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        let tmp_str = tmp_path.to_string_lossy().to_string();
-        if model.save_model(&tmp_str).is_err() {
+        if model.save_model(&tmp_path).is_err() {
             std::fs::remove_file(&tmp_path).ok();
             return None;
         }
@@ -472,7 +466,7 @@ impl Autotune {
             )),
             Some(mut final_args) => {
                 final_args.verbose = original_verbose;
-                FastText::train(final_args)
+                FastText::train_with_abort(final_args, Arc::new(AtomicBool::new(false)))
             }
         }
     }

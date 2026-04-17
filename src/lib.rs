@@ -1,5 +1,5 @@
 pub mod args;
-pub(crate) mod autotune;
+pub mod autotune;
 pub mod dictionary;
 pub mod error;
 pub mod fasttext;
