@@ -2,19 +2,32 @@
 name = "fasttext"
 version = "0.7.8"
 authors = ["Messense Lv <messense@icloud.com>"]
-categories = ["api-bindings", "external-ffi-bindings"]
-description = "fastText Rust binding"
-edition = "2018"
+categories = ["text-processing", "science"]
+description = "fastText pure Rust implementation"
+edition = "2021"
 license = "MIT"
 keywords = ["fastText", "text", "classify"]
 readme = "README.md"
 repository = "https://github.com/messense/fasttext-rs"
 
 [dependencies]
-cfasttext-sys = { path = "cfasttext-sys", version = "0.7.8" }
+rayon = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"], optional = true }
 
-[workspace]
-members = [
-    ".",
-    "cfasttext-sys"
-]
+[features]
+cli = ["clap"]
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+cfasttext-sys = { path = "cfasttext-sys" }
+expect-test = "1"
+
+[[bench]]
+name = "bench_comparison"
+harness = false
+
+[[bin]]
+name = "fasttext"
+path = "src/main.rs"
+required-features = ["cli"]
