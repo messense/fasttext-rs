@@ -6,7 +6,27 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use std::convert::TryFrom;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Write};
+
+fn read_i32_le<R: Read>(r: &mut R) -> i32 {
+    let mut buf = [0u8; 4];
+    r.read_exact(&mut buf).unwrap();
+    i32::from_le_bytes(buf)
+}
+
+fn read_f64_le<R: Read>(r: &mut R) -> f64 {
+    let mut buf = [0u8; 8];
+    r.read_exact(&mut buf).unwrap();
+    f64::from_le_bytes(buf)
+}
+
+fn write_i32_le<W: Write>(w: &mut W, val: i32) {
+    w.write_all(&val.to_le_bytes()).unwrap();
+}
+
+fn write_f64_le<W: Write>(w: &mut W, val: f64) {
+    w.write_all(&val.to_le_bytes()).unwrap();
+}
 
 use fasttext::args::{Args, LossName, MetricName, ModelName};
 #[test]
@@ -200,19 +220,19 @@ fn test_args_binary_serialization_field_order() {
 
     // Read back as raw i32 values
     let mut cursor = Cursor::new(&buf);
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 1); // dim
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 2); // ws
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 3); // epoch
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 4); // minCount
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 5); // neg
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 6); // wordNgrams
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 3); // loss (SOFTMAX=3)
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 3); // model (SUP=3)
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 9); // bucket
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 10); // minn
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 11); // maxn
-    assert_eq!(fasttext::utils::read_i32(&mut cursor).unwrap(), 12); // lrUpdateRate
-    let t_val = fasttext::utils::read_f64(&mut cursor).unwrap();
+    assert_eq!(read_i32_le(&mut cursor), 1); // dim
+    assert_eq!(read_i32_le(&mut cursor), 2); // ws
+    assert_eq!(read_i32_le(&mut cursor), 3); // epoch
+    assert_eq!(read_i32_le(&mut cursor), 4); // minCount
+    assert_eq!(read_i32_le(&mut cursor), 5); // neg
+    assert_eq!(read_i32_le(&mut cursor), 6); // wordNgrams
+    assert_eq!(read_i32_le(&mut cursor), 3); // loss (SOFTMAX=3)
+    assert_eq!(read_i32_le(&mut cursor), 3); // model (SUP=3)
+    assert_eq!(read_i32_le(&mut cursor), 9); // bucket
+    assert_eq!(read_i32_le(&mut cursor), 10); // minn
+    assert_eq!(read_i32_le(&mut cursor), 11); // maxn
+    assert_eq!(read_i32_le(&mut cursor), 12); // lrUpdateRate
+    let t_val = read_f64_le(&mut cursor);
     assert!((t_val - 0.5).abs() < f64::EPSILON); // t
 }
 
@@ -220,19 +240,19 @@ fn test_args_binary_serialization_field_order() {
 fn test_args_binary_load_invalid_loss() {
     // Create a buffer with an invalid loss value
     let mut buf = Vec::new();
-    fasttext::utils::write_i32(&mut buf, 100).unwrap(); // dim
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // ws
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // epoch
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // minCount
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // neg
-    fasttext::utils::write_i32(&mut buf, 1).unwrap(); // wordNgrams
-    fasttext::utils::write_i32(&mut buf, 99).unwrap(); // loss = INVALID
-    fasttext::utils::write_i32(&mut buf, 1).unwrap(); // model
-    fasttext::utils::write_i32(&mut buf, 2000000).unwrap(); // bucket
-    fasttext::utils::write_i32(&mut buf, 3).unwrap(); // minn
-    fasttext::utils::write_i32(&mut buf, 6).unwrap(); // maxn
-    fasttext::utils::write_i32(&mut buf, 100).unwrap(); // lrUpdateRate
-    fasttext::utils::write_f64(&mut buf, 1e-4).unwrap(); // t
+    write_i32_le(&mut buf, 100); // dim
+    write_i32_le(&mut buf, 5); // ws
+    write_i32_le(&mut buf, 5); // epoch
+    write_i32_le(&mut buf, 5); // minCount
+    write_i32_le(&mut buf, 5); // neg
+    write_i32_le(&mut buf, 1); // wordNgrams
+    write_i32_le(&mut buf, 99); // loss = INVALID
+    write_i32_le(&mut buf, 1); // model
+    write_i32_le(&mut buf, 2000000); // bucket
+    write_i32_le(&mut buf, 3); // minn
+    write_i32_le(&mut buf, 6); // maxn
+    write_i32_le(&mut buf, 100); // lrUpdateRate
+    write_f64_le(&mut buf, 1e-4); // t
 
     let mut args = Args::default();
     let mut cursor = Cursor::new(&buf);
@@ -243,19 +263,19 @@ fn test_args_binary_load_invalid_loss() {
 #[test]
 fn test_args_binary_load_invalid_model() {
     let mut buf = Vec::new();
-    fasttext::utils::write_i32(&mut buf, 100).unwrap(); // dim
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // ws
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // epoch
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // minCount
-    fasttext::utils::write_i32(&mut buf, 5).unwrap(); // neg
-    fasttext::utils::write_i32(&mut buf, 1).unwrap(); // wordNgrams
-    fasttext::utils::write_i32(&mut buf, 2).unwrap(); // loss = NS (valid)
-    fasttext::utils::write_i32(&mut buf, 99).unwrap(); // model = INVALID
-    fasttext::utils::write_i32(&mut buf, 2000000).unwrap(); // bucket
-    fasttext::utils::write_i32(&mut buf, 3).unwrap(); // minn
-    fasttext::utils::write_i32(&mut buf, 6).unwrap(); // maxn
-    fasttext::utils::write_i32(&mut buf, 100).unwrap(); // lrUpdateRate
-    fasttext::utils::write_f64(&mut buf, 1e-4).unwrap(); // t
+    write_i32_le(&mut buf, 100); // dim
+    write_i32_le(&mut buf, 5); // ws
+    write_i32_le(&mut buf, 5); // epoch
+    write_i32_le(&mut buf, 5); // minCount
+    write_i32_le(&mut buf, 5); // neg
+    write_i32_le(&mut buf, 1); // wordNgrams
+    write_i32_le(&mut buf, 2); // loss = NS (valid)
+    write_i32_le(&mut buf, 99); // model = INVALID
+    write_i32_le(&mut buf, 2000000); // bucket
+    write_i32_le(&mut buf, 3); // minn
+    write_i32_le(&mut buf, 6); // maxn
+    write_i32_le(&mut buf, 100); // lrUpdateRate
+    write_f64_le(&mut buf, 1e-4); // t
 
     let mut args = Args::default();
     let mut cursor = Cursor::new(&buf);

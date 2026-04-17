@@ -8,6 +8,16 @@
 
 use std::sync::Arc;
 
+/// FNV-1a hash matching C++ fastText Dictionary::hash (for test verification).
+fn fnv1a_hash(s: &[u8]) -> u32 {
+    let mut h: u32 = 2166136261;
+    for &byte in s {
+        h ^= byte as i8 as i32 as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    h
+}
+
 use fasttext::args::{Args, ModelName};
 use fasttext::dictionary::{Dictionary, EntryType, BOW, EOS, EOW, MAX_LINE_SIZE};
 
@@ -876,7 +886,7 @@ fn test_subword_computation_utf8_aware() {
 
     // Verify the n-grams involving 'é' use raw bytes (UTF-8 bytes, not codepoints).
     // The hash of "fé>" should use the raw bytes of é (0xC3, 0xA9).
-    let expected_hash_of_f_e_gt = (fasttext::utils::hash("fé>".as_bytes()) % 100000) as i32;
+    let expected_hash_of_f_e_gt = (fnv1a_hash("fé>".as_bytes()) % 100000) as i32;
     assert!(
         ngrams.contains(&expected_hash_of_f_e_gt),
         "N-grams should contain hash('fé>') = {}",
@@ -985,8 +995,8 @@ fn test_word_ngram_hash_bigram() {
     args.word_ngrams = 2;
     let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
-    let h1 = fasttext::utils::hash(b"hello") as i32;
-    let h2 = fasttext::utils::hash(b"world") as i32;
+    let h1 = fnv1a_hash(b"hello") as i32;
+    let h2 = fnv1a_hash(b"world") as i32;
     let hashes = vec![h1, h2];
 
     let mut line = Vec::new();
@@ -1016,9 +1026,9 @@ fn test_word_ngram_hash_trigram() {
     args.word_ngrams = 3;
     let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
-    let h1 = fasttext::utils::hash(b"the") as i32;
-    let h2 = fasttext::utils::hash(b"quick") as i32;
-    let h3 = fasttext::utils::hash(b"brown") as i32;
+    let h1 = fnv1a_hash(b"the") as i32;
+    let h2 = fnv1a_hash(b"quick") as i32;
+    let h3 = fnv1a_hash(b"brown") as i32;
     let hashes = vec![h1, h2, h3];
 
     let mut line = Vec::new();
@@ -1064,10 +1074,7 @@ fn test_word_ngram_no_ngrams_for_word_ngrams_1() {
     args.word_ngrams = 1;
     let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
-    let hashes = vec![
-        fasttext::utils::hash(b"hello") as i32,
-        fasttext::utils::hash(b"world") as i32,
-    ];
+    let hashes = vec![fnv1a_hash(b"hello") as i32, fnv1a_hash(b"world") as i32];
     let mut line = Vec::new();
     dict.add_word_ngrams(&mut line, &hashes, 1);
 
@@ -1082,10 +1089,7 @@ fn test_word_ngram_zero_bucket() {
     args.word_ngrams = 2;
     let dict = Dictionary::new_with_capacity(Arc::new(args), 1024);
 
-    let hashes = vec![
-        fasttext::utils::hash(b"hello") as i32,
-        fasttext::utils::hash(b"world") as i32,
-    ];
+    let hashes = vec![fnv1a_hash(b"hello") as i32, fnv1a_hash(b"world") as i32];
     let mut line = Vec::new();
     dict.add_word_ngrams(&mut line, &hashes, 2);
 
@@ -1109,7 +1113,7 @@ fn test_word_ngram_ids_in_range() {
 
     let hashes: Vec<i32> = ["a", "b", "c"]
         .iter()
-        .map(|w| fasttext::utils::hash(w.as_bytes()) as i32)
+        .map(|w| fnv1a_hash(w.as_bytes()) as i32)
         .collect();
     let mut line = Vec::new();
     dict.add_word_ngrams(&mut line, &hashes, 3);
@@ -1500,8 +1504,8 @@ fn test_getline_with_word_ngrams() {
     assert!(words.contains(&wid_hello), "words should contain hello ID");
     assert!(words.contains(&wid_world), "words should contain world ID");
     // The bigram hash should be appended.
-    let h1 = fasttext::utils::hash(b"hello") as i32;
-    let h2 = fasttext::utils::hash(b"world") as i32;
+    let h1 = fnv1a_hash(b"hello") as i32;
+    let h2 = fnv1a_hash(b"world") as i32;
     let h_bigram = (h1 as i64 as u64)
         .wrapping_mul(116049371u64)
         .wrapping_add(h2 as i64 as u64);
