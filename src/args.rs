@@ -3,6 +3,7 @@
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::utils;
@@ -102,8 +103,8 @@ impl fmt::Display for LossName {
 /// All fastText hyperparameters.
 #[derive(Debug, Clone)]
 pub struct Args {
-    pub input: String,
-    pub output: String,
+    pub input: PathBuf,
+    pub output: PathBuf,
     pub lr: f64,
     pub lr_update_rate: i32,
     pub dim: i32,
@@ -122,7 +123,7 @@ pub struct Args {
     pub t: f64,
     pub label: String,
     pub verbose: i32,
-    pub pretrained_vectors: String,
+    pub pretrained_vectors: PathBuf,
     pub save_output: bool,
     pub seed: i32,
     pub qout: bool,
@@ -130,7 +131,7 @@ pub struct Args {
     pub qnorm: bool,
     pub cutoff: usize,
     pub dsub: usize,
-    pub autotune_validation_file: String,
+    pub autotune_validation_file: PathBuf,
     pub autotune_metric: String,
     pub autotune_predictions: i32,
     pub autotune_duration: i32,
@@ -140,8 +141,8 @@ pub struct Args {
 impl Default for Args {
     fn default() -> Self {
         Args {
-            input: String::new(),
-            output: String::new(),
+            input: PathBuf::new(),
+            output: PathBuf::new(),
             lr: 0.05,
             lr_update_rate: 100,
             dim: 100,
@@ -160,7 +161,7 @@ impl Default for Args {
             t: 1e-4,
             label: "__label__".to_string(),
             verbose: 2,
-            pretrained_vectors: String::new(),
+            pretrained_vectors: PathBuf::new(),
             save_output: false,
             seed: 0,
 
@@ -170,7 +171,7 @@ impl Default for Args {
             cutoff: 0,
             dsub: 2,
 
-            autotune_validation_file: String::new(),
+            autotune_validation_file: PathBuf::new(),
             autotune_metric: "f1".to_string(),
             autotune_predictions: 1,
             autotune_duration: 300,
@@ -187,7 +188,7 @@ impl Args {
 
     /// Returns true if autotune is enabled (validation file is non-empty).
     pub fn has_autotune(&self) -> bool {
-        !self.autotune_validation_file.is_empty()
+        !self.autotune_validation_file.as_os_str().is_empty()
     }
 
     /// Apply supervised mode overrides.

@@ -1593,11 +1593,9 @@ mod tests {
     fn train_small_supervised(dim: i32, epoch: i32, bucket: i32) -> (FastText, std::path::PathBuf) {
         let data = supervised_train_data();
         let path = write_unique_temp_file(&data, "quant_train");
-        let path_str = path.to_str().unwrap().to_string();
-
         let mut args = Args::default();
-        args.input = path_str;
-        args.output = "/dev/null".to_string();
+        args.input = path.clone();
+        args.output = std::path::PathBuf::from("/dev/null");
         args.apply_supervised_defaults();
         args.dim = dim;
         args.epoch = epoch;

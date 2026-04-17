@@ -162,7 +162,7 @@ impl FastText {
     /// The pruned_input weights are updated in-place via Hogwild! SGD.
     fn retrain_after_prune(&self, pruned_input: Arc<DenseMatrix>, qargs: &Args) -> Result<()> {
         let input_path = &qargs.input;
-        if input_path.is_empty() {
+        if input_path.as_os_str().is_empty() {
             return Err(FastTextError::InvalidArgument(
                 "retrain=true requires qargs.input to be set to the training data path".to_string(),
             ));
@@ -170,7 +170,7 @@ impl FastText {
 
         // Build retrain args from qargs values.
         let mut retrain_args = (*self.args).clone();
-        retrain_args.input = input_path.to_string();
+        retrain_args.input = input_path.clone();
         retrain_args.epoch = qargs.epoch;
         retrain_args.lr = qargs.lr;
         retrain_args.thread = qargs.thread;

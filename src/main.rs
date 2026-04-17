@@ -17,6 +17,7 @@
 //   dump                  – dump args/dict/input/output in text format
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::path::PathBuf;
 use std::process;
 
 use clap::{Args, Parser, Subcommand};
@@ -461,7 +462,7 @@ fn apply_train_overrides(args: &mut FTArgs, train_args: &TrainArgs) {
         args.verbose = v;
     }
     if let Some(ref v) = train_args.pretrained_vectors {
-        args.pretrained_vectors = v.clone();
+        args.pretrained_vectors = PathBuf::from(v.as_str());
     }
     if train_args.save_output {
         args.save_output = true;
@@ -481,8 +482,8 @@ fn build_ft_args(train_args: TrainArgs, model_name: ModelName) -> FTArgs {
         args.model = model_name;
     }
 
-    args.input = train_args.input.clone();
-    args.output = train_args.output.clone();
+    args.input = PathBuf::from(&train_args.input);
+    args.output = PathBuf::from(&train_args.output);
     apply_train_overrides(&mut args, &train_args);
 
     args

@@ -99,8 +99,8 @@ fn test_train_supervised_e2e() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 5;
@@ -149,8 +149,8 @@ fn test_train_cbow() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.model = ModelName::Cbow;
     args.loss = LossName::NegativeSampling;
     args.dim = 10;
@@ -200,8 +200,8 @@ fn test_train_skipgram() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.model = ModelName::SkipGram;
     args.loss = LossName::NegativeSampling;
     args.dim = 10;
@@ -280,8 +280,8 @@ fn test_train_lr_decay_actual() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 5;
     args.epoch = 3;
@@ -308,8 +308,8 @@ fn test_parallel_hogwild_training() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 3;
@@ -352,8 +352,8 @@ fn test_hogwild_weights_finite() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.model = fasttext::args::ModelName::Cbow;
     args.loss = fasttext::args::LossName::NegativeSampling;
     args.dim = 10;
@@ -384,8 +384,8 @@ fn test_atomic_loss_accumulation_multithreaded() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 3;
@@ -428,8 +428,8 @@ fn test_training_abort() {
 
     let handle = std::thread::spawn(move || {
         let mut args = Args::default();
-        args.input = path_str.clone();
-        args.output = "/dev/null".to_string();
+        args.input = std::path::PathBuf::from(&path_str);
+        args.output = std::path::PathBuf::from("/dev/null");
         args.apply_supervised_defaults();
         args.dim = 10;
         args.epoch = 500; // Very large epoch count so training won't finish naturally.
@@ -471,8 +471,8 @@ fn test_training_abort_via_handle() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 500; // Large epoch count so training won't finish naturally.
@@ -510,8 +510,8 @@ fn test_abort_idempotent() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 5;
     args.epoch = 2;
@@ -542,8 +542,8 @@ fn test_deterministic_training() {
 
     let make_args = |path: &str| {
         let mut args = Args::default();
-        args.input = path.to_string();
-        args.output = "/dev/null".to_string();
+        args.input = std::path::PathBuf::from(path);
+        args.output = std::path::PathBuf::from("/dev/null");
         args.apply_supervised_defaults();
         args.dim = 10;
         args.epoch = 3;
@@ -600,8 +600,8 @@ fn test_train_save_load_roundtrip() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 5;
@@ -681,8 +681,8 @@ fn test_train_empty_file() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -719,8 +719,8 @@ fn test_train_zero_epochs() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 0;
@@ -761,8 +761,8 @@ fn test_min_count_filtering() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -825,8 +825,8 @@ fn test_training_loss_decreases() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 10;
@@ -898,8 +898,8 @@ fn test_pretrained_vectors() {
     ]);
 
     let mut args = Args::default();
-    args.input = train_path.to_str().unwrap().to_string();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(train_path.to_str().unwrap());
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = dim as i32;
     args.epoch = 0; // epoch=0: no training, just init + load pretrained
@@ -907,7 +907,7 @@ fn test_pretrained_vectors() {
     args.bucket = 0;
     args.thread = 1;
     args.seed = 42;
-    args.pretrained_vectors = vec_path.to_str().unwrap().to_string();
+    args.pretrained_vectors = std::path::PathBuf::from(vec_path.to_str().unwrap());
 
     let model = FastText::train(args).expect("Training with pretrained vectors should succeed");
     std::fs::remove_file(&train_path).ok();
@@ -963,14 +963,14 @@ fn test_pretrained_vectors_missing_file() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
     args.min_count = 1;
     args.bucket = 0;
-    args.pretrained_vectors = "/nonexistent/path/vectors.vec".to_string();
+    args.pretrained_vectors = std::path::PathBuf::from("/nonexistent/path/vectors.vec");
 
     let result = FastText::train(args);
     std::fs::remove_file(&path).ok();
@@ -1003,8 +1003,8 @@ fn test_train_integration_roundtrip() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 5;
@@ -1054,8 +1054,8 @@ fn test_train_integration_edge_cases() {
     // 1. Empty file -> error
     let empty_path = write_temp_file("");
     let mut args = Args::default();
-    args.input = empty_path.to_str().unwrap().to_string();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(empty_path.to_str().unwrap());
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 5;
     args.epoch = 1;
@@ -1070,8 +1070,8 @@ fn test_train_integration_edge_cases() {
     // 2. No labels for supervised -> error
     let no_label_path = write_temp_file("word1 word2 word3\nmore text here\n");
     let mut args2 = Args::default();
-    args2.input = no_label_path.to_str().unwrap().to_string();
-    args2.output = "/dev/null".to_string();
+    args2.input = std::path::PathBuf::from(no_label_path.to_str().unwrap());
+    args2.output = std::path::PathBuf::from("/dev/null");
     args2.apply_supervised_defaults();
     args2.dim = 5;
     args2.epoch = 1;
@@ -1087,8 +1087,8 @@ fn test_train_integration_edge_cases() {
     let data = supervised_train_data();
     let p = write_temp_file(&data);
     let mut args3 = Args::default();
-    args3.input = p.to_str().unwrap().to_string();
-    args3.output = "/dev/null".to_string();
+    args3.input = std::path::PathBuf::from(p.to_str().unwrap());
+    args3.output = std::path::PathBuf::from("/dev/null");
     args3.apply_supervised_defaults();
     args3.dim = 5;
     args3.epoch = 0;

@@ -964,8 +964,8 @@ fn test_train_matrix_dimensions() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1006,8 +1006,8 @@ fn test_train_matrix_dimensions() {
     let path2_str = path2.to_str().unwrap().to_string();
 
     let mut args2 = Args::default();
-    args2.input = path2_str.clone();
-    args2.output = "/dev/null".to_string();
+    args2.input = std::path::PathBuf::from(&path2_str);
+    args2.output = std::path::PathBuf::from("/dev/null");
     args2.model = ModelName::Cbow;
     args2.loss = LossName::NegativeSampling;
     args2.dim = 10;
@@ -1057,8 +1057,8 @@ fn test_meter_test_command() {
     let train_str = train_path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = train_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&train_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 5;
@@ -1123,8 +1123,8 @@ fn test_meter_test_command_empty_file() {
     let train_str = train_path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = train_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&train_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1166,8 +1166,8 @@ fn test_train_no_labels() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1337,8 +1337,8 @@ fn test_get_ngram_vectors_with_subwords() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str;
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 10;
     args.epoch = 1;
@@ -1434,8 +1434,8 @@ fn test_config_matrix_supervised() {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.input = path_str;
-        args.output = "/dev/null".to_string();
+        args.input = std::path::PathBuf::from(path_str);
+        args.output = std::path::PathBuf::from("/dev/null");
         args.apply_supervised_defaults();
         args.dim = cfg.dim;
         args.epoch = 3;
@@ -1492,8 +1492,8 @@ fn test_config_matrix_unsupervised() {
         let path_str = path.to_str().unwrap().to_string();
 
         let mut args = Args::default();
-        args.input = path_str;
-        args.output = "/dev/null".to_string();
+        args.input = std::path::PathBuf::from(path_str);
+        args.output = std::path::PathBuf::from("/dev/null");
         args.model = model_type;
         args.loss = LossName::NegativeSampling;
         args.dim = dim;

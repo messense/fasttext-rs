@@ -1,6 +1,7 @@
 // Autotune and AutotuneStrategy: Gaussian perturbation, time-boxed hyperparameter search
 
 use std::io::BufReader;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -334,8 +335,8 @@ impl Autotune {
     /// - `FastTextError::InvalidArgument` — validation file not set or no trial succeeded.
     /// - `FastTextError::IoError` — validation file cannot be opened.
     pub fn run(autotune_args: Args) -> Result<FastText> {
-        let val_path = autotune_args.autotune_validation_file.to_string();
-        if val_path.is_empty() {
+        let val_path = autotune_args.autotune_validation_file.clone();
+        if val_path.as_os_str().is_empty() {
             return Err(FastTextError::InvalidArgument(
                 "autotune validation file is not set".to_string(),
             ));
@@ -482,7 +483,7 @@ impl Autotune {
     /// - `"f1"` — macro F1 score (`meter.f1()`)
     /// - `"f1:LABEL"` — per-label F1 score for the named label
     /// - Other values — falls back to macro F1
-    fn evaluate(model: &FastText, val_path: &str, k: usize, metric: &str) -> Result<f64> {
+    fn evaluate(model: &FastText, val_path: &Path, k: usize, metric: &str) -> Result<f64> {
         let file = std::fs::File::open(val_path).map_err(FastTextError::IoError)?;
         let mut reader = BufReader::new(file);
         let meter = model.test_model(&mut reader, k, 0.0)?;
@@ -556,10 +557,10 @@ mod tests {
     }
 
     /// Build Args configured for fast supervised training (for tests).
-    fn make_fast_supervised_args(input: &str) -> Args {
+    fn make_fast_supervised_args(input: &std::path::Path) -> Args {
         let mut args = Args::default();
-        args.input = input.to_string();
-        args.output = "/dev/null".to_string();
+        args.input = input.to_path_buf();
+        args.output = std::path::PathBuf::from("/dev/null");
         args.apply_supervised_defaults();
         args.dim = 10;
         args.epoch = 3;
@@ -582,7 +583,7 @@ mod tests {
             "has_autotune() should be false when validation file is empty"
         );
         assert!(
-            args.autotune_validation_file.is_empty(),
+            args.autotune_validation_file.as_os_str().is_empty(),
             "Default autotune_validation_file should be empty"
         );
     }
@@ -591,7 +592,7 @@ mod tests {
     #[test]
     fn test_autotune_activation_when_validation_file_set() {
         let mut args = Args::default();
-        args.autotune_validation_file = "some_validation_file.txt".to_string();
+        args.autotune_validation_file = std::path::PathBuf::from("some_validation_file.txt");
         assert!(
             args.has_autotune(),
             "has_autotune() should be true when validation file is set"
@@ -647,10 +648,10 @@ mod tests {
         let val_data = make_val_data();
         let val_path = write_temp(&val_data, "time_budget_val");
 
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 1; // fast per-trial training
         args.dim = 5;
-        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_validation_file = val_path.clone();
         args.autotune_duration = 3; // 3-second budget
 
         let start = Instant::now();
@@ -699,10 +700,10 @@ mod tests {
         let val_path = write_temp(&val_data, "tunes_params_val");
 
         // Start with epoch=1 (suboptimal) so higher epochs beat the baseline.
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 1; // deliberately suboptimal
         args.dim = 5;
-        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_validation_file = val_path.clone();
         args.autotune_duration = 4; // 4 seconds: enough for several trials
 
         let result = Autotune::run(args);
@@ -749,7 +750,7 @@ mod tests {
     #[test]
     fn test_autotune_strategy_explores_params() {
         let train_path = write_temp(&make_train_data(), "strategy_dummy");
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 5;
         args.autotune_duration = 300;
         std::fs::remove_file(&train_path).ok();
@@ -790,10 +791,10 @@ mod tests {
         let val_data = make_val_data();
         let val_path = write_temp(&val_data, "returns_model_val");
 
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 2;
         args.dim = 5;
-        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_validation_file = val_path.clone();
         args.autotune_duration = 3;
 
         let result = Autotune::run(args);
@@ -837,10 +838,10 @@ mod tests {
         let val_path = write_temp(&val_data, "minimal_dur_val");
 
         // Minimal hyperparameters so training is very fast.
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 1;
         args.dim = 5;
-        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_validation_file = val_path.clone();
         args.autotune_duration = 1; // 1-second budget
 
         let result = Autotune::run(args);
@@ -864,7 +865,7 @@ mod tests {
     #[test]
     fn test_autotune_strategy_update_best() {
         let train_path = write_temp(&make_train_data(), "strategy_update");
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 5;
         args.autotune_duration = 300;
         std::fs::remove_file(&train_path).ok();
@@ -968,7 +969,7 @@ mod tests {
     #[test]
     fn test_autotune_requires_validation_file() {
         let train_path = write_temp(&make_train_data(), "no_val_file");
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.autotune_duration = 1;
         // No validation file set!
         std::fs::remove_file(&train_path).ok();
@@ -984,9 +985,9 @@ mod tests {
     #[test]
     fn test_autotune_missing_validation_file() {
         let train_path = write_temp(&make_train_data(), "missing_val");
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.autotune_duration = 1;
-        args.autotune_validation_file = "/nonexistent/path/validation.txt".to_string();
+        args.autotune_validation_file = std::path::PathBuf::from("/nonexistent/path/validation.txt");
         std::fs::remove_file(&train_path).ok();
 
         let result = Autotune::run(args);
@@ -1029,10 +1030,10 @@ mod tests {
         let val_data = make_val_data();
         let val_path = write_temp(&val_data, "label_f1_val");
 
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 1;
         args.dim = 5;
-        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_validation_file = val_path.clone();
         args.autotune_duration = 3;
         // Use per-label F1 metric for the __label__sports class.
         args.autotune_metric = "f1:__label__sports".to_string();
@@ -1058,10 +1059,10 @@ mod tests {
         let val_data = make_val_data();
         let val_path = write_temp(&val_data, "default_f1_val");
 
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 1;
         args.dim = 5;
-        args.autotune_validation_file = val_path.to_str().unwrap().to_string();
+        args.autotune_validation_file = val_path.clone();
         args.autotune_duration = 3;
         args.autotune_metric = "f1".to_string(); // explicit default
 
@@ -1088,7 +1089,7 @@ mod tests {
     fn test_autotune_model_size_check_mechanism() {
         let train_data = make_train_data();
         let train_path = write_temp(&train_data, "size_check_mech");
-        let mut args = make_fast_supervised_args(train_path.to_str().unwrap());
+        let mut args = make_fast_supervised_args(&train_path);
         args.epoch = 1;
         args.dim = 5;
         let mut model = FastText::train(args).expect("Training should succeed");

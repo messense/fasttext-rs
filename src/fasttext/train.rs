@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -136,7 +137,7 @@ impl FastText {
         let input = Arc::new({
             let mut m = DenseMatrix::new(nwords + bucket, dim);
             m.uniform(1.0 / args.dim as f32, args.seed);
-            if !args.pretrained_vectors.is_empty() {
+            if !args.pretrained_vectors.as_os_str().is_empty() {
                 Self::load_pretrained_vectors(&args.pretrained_vectors, args, dict, &mut m)?;
             }
             m
@@ -224,7 +225,7 @@ impl FastText {
         abort_flag: Arc<AtomicBool>,
         epoch_loss_tracker: Option<Arc<Mutex<Vec<f32>>>>,
     ) -> Result<Self> {
-        if args.input.is_empty() {
+        if args.input.as_os_str().is_empty() {
             return Err(FastTextError::InvalidArgument(
                 "Input file path is empty".to_string(),
             ));
@@ -374,7 +375,7 @@ impl FastText {
     /// - First line: `<n_words> <dim>` (header)
     /// - Each subsequent line: `<word> <val1> <val2> ... <val_dim>`
     fn load_pretrained_vectors(
-        path: &str,
+        path: &Path,
         args: &Args,
         dict: &Dictionary,
         input: &mut DenseMatrix,
@@ -505,7 +506,7 @@ impl FastText {
 
     /// Open the training input file and seek to this thread's starting position.
     fn open_thread_reader(
-        input_path: &str,
+        input_path: &Path,
         thread_id: usize,
         n_threads: usize,
     ) -> Result<BufReader<std::fs::File>> {

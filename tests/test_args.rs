@@ -34,8 +34,8 @@ fn test_args_defaults() {
     let args = Args::default();
 
     // Basic parameters
-    assert_eq!(args.input, "");
-    assert_eq!(args.output, "");
+    assert!(args.input.as_os_str().is_empty());
+    assert!(args.output.as_os_str().is_empty());
     assert!((args.lr - 0.05).abs() < f64::EPSILON);
     assert_eq!(args.lr_update_rate, 100);
     assert_eq!(args.dim, 100);
@@ -54,7 +54,7 @@ fn test_args_defaults() {
     assert!((args.t - 1e-4).abs() < f64::EPSILON);
     assert_eq!(args.label, "__label__");
     assert_eq!(args.verbose, 2);
-    assert_eq!(args.pretrained_vectors, "");
+    assert!(args.pretrained_vectors.as_os_str().is_empty());
     assert!(!args.save_output);
     assert_eq!(args.seed, 0);
 
@@ -66,7 +66,7 @@ fn test_args_defaults() {
     assert_eq!(args.dsub, 2);
 
     // Autotune parameters
-    assert_eq!(args.autotune_validation_file, "");
+    assert!(args.autotune_validation_file.as_os_str().is_empty());
     assert_eq!(args.autotune_metric, "f1");
     assert_eq!(args.autotune_predictions, 1);
     assert_eq!(args.autotune_duration, 300);
@@ -107,7 +107,7 @@ fn test_args_supervised_bucket_nonzero_with_word_ngrams() {
 fn test_args_supervised_bucket_nonzero_with_autotune() {
     // With autotune enabled => bucket should NOT be zeroed
     let mut args = Args::default();
-    args.autotune_validation_file = "valid.txt".to_string();
+    args.autotune_validation_file = std::path::PathBuf::from("valid.txt");
     args.apply_supervised_defaults();
     // maxn is 0 and wordNgrams is 1, but autotune is enabled
     assert_eq!(args.bucket, 2_000_000);
@@ -118,7 +118,7 @@ fn test_has_autotune() {
     assert!(!args.has_autotune());
 
     let mut args = Args::default();
-    args.autotune_validation_file = "validation.txt".to_string();
+    args.autotune_validation_file = std::path::PathBuf::from("validation.txt");
     assert!(args.has_autotune());
 }
 #[test]

@@ -67,8 +67,8 @@ fn train_small_supervised(dim: i32, epoch: i32, bucket: i32) -> (FastText, std::
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str;
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = dim;
     args.epoch = epoch;
@@ -100,8 +100,8 @@ fn test_quantize_unsupervised_rejected() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str;
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.model = ModelName::Cbow;
     args.loss = LossName::NegativeSampling;
     args.dim = 10;
@@ -214,8 +214,8 @@ fn test_quantize_smaller_file() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str;
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 50;
     args.epoch = 1;
@@ -337,8 +337,8 @@ fn test_quantize_retrain() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut args = Args::default();
-    args.input = path_str.clone();
-    args.output = "/dev/null".to_string();
+    args.input = std::path::PathBuf::from(&path_str);
+    args.output = std::path::PathBuf::from("/dev/null");
     args.apply_supervised_defaults();
     args.dim = 16;
     args.epoch = 5;
@@ -357,7 +357,7 @@ fn test_quantize_retrain() {
     qargs.dsub = 2;
     qargs.cutoff = cutoff;
     qargs.retrain = true;
-    qargs.input = path_str.clone();
+    qargs.input = std::path::PathBuf::from(&path_str);
     qargs.epoch = 1;
     qargs.lr = 0.05;
     qargs.thread = 1;
