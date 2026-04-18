@@ -13,7 +13,7 @@ Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fasttext = "0.7"
+fasttext = "0.8"
 ```
 
 ## Usage
