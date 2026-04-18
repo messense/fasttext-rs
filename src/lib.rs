@@ -13,6 +13,5 @@ pub(crate) mod simd;
 pub(crate) mod utils;
 pub(crate) mod vector;
 
-pub use fasttext::{
-    FastText, Prediction, TrainingHandle, FASTTEXT_FILEFORMAT_MAGIC_INT32, FASTTEXT_VERSION,
-};
+pub use error::{FastTextError, Result};
+pub use fasttext::{FastText, Prediction, TrainingHandle};
