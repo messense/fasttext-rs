@@ -274,6 +274,27 @@ impl Model {
         heap
     }
 
+    /// Predict from a caller-supplied hidden representation.
+    ///
+    /// The quantized inference path computes `state.hidden` from a
+    /// `QuantMatrix`, so it cannot call [`Self::predict`] (which derives the
+    /// hidden vector from the dense `wi` matrix). Delegating to `Loss::predict`
+    /// here keeps hierarchical softmax, softmax, and OVA consistent with the
+    /// non-quantized path.
+    pub(crate) fn predict_with_hidden(
+        &self,
+        k: i32,
+        threshold: f32,
+        state: &mut State,
+    ) -> Predictions {
+        let mut heap = Predictions::new();
+        if k <= 0 {
+            return heap;
+        }
+        self.loss.predict(k, threshold, &mut heap, state);
+        heap
+    }
+
     // update
 
     /// Perform one SGD update step.
