@@ -639,6 +639,24 @@ mod tests {
         }
     }
 
+    /// `predict_with_hidden` returns empty vec for non-positive k.
+    #[test]
+    fn test_predict_with_hidden_non_positive_k_returns_empty() {
+        let wi = Arc::new(DenseMatrix::new(3, 4));
+        let wo = Arc::new(DenseMatrix::new(2, 4));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
+        let model = Model::new(Arc::clone(&wi), loss, false);
+        let mut state = State::new(4, 2, 0);
+
+        for k in [0i32, -1, i32::MIN] {
+            let preds = model.predict_with_hidden(k, 0.0, &mut state);
+            assert!(preds.is_empty(), "k={} should return empty predictions", k);
+        }
+    }
+
     /// `predict` returns empty vec for empty input.
     #[test]
     fn test_predict_empty_input_returns_empty() {
