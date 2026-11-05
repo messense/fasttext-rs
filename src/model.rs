@@ -274,6 +274,27 @@ impl Model {
         heap
     }
 
+    /// Predict from a caller-supplied hidden representation.
+    ///
+    /// The quantized inference path computes `state.hidden` from a
+    /// `QuantMatrix`, so it cannot call [`Self::predict`] (which derives the
+    /// hidden vector from the dense `wi` matrix). Delegating to `Loss::predict`
+    /// here keeps hierarchical softmax, softmax, and OVA consistent with the
+    /// non-quantized path.
+    pub(crate) fn predict_with_hidden(
+        &self,
+        k: i32,
+        threshold: f32,
+        state: &mut State,
+    ) -> Predictions {
+        let mut heap = Predictions::new();
+        if k <= 0 {
+            return heap;
+        }
+        self.loss.predict(k, threshold, &mut heap, state);
+        heap
+    }
+
     // update
 
     /// Perform one SGD update step.
@@ -614,6 +635,24 @@ mod tests {
 
         for k in [-1i32, -2, -100, i32::MIN] {
             let preds = model.predict(&[0i32], k, 0.0, &mut state);
+            assert!(preds.is_empty(), "k={} should return empty predictions", k);
+        }
+    }
+
+    /// `predict_with_hidden` returns empty vec for non-positive k.
+    #[test]
+    fn test_predict_with_hidden_non_positive_k_returns_empty() {
+        let wi = Arc::new(DenseMatrix::new(3, 4));
+        let wo = Arc::new(DenseMatrix::new(2, 4));
+        let loss = Box::new(SoftmaxLoss::new(
+            Arc::clone(&wo),
+            Arc::new(LossTables::new()),
+        ));
+        let model = Model::new(Arc::clone(&wi), loss, false);
+        let mut state = State::new(4, 2, 0);
+
+        for k in [0i32, -1, i32::MIN] {
+            let preds = model.predict_with_hidden(k, 0.0, &mut state);
             assert!(preds.is_empty(), "k={} should return empty predictions", k);
         }
     }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use crate::args::{Args, ModelName};
+use crate::args::{Args, LossName, ModelName};
 use crate::dictionary::{EntryType, EOS};
 use crate::error::{FastTextError, Result};
 use crate::matrix::{DenseMatrix, Matrix};
@@ -54,6 +54,8 @@ impl FastText {
     ///
     /// Only supervised models can be quantized; attempting to quantize a CBOW or
     /// skip-gram model returns [`FastTextError::InvalidArgument`].
+    /// Hierarchical softmax requires `qout=false`; quantized output is not yet
+    /// supported for this loss and also returns [`FastTextError::InvalidArgument`].
     ///
     /// Steps (matching C++ `FastText::quantize`):
     /// 1. Reject non-supervised models.
@@ -69,6 +71,12 @@ impl FastText {
         if self.args.model != ModelName::Supervised {
             return Err(FastTextError::InvalidArgument(
                 "For now we only support quantization of supervised models".to_string(),
+            ));
+        }
+        if self.args.loss == LossName::HierarchicalSoftmax && qargs.qout {
+            return Err(FastTextError::InvalidArgument(
+                "Quantized output (qout=true) is not supported for hierarchical softmax; use qout=false"
+                    .to_string(),
             ));
         }
 

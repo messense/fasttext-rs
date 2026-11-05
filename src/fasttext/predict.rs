@@ -115,10 +115,10 @@ impl FastText {
 
     /// Predict using quantized matrices (quant=true path).
     ///
-    /// Computes hidden from `quant_input`, then computes output scores using
-    /// `quant_output` (if present) or the dense `output` matrix.  Applies
-    /// the appropriate normalization based on the configured loss function
-    /// (softmax, OVA/sigmoid, or HS) and returns top-k predictions as
+    /// Computes hidden from `quant_input`, then delegates to the configured
+    /// loss for dense output (including hierarchical softmax). Quantized output
+    /// uses softmax or OVA/sigmoid normalization; HS with quantized output is
+    /// rejected during quantization and loading. Returns top-k predictions as
     /// (log_probability, label_index) pairs.
     fn predict_raw_quantized(
         &self,
@@ -139,19 +139,21 @@ impl FastText {
         // Compute hidden representation using quantized input matrix.
         quant_input.average_rows_to_vector(&mut state.hidden, word_ids);
 
+        // qout=false: reuse the dense-output loss implementation so that
+        // hierarchical softmax, softmax, and OVA all behave exactly like the
+        // non-quantized path. The hand-rolled normalization below only knows
+        // softmax/sigmoid and mispredicts `hs` models such as lid.176.ftz.
+        if self.quant_output.is_none() {
+            return self
+                .model
+                .predict_with_hidden(k.min(nlabels as i32), threshold, state);
+        }
+
         // Compute raw output scores.
         let osz = nlabels;
-        match &self.quant_output {
-            Some(qout) => {
-                for (i, out) in state.output.data_mut()[..osz].iter_mut().enumerate() {
-                    *out = qout.dot_row(&state.hidden, i as i64);
-                }
-            }
-            None => {
-                // Use dense output matrix (qout=false).
-                for (i, out) in state.output.data_mut()[..osz].iter_mut().enumerate() {
-                    *out = self.output.dot_row(&state.hidden, i as i64);
-                }
+        if let Some(qout) = &self.quant_output {
+            for (i, out) in state.output.data_mut()[..osz].iter_mut().enumerate() {
+                *out = qout.dot_row(&state.hidden, i as i64);
             }
         }
 
