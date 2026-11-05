@@ -19,12 +19,14 @@ const COOKING_MODEL: &str = "tests/fixtures/cooking.model.bin";
 // Helpers
 
 fn write_temp_file(content: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "fasttext_inference_test_{}.txt",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
+        "fasttext_inference_test_{}_{}.txt",
+        std::process::id(),
+        id
     ));
     std::fs::write(&path, content).expect("Failed to write temp file");
     path
@@ -1447,7 +1449,7 @@ fn test_config_matrix_supervised() {
         args.thread = 1;
 
         let model = FastText::train(args)
-            .unwrap_or_else(|_| panic!("Training [{}] should succeed", cfg.label));
+            .unwrap_or_else(|e| panic!("Training [{}] should succeed: {e}", cfg.label));
         std::fs::remove_file(&path).ok();
 
         // Predictions should work
@@ -1505,8 +1507,8 @@ fn test_config_matrix_unsupervised() {
         args.maxn = 0;
         args.thread = 1;
 
-        let model =
-            FastText::train(args).unwrap_or_else(|_| panic!("Training [{}] should succeed", label));
+        let model = FastText::train(args)
+            .unwrap_or_else(|e| panic!("Training [{}] should succeed: {e}", label));
         std::fs::remove_file(&path).ok();
 
         // Word vectors should have correct dimension and be non-zero for known words
