@@ -1,6 +1,6 @@
 [package]
 name = "fasttext"
-version = "0.8.0"
+version = "0.8.1"
 categories = ["text-processing", "science"]
 description = "fastText pure Rust implementation"
 edition = "2021"
