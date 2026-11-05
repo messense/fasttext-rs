@@ -115,10 +115,10 @@ impl FastText {
 
     /// Predict using quantized matrices (quant=true path).
     ///
-    /// Computes hidden from `quant_input`, then computes output scores using
-    /// `quant_output` (if present) or the dense `output` matrix.  Applies
-    /// the appropriate normalization based on the configured loss function
-    /// (softmax, OVA/sigmoid, or HS) and returns top-k predictions as
+    /// Computes hidden from `quant_input`, then delegates to the configured
+    /// loss for dense output (including hierarchical softmax). Quantized output
+    /// uses softmax or OVA/sigmoid normalization; HS with quantized output is
+    /// rejected during quantization and loading. Returns top-k predictions as
     /// (log_probability, label_index) pairs.
     fn predict_raw_quantized(
         &self,

@@ -153,7 +153,7 @@ pub struct FastText {
     pub(super) quant_input: Option<QuantMatrix>,
     /// Quantized output matrix. Present when `quant=true` and `args.qout=true`.
     pub(super) quant_output: Option<QuantMatrix>,
-    /// Pre-built inference model (uses dense matrices; bypassed when quant=true).
+    /// Pre-built inference model (uses dense output, including when input is quantized).
     pub(super) model: Model,
     /// Atomic flag for aborting an in-progress training run.
     ///
@@ -266,6 +266,10 @@ impl FastText {
     /// 6. Input matrix (DenseMatrix if not quantized)
     /// 7. qout (bool → stored in args.qout)
     /// 8. Output matrix
+    ///
+    /// Hierarchical-softmax models with quantized output (`qout=true`) are
+    /// rejected with [`FastTextError::InvalidModel`] because this combination
+    /// is not yet supported.
     pub fn load<R: Read>(reader: &mut R) -> Result<Self> {
         let version = Self::validate_header(reader)?;
 
@@ -283,6 +287,12 @@ impl FastText {
         let matrices = Self::load_matrices(reader, &dict)?;
         args.qout = matrices.qout;
         let quant = matrices.input_quant.is_some();
+        if quant && args.qout && args.loss == LossName::HierarchicalSoftmax {
+            return Err(FastTextError::InvalidModel(
+                "Quantized output (qout=true) is not supported for hierarchical softmax; use a model with qout=false"
+                    .to_string(),
+            ));
+        }
 
         // Build inference model
         let input = Arc::new(matrices.input_dense);
